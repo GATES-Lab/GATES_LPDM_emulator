@@ -1,7 +1,7 @@
 # graphnet_LPDM_emulator
 
 Nomenclature (needs tidying so it's less confusing but bear with me for now):
-The model has a grid (square) and a mesh (hexagonal). The nodes in the grid are grid nodes and the nodes in the mesh, mesh nodes. I use grid node, pixel and location interchangeably - they all refer to a specific coordinate with a lat/lon.
+The model has a grid (square) and a mesh (hexagonal). The nodes in the grid are grid nodes and the nodes in the mesh, mesh nodes. I use grid node, pixel and location interchangeably - they all refer to a specific coordinate with a lat/lon. The release point and the measurement point are also the same thing.
 
 The code works fine if used right but it's not robust and needs some cleaning up (there are some inconsistencies in formats, some parameters are redundant, chunks should be split into separate functions, some bits can definitely be parallelised and/or made more efficient)
 
