@@ -8,14 +8,14 @@ import sys
 class LoadSatelliteData:
     """
     Load data for training and testing, for a particular site
+    THIS DOCSTRING NEEDS UPDATING!
 
     inputs:
         - year: can be an int (eg 2016) or a string, including combinations of years (eg "2016", "201[4-5]")
         - site: site identifyer, as a string. Default is Mace Head ("MHD")
-        - siteheight: height of footprints as a string of numbers (eg "100magl"). If empty, default height is used.
-        - metheight: height for met data as a string of numbers (eg "100magl"). Default is 10magl.
         - size: size for footprint to be cut to, as an int. Resolution of initial footprint is maintained, cut to a sizexsize square around the release point. 
-            Should be even for computational purposes.
+        Should be even for computational purposes.
+        - metsize: should be the same as metsize
         - verbose: if True, prints out the steps throughout the data loading process.
         - met_datadir: Directory for .nc met data as a string, including wildcards if needed (eg "data/MHD_*"). If empty, uses default folder and naming. 
         - extramet_datadir: Directory for .nc extramet data (used for gradients, needs to be preprocessed to have some time and space resolution as met) as a string. 
@@ -957,6 +957,39 @@ def grid_coordinates(side):
     z[:, 1] = xx.reshape(side**2)
     z[:, 0] = yy.reshape(side**2)
     return z
+
+def align_datasets_with_xr(ds1, ds2):
+    """
+    removes any datapoints that are not common to both DataObject ds1 and xarray ds2. returns synced ds1 and ds2
+    """
+    assert type(ds2) == xr.Dataset, "use this function to align data object with an array dataset. Use align_datasets for two datasets"
+    try:
+        intersect, idxs1, idxs2 = np.intersect1d(ds1.met.time.values, ds2.time.values, return_indices=True)
+    except ValueError:
+        print("There are no overlapping timestamps between there two arrays!")
+
+
+    if len(intersect) == np.max((len(ds1.met.time.values), len(ds2.time.values))): # ds are already aligned, 
+            print("it seems both datasets are already synced!")
+            return ds1, ds2
+
+
+    ds1.aligned_nan_idx = list(set(list(range(len(ds1.fp_data_full.time)))) - set(idxs1))
+
+    ds1.fp_data_full = ds1.fp_data_full.sel(time=intersect)
+    ds1.met = ds1.met.sel(time=intersect)
+    ds1.fp_lats = ds1.fp_lats[idxs1,:]
+    ds1.fp_lons = ds1.fp_lons[idxs1,:]
+    ds1.fp_data = ds1.fp_data[idxs1,:]
+
+    if hasattr(ds1, "topog"):
+        ds1.topog = ds1.topog[idxs1,:]
+
+    ds2 = ds2.sel(time=intersect)
+
+    return ds1, ds2
+
+
 
 def align_datasets(ds1, ds2, inputs1=None, inputs2=None):
     """
