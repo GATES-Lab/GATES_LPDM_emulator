@@ -1,0 +1,31 @@
+name: graphnet
+channels:
+  - conda-forge
+  - anaconda
+  - defaults
+dependencies:
+  - cartopy=0.21.1
+  - dask=2023.1.1
+  - dask-core=2023.1.1
+  - einops=0.6.0
+  - geos=3.8.0
+  - h3-py=3.7.4
+  - ipython=8.10.0=py38h06a4308_0
+  - jupyter_core=5.2.0=py38h06a4308_0
+  - matplotlib=3.6.2
+  - mkl=2021.4.0
+  - numpy=1.21.5=py38h6c91a56_3
+  - pandas=1.5.2=py38h417a72b_0
+  - pip=22.3.1=py38h06a4308_0
+  - proj=8.2.1=ha227179_0
+  - python=3.8.16=h7a1cb2a_2
+  - scikit-image=0.19.3=py38h6a678d5_1
+  - scikit-learn=1.2.0=py38h6a678d5_0
+  - scipy=1.10.0=py38h14f4228_0
+  - shapely=1.8.4=py38h81ba7c5_0
+  - tqdm=4.64.1=py38h06a4308_0
+  - wheel=0.38.4=py38h06a4308_0
+  - xarray=2022.11.0=py38h06a4308_0
+prefix: /user/work/ef17148/oldstuff/ef17148/.conda/envs/graphnet
+
+# plus install torch 1.8.1 somewhere else, together with pytorch- cluster,scatter, sparse 
