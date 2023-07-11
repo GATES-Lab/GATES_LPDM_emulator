@@ -1,12 +1,15 @@
 # graphnet_LPDM_emulator
 
+Nomenclature (needs tidying so it's less confusing but bear with me for now):
+The model has a grid (square) and a mesh (hexagonal). The nodes in the grid are grid nodes and the nodes in the mesh, mesh nodes. I use grid node, pixel and location interchangeably - they all refer to a specific coordinate with a lat/lon.
+
+The code works fine if used right but it's not robust and needs some cleaning up (there are some inconsistencies in formats, some parameters are redundant, chunks should be split into separate functions, some bits can definitely be parallelised and/or made more efficient)
+
 ## Loading data
 Use the `LoadSatelliteData` object to load data for a date period.
 ``` 
 data = LoadSatelliteData(year=2016, region="BRAZIL", freq=2, metsize=50, size =50, topog="default", verbose=True, cut_met = False, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_50_")
 ```
-
-This function works fine but needs some cleaning up (there are some inconsistencies in formats, some parameters are redundant and chunks should be split into separate functions). Some notes:
 
 - All of the necessary data is in the ACRG folder (/group/chemistry/acrg/), the paths all default to this unless specifed
 - Only valid `region`s are BRAZIL, SAHARA, INDIA (ie there are default domains and some footprint and met data)
@@ -33,6 +36,65 @@ See file `generate_sat_met.py` (and send to the cluster using `launch_cpu_job.sh
 - By default the meteorology is linearly interpolated to the timestamp of each footprint
 - `met_jump` can be an int or a list. If a list, for each int `jump` in `met_jump`, the met is interpolated to `T - jump` where `T` is the timestamp of each footprint, and saved to the corresponding path in `savemetpath`.
 
+## Environment
+See environment_short.yml, I think those are the main packages. environment.yml contains the raw output of saving the environment.
+As BP has pytorch+cuda pre-installed, the environment cannot have torch installed to avoid clashes. Though a bit clunky, currenly I have torch (and other associated packages eg torch scatter) installed in a different environment and I manually import it when running notebooks, and import the BP torch installation when running on the cluster
+
+## Model
+
+### Model literature/code
+The model is based on the one described by [Keisler, 2022](https://arxiv.org/pdf/2202.07575.pdf) and the code developed from the code [in the corresponding repo](https://github.com/openclimatefix/graph_weather). I have made some changes I will detail here at some point
+
+### Model architecture
+to write! maybe do a diagram
+
+
+## Setting up data
+### Preparing inputs
+
+Prepare the inputs using `get_all_inputs_graphnet_satellite_v4`. This function outputs:
+- `grid` - a list of lat-lon tuples for each of the nodes, extracted from a reference footprint. The model assumes all footprints to be on this same grid, and the mesh will be constructed over this particular grid too. You can define which footprint is the reference one with parameter `latlon_fp` which defaults to 0 (ie use the first footprint in the dataset as reference) and will likely not need to modify this for now
+- `idx_grid` - a list of (x,y) coordinate tuples for each node, where 0,0 is the measurement point
+- `inputs` - a numpy array with the inputs, of shape (time, nodes, features)
+- `names` - list of dictionaries of length `features` with info about each feature
+- `data` - returns data object itself, in case any updates needed to be made (eg there are nans in the past data). Don't think it's actually needed to be returned explicitly
+
+Parameters:
+- data object
+- `variables_past`: dict of variables to extract at each of the jumps passed. format is {"var name as it appears in data.met":[list of levels to extract]}. If a variable is 2D (ie it has no levels, like surface pressure) pass level 0.
+- jumps: hours back to load (by default the time of the footprint, `jump=0`, is added automatically)
+- variables_nopast: variables to be loaded only for jump=0, though I haven't used it in a while and could be deprecated?
+- topog: whereas to add topography as a variable
+- others: Other non-met variables that could be added to the inputs, eg lat/lon coords of each node, the euclidean distance... "x_coords", "y_coords" are the numerical indeces of each node, passing `centered_coords=True` returns 0,0 as the center otherwise 0,0 is the South-West corner - for best practice pass as True
+
+
+```
+others =["lat_coords", "lon_coords", "distance_centre", "x_coords", "y_coords"]
+variables_past = {"x_wind":[3,30,51], "wind_speed":[3,30,51], "wind_angle":[3,30,51], "y_wind":[3,9,15,21,30,42,51], "atmosphere_boundary_layer_thickness":[0]}
+
+grid, idx_grid, inputs, names, data = get_all_inputs_graphnet_satellite_v4(data, variables_past=variables_past, jumps=[6], variables_nopast={}, topog=True, others=others, return_idx=True, centered_coords=True)
+```
+### Preparing dataset
+The `FootprintsDataset` object sets up the inputs and outputs to be loaded to the DataLoader, and makes any needed transformations.
+The transformations I'm doing currently are:
+- outputs:
+  - boxcox - the footprint data is very sparse and exponential (most of the domain is full of zeros, there are a few high values near the measurement point, and they decay very quickly as you move further out). To bring all of the data to a similar range, I standardise then apply a boxcox transform to each of the locations independently using sklearn's `PowerTransformer(method='box-cox', standardize=True)`. Applying this to each node separately means that the range of values to be transformed is within the same order of magnitude, and the data transformed is all within the same range (0-2 with a couple outliers). This transformation is definitely helpful but could be improved! The sparsity problem is still there. `train_dataset.fp` contains the transformed data, and `train_dataset.fp_untransformed` the original footprint data. The boxcox transformer is stored at `train_dataset.boxcox`
+- inputs
+  - `clever_transform_2` (not that clever!) -  applies a sklearn `preprocessing.StandardScaler()` to each variable and level, across all time jumps (eg all the x_wind data at level 3 is scaled together, so is at level 9 etc). The transformers are stored in a dictionary of format "{"variable_name":{level_1:transformer, level_2:transformer...},...}" stored at train_dataset.transformers. `clever_transform` does the same but across all levels rather than separately. The feature names need to be passed to `input_names` for this transform to work
+
+The test dataset can be transformed using the trained transformers from the train dataset by passing a test_mode dictionary as shown below
+
+```
+train_dataset = FootprintsDataset(inputs=inputs, fp=np.copy(data.fp_data), transform_output="boxcox", feature_dim=np.shape(inputs)[-1]-len(others)-topog, aux_dim=len(others)+topog, clever_transform_2=True, input_names=names)
+test_dataset = FootprintsDataset(inputs=test_inputs, fp=np.copy(test_data.fp_data), transform_output="boxcox", feature_dim=np.shape(inputs)[-1]-len(others)-topog, aux_dim=len(others)+topog, clever_transform_2=True, input_names=names, test_mode={"boxcox":train_dataset.boxcox, "clever_transformers":train_dataset.transformers})
+
+train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
+train_loader = DataLoader(test_dataset, batch_size=5, shuffle=False)
+```
+
+## Other data functions
+- You can align two LoadSatelliteData objects to have the same timestamps using `align_datasets(dataset1, dataset2)`. This is useful if you want to compare two sets of data, predictions etc but some datapoints have been removed in either dataset during loading, maybe due to freq, NaNs etc. 
+  
 
 
 
