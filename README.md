@@ -41,12 +41,15 @@ See environment_short.yml, I think those are the main packages. environment.yml 
 As BP has pytorch+cuda pre-installed, the environment cannot have torch installed to avoid clashes. Though a bit clunky, currenly I have torch (and other associated packages eg torch scatter) installed in a different environment and I manually import it when running notebooks, and import the BP torch installation when running on the cluster
 
 ## Model
+The GNN paradigm are Graph Networks, described by [Deepmind, 2018](https://arxiv.org/pdf/1806.01261.pdf). 
+![Deepmind paper - graph updates example](/deepmind_updates.PNG?raw=true)
 
 ### Model literature/code
 The model is based on the one described by [Keisler, 2022](https://arxiv.org/pdf/2202.07575.pdf) and the code developed from the code [in the corresponding repo](https://github.com/openclimatefix/graph_weather). I have made some changes I will detail here at some point
 
 ### Model architecture
-to write! maybe do a diagram
+Here is an architecture diagram that could probably be a bit clearer
+![Architecture diagram](/diagram.jpg?raw=true)
 
 
 ## Setting up data
