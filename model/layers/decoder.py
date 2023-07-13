@@ -40,7 +40,7 @@ class SatelliteDecoder(torch.nn.Module):
         use_checkpointing: bool = False,
         dropout=0,
         n_neighbours=3,
-        final_activation=None,
+        final_activation=None, concat_neighbours=False
     ):
         """
         Decoder from latent graph to lat/lon graph
@@ -67,13 +67,16 @@ class SatelliteDecoder(torch.nn.Module):
             - og code connects each latlon point to the closest mesh point and all of its neighbours. changed so it's only connected to the three closest of these
         to add
             - 
- 
+        NEEDS UPDATING!
+
         """
 
         super().__init__()
         self.residuals = residuals
         self.use_checkpointing = use_checkpointing
         self.num_latlons = len(lat_lons)
+        self.concat_neighbours = concat_neighbours
+        self.n_neighbours = n_neighbours
         #print("in satellite decoder")
         if h_grid is None:
             if whole_world:
@@ -115,19 +118,44 @@ class SatelliteDecoder(torch.nn.Module):
             knn_distances = [h3.point_dist(lat_lon, h3.h3_to_geo(h), unit="km") for h in h_points]
 
             ordered_knn_distances = np.argsort(knn_distances)
-            for n in range(n_neighbours): # ie the n neighbours closest to h_node
-                try:
-                    distance = knn_distances[ordered_knn_distances[n]]
-                    h = h_points[ordered_knn_distances[n]]
-                    loc_neighbour = h3.h3_to_geo(h)
-                    edge_sources.append(self.base_h3_map[h])
-                    edge_targets.append(idx)
-                    self.h3_distances.append([distance])
+            if self.concat_neighbours:
+                # previous way models where trained with - only link top 3 physically close neighbours
+                # see except clause before
+                linked_neighbours = 0 
+                n=0
+                while linked_neighbours < n_neighbours:
+                    try:
+                        distance = knn_distances[ordered_knn_distances[n]]
+                        h = h_points[ordered_knn_distances[n]]
+                        loc_neighbour = h3.h3_to_geo(h)
+                        edge_sources.append(self.base_h3_map[h])
+                        edge_targets.append(idx)
+                        self.h3_distances.append([distance])
+                        linked_neighbours += 1 
+                        n+=1
 
-                except KeyError:
-                    # this except will be triggered if h (one of the neighbouring points to h3_index) is not in the list
-                    # this can only happen if using a reduced domain (whole_world = False), at the edges of this domain
-                    continue    
+                    except KeyError:
+                        # this except will be triggered if h (one of the neighbouring points to h3_index) is not in the list
+                        # this can only happen if using a reduced domain (whole_world = False), at the edges of this domain
+                        n+=1
+                        #continue    
+                                  
+            else:
+                # previous way models where trained with - only link top 3 physically close neighbours
+                # see except clause before
+                for n in range(n_neighbours): # ie the n neighbours closest to h_node
+                    try:
+                        distance = knn_distances[ordered_knn_distances[n]]
+                        h = h_points[ordered_knn_distances[n]]
+                        loc_neighbour = h3.h3_to_geo(h)
+                        edge_sources.append(self.base_h3_map[h])
+                        edge_targets.append(idx)
+                        self.h3_distances.append([distance])
+
+                    except KeyError:
+                        # this except will be triggered if h (one of the neighbouring points to h3_index) is not in the list
+                        # this can only happen if using a reduced domain (whole_world = False), at the edges of this domain
+                        continue    
 
         self.edge_index = torch.tensor([edge_sources, edge_targets], dtype=torch.long)
         self.h3_distances = np.array(self.h3_distances)
@@ -141,14 +169,27 @@ class SatelliteDecoder(torch.nn.Module):
         
         self.edge_weights = torch.tensor(self.edge_weights, dtype=torch.float32)
 
-        self.node_decoder = MLP(
-        input_dim,
-        output_dim,
-        hidden_dim_decoder,
-        hidden_layers_decoder,
-        None,
-        self.use_checkpointing, dropout=dropout, final_activation=final_activation
-    )          # no normalising here?
+        if self.concat_neighbours:
+            self.node_decoder = MLP(
+            self.n_neighbours*input_dim,
+            output_dim,
+            hidden_dim_decoder,
+            hidden_layers_decoder,
+            None,
+            self.use_checkpointing, dropout=dropout, final_activation=final_activation
+        )          # no normalising here?
+            
+            print("MLP shape", 3*input_dim, hidden_dim_decoder)
+
+        else:
+            self.node_decoder = MLP(
+            input_dim,
+            output_dim,
+            hidden_dim_decoder,
+            hidden_layers_decoder,
+            None,
+            self.use_checkpointing, dropout=dropout, final_activation=final_activation
+        )          # no normalising here?
 
     def forward(
         self, processor_features: torch.Tensor, start_features: torch.Tensor
@@ -170,36 +211,43 @@ class SatelliteDecoder(torch.nn.Module):
         self.edge_index = self.edge_index.to(start_features.device)
 
         #print(processor_features.size(), processor_features.dtype, self.edge_index.size(), start_features.size())
-        processor_features = einops.rearrange(processor_features, "(b n) f -> b f n", b=batch_size)
+        
         #print("after rearrange 1", processor_features.size(), processor_features.dtype, torch.from_numpy(self.edge_weights).size())
         #print("for mult", processor_features[:,:, self.edge_index[0,:]].size())
-        processor_features = torch.multiply(processor_features[:,:, self.edge_index[0,:]], torch.flatten(self.edge_weights))
-        #print("doing scatter", processor_features.dtype, torch.from_numpy(self.edge_weights.astype(np.float32)).dtype, self.edge_weights.astype(float).dtype, self.edge_weights.dtype)
-        processor_features = scatter_mean(src=processor_features, index=self.edge_index[1,:]) 
-
-        #processor_features_by_node = np.zeros((processor_features.size()[0], #start_features.size()[1], processor_features.size()[-1]))
-        #for n in np.unique(self.edge_index[1,:]): 
-        #    processor_features_by_node = np.where(self.edge_index[1,:]==n)
-
-
-
-        #print("after scatter", processor_features.size(), processor_features.dtype)
-        processor_features = einops.rearrange(processor_features, "b f n -> (b n) f", b=batch_size)
-        start_features = einops.rearrange(start_features, "b n f -> (b n) f", b=batch_size)
-        #print("after rearrange", processor_features.size(), processor_features.dtype)
-        #print("rearranged")
-        #print(self.residuals)
-        if self.residuals:
-            #print(torch.mean(processor_features), torch.max(processor_features), torch.min(processor_features))
-            #print(torch.mean(start_features), torch.max(start_features), torch.min(start_features))
-            processor_features = torch.cat([processor_features, start_features], dim=1)
-            print("added residuals", processor_features.size())
+        processor_features = einops.rearrange(processor_features, "(b n) f -> b f n", b=batch_size)
         
-        #print(processor_features.size(), processor_features.dtype)
+        if self.concat_neighbours:
+            print("concatting neighbours")
+            
+            print(processor_features.size(), self.edge_index)
+
+            ## loop is clunky! maybe einops has a solution
+            print(processor_features[:,:, self.edge_index[0,:]].size())
+            print(processor_features[:,:, self.edge_index[0,::self.n_neighbours]].size(), processor_features[:,:, self.edge_index[0,1::self.n_neighbours]].size())
+            # this could go wrong 
+            scattered_processor_features = torch.cat([processor_features[..., self.edge_index[0,n::self.n_neighbours]] for n in range(self.n_neighbours)], dim=-2)
+            print(scattered_processor_features.size())
+
+            #scattered_processor_features = einops.rearrange(scattered_processor_features, "b f n -> (b n) f", b=batch_size)
+            processor_features = scattered_processor_features
+
+            print(processor_features.size())
+            
+        else:
+            processor_features = torch.multiply(processor_features[:,:, self.edge_index[0,:]], torch.flatten(self.edge_weights))
+            #print("doing scatter", processor_features.dtype, torch.from_numpy(self.edge_weights.astype(np.float32)).dtype, self.edge_weights.astype(float).dtype, self.edge_weights.dtype)
+            processor_features = scatter_mean(src=processor_features, index=self.edge_index[1,:]) 
+
+            #processor_features_by_node = np.zeros((processor_features.size()[0], #start_features.size()[1], processor_features.size()[-1]))
+            #for n in np.unique(self.edge_index[1,:]): 
+            #    processor_features_by_node = np.where(self.edge_index[1,:]==n)
+
+        processor_features = einops.rearrange(processor_features, "b f n -> (b n) f", b=batch_size)
+        #print("after scatter", processor_features.size(), processor_features.dtype)
 
 
         out = self.node_decoder(processor_features)  # Decode to output dim from hidden size
-        #print("done it")
+            #print("done it")
         out = einops.rearrange(out, "(b n) f -> b n f", b=batch_size)
         
         
