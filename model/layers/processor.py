@@ -10,7 +10,7 @@ and its immediate neighbors. There are residual connections between each round o
 import torch
 import einops 
 
-from graphnet_LPDM_emulator.model.layers.graph_net_block import GraphSatelliteProcessor
+from model.layers.graph_net_block import GraphSatelliteProcessor
 
 
 class SatelliteProcessor(torch.nn.Module):

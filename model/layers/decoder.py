@@ -20,7 +20,7 @@ import numpy as np
 from torch_geometric.data import Data
 from torch_scatter import scatter_mean
 
-from graphnet_LPDM_emulator.model.layers.graph_net_block import MLP
+from model.layers.graph_net_block import MLP
 
 class SatelliteDecoder(torch.nn.Module):
     """Decoder graph module"""
