@@ -437,8 +437,8 @@ def cut_satellite_data(fp_full, size, returnlatlons = False, fill_bads_with="all
         
     if filled>0:
         print(f"{filled} footprints were at least partially filled with {fill_bads_with} because they were cutting outside of the footprint file domain (this is {round(100*filled/np.shape(fp_cut)[-1], 2)}% of samples)")
-        print(filled_sides)
-        print(max_sides)
+        print(f"footprints that are partially out of the domain in each direction: {filled_sides}")
+        print(f"maximum out-of-domain index in each direction: {max_sides}")
 
 
 
@@ -640,13 +640,7 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
 
 def get_all_inputs_graphnet_satellite_v4(data, variables_past, jumps, variables_nopast, others=[], topog=True, latlon_fp=0, transform=True, add_current_time=True, centered_coords=False, return_idx=False):
     """
-    Returns all input variables stacked and ready to pass to regressors, with shape (n_samples-jump-3, (2*#variables_past+#variables_nopast)**2)
-
-    Takes a dict of variables that are passed at time of footprint and A LIST OF INTS WITH THE JUMP hours before, with their chosen levels
-    and a list of variables that are passed only at time of footprint with their chosen levels. 
-    Last three items of all variables are removed, due to interpolation setup.
-    If var has no levels, pass 0 as level
-    equivalent to the above if passing only a single jump in the list (eg [6])
+    needs updating!
     """
     all_vars = []
     var_names = []

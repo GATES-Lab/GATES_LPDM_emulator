@@ -39,6 +39,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         decoder_final_layer=None,
         higher_mesh_res=0,
         idx_latlon=None,
+        concat_decoder_neighbours=False,
     ):
         """
         Graph Weather Model based off https://arxiv.org/pdf/2202.07575.pdf
@@ -121,7 +122,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_dim_decoder=hidden_dim_decoder,
             residuals=residuals,
             hidden_layers_decoder=hidden_layers_decoder,
-            use_checkpointing=use_checkpointing , dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours
+            use_checkpointing=use_checkpointing , dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours
         )
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:

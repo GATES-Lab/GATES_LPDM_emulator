@@ -19,6 +19,8 @@ class FootprintsDataset(Dataset):
     - scale: scale to -1, 1 range. If input_names is passed, the inputs with PBLH and temp grad (which have an exponential distribution rather than normal) are normalised with boxcox before scaling
     - transform output: if "same", do standardise, if "boxcox", do boxcox
     - scale output: scale to range (not implemented!!)
+
+    needs updating!!
     """
 
     def __init__(self, inputs, fp, standardise=False, scale=False, transform_output=False, scale_output=False, test_mode={}, feature_dim=11, aux_dim=5, clever_transform=False, clever_transform_2=False, input_names=[], standardise_all=False, device="cpu", zeroing=False, binary_fp=None, transform_parameters={}):
@@ -805,7 +807,24 @@ class SeqFootprintsDataset(Dataset):
         return self.true_flux, self.pred_flux
 
 
+def predict_fluxes(true_fp, pred_fp, flux, units_transform = "default"):
+    ## convolute predicted footprints and fluxes, returns two np arrays, one with the true flux and one with the emulated flux, of shape (n_footprints,)
+    ## flux is an array, regridded and cut to the same resolution and size of the footprints
+    ## units_transform can be None (use fluxes directly), "default" (performs flux*1e3 / CH4molarmass) or another function (which should return an array of the same shape as the original flux)
 
+    if units_transform != None:
+        if units_transform == "default":
+            molarmass = 16.0425
+            flux = flux*1e3 / molarmass
+        else:
+            flux = units_transform(flux)
+    true_concentration = true_fp*flux
+    true_flux = np.sum(true_concentration, axis = (1,2))
+    pred_concentration = pred_fp*flux
+    pred_flux = np.sum(pred_concentration, axis = (1,2))
+    
+    return true_flux, pred_flux
+    
 def NMAE(pred, target, mode="all"):
     pred = pred.detach().numpy() if torch.is_tensor(pred) else pred
     target = target.detach().numpy() if torch.is_tensor(target) else target
