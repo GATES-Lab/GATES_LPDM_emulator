@@ -34,25 +34,49 @@ def write_to_file(message):
 
 model_name="satellite_50x50_default"
 print(model_name)
-continue_training = False
-if not continue_training:
-    os.mkdir(f"{path}/{model_name}")
-    os.mkdir(f"{path}/{model_name}/training_imgs")
-    f = open(f"{path}/{model_name}/{model_name}_updates.txt", "x")
-    f.close()
-
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+continue_training = False
+if not continue_training:
+    try:
+        os.mkdir(f"{path}/{model_name}")
+        os.mkdir(f"{path}/{model_name}/training_imgs")
+        f = open(f"{path}/{model_name}/{model_name}_updates.txt", "x")
+        f.close()
+    except OSError:
+        print("Folder already exists! Consider changing model name if you are training from scratch or making continue_training=True to continue training this model")
+else:
+    print("attempting to load model to continue training")
+    def getint(name):
+        num = name.split('_')[-1]
+        num = num.split('.')[0]
+        return int(num)
+
+    try:
+        files = sorted(glob.glob(f"{path}/{model_name}/{model_name}_*.pt"), key=getint)
+        checkpoint_to_load = files[-1] 
+    except IndexError:
+        print(f"No files were found at path {path}/{model_name}/{model_name}_*.pt")
+
+    try:
+        checkpoint = torch.load(checkpoint_to_load, map_location=device)
+    except Exception as e:
+        print(f"checkpoint loading failed with error {e}")
+
+
 write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"))
-#write_to_file("loading data")
 write_to_file("loading data")
 
+## load training and testing data
 data = LoadSatelliteData("201[4-5]", region="BRAZIL", metsize=50, size = 50, verbose=True, topog="default", cut_met = False, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_onlyvalid_50_")
 test_data = LoadSatelliteData(2016, region="BRAZIL", metsize=50, size =50, topog="default", verbose=True, cut_met = False, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_onlyvalid_50_")
 
 
 write_to_file("setting up data")
 
+## set up inputs
 others=["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "distance_centre", "x_coords", "y_coords"]
 topog=True
 
@@ -96,8 +120,8 @@ class MSE_assymetric(nn.Module):
 
 test_batch_size=10
 
+## set up dataset (transform inputs/outputs) and data loader
 
-# for clever 2
 train_dataset = FootprintsDataset(np.copy(inputs), np.copy(data.fp_data), standardise=False, transform_output="boxcox", feature_dim=np.shape(inputs)[-1]-len(others)-topog, aux_dim=len(others)+topog, zeroing=True,  clever_transform_2=True, input_names=names)
 train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
 
@@ -108,7 +132,7 @@ test_dataset = FootprintsDataset(np.copy(test_inputs[:,:,:]), np.copy(test_data.
 test_loader = DataLoader(test_dataset, batch_size=10)
 
 
-
+## save reference grid, transformers and parameters 
 with open(f"{path}{model_name}/grid_{model_name}.pickle", 'wb') as handle:
     pickle.dump(grid, handle)
 
@@ -119,7 +143,6 @@ train_dataloader_params = {"year":data.date, "region":data.region, "freq":data.f
 
 input_params={"variables_past":variables_past, "jumps":jumps, "variables_nopast":variables_nopast, "others":others, "topog":topog, "centered_coords":True}
 
-
 model_params = {"whole_world":False, "feature_dim":np.shape(inputs)[-1]-len(others)-topog, "aux_dim":len(others)+topog,"num_blocks":4, "node_dim":64, "edge_dim":64, "hidden_layers_processor_node":2, "hidden_layers_processor_edge":2,  "hidden_layers_decoder":1, "hidden_dim_processor_node":16, "hidden_dim_processor_edge":16, "hidden_dim_decoder":16, "resolution":4, "output_dim":1, "residuals":False}
 
 params = {"train_dataloader_params":train_dataloader_params, "input_params":input_params, "dataset_params":dataset_params, "model_params":model_params}
@@ -127,12 +150,12 @@ params = {"train_dataloader_params":train_dataloader_params, "input_params":inpu
 with open(f"{path}{model_name}/params_{model_name}.pickle", 'wb') as handle:
     pickle.dump(params, handle)
 
-#vB using 1/3 data
+## set up model, loss, criterion
 lr=5e-5
 model = GraphSatelliteForecaster(grid, **model_params)
 
-#criterion = torch.nn.MSELoss()
 criterion=MSE_assymetric(alpha=2)
+# NN is trailed with MSE_assymetric but stats are outputted with normal MSE so it's more interpretable
 criterion_test = torch.nn.MSELoss()
 optimizer = optim.AdamW(model.parameters(), lr=lr)
 
@@ -144,15 +167,7 @@ if torch.cuda.is_available():
     model.cuda()
 
 if continue_training:
-    print("loading model to continue training")
-    def getint(name):
-        num = name.split('_')[-1]
-        num = num.split('.')[0]
-        return int(num)
-
-    files = sorted(glob.glob(f"{path}/{model_name}/{model_name}_*.pt"), key=getint)
-    checkpoint_to_load = files[-1] 
-    checkpoint = torch.load(checkpoint_to_load, map_location=device)
+    # load model and attributes
     optimizer = optim.AdamW(model.parameters(), lr=checkpoint["learning_rate"])
     lr = checkpoint["learning_rate"]
 
@@ -174,15 +189,13 @@ for epoch in range(301):  # loop over the dataset multiple times
     print(f"Start Epoch: {epoch}")
     start = time.time()
     for i, batch in enumerate(train_loader):
-        # get the inputs; data is a list of [inputs, labels]
+
         ins, labels = batch[0].to(device), batch[1].to(device)
-        # zero the parameter gradients
+
         optimizer.zero_grad()
 
-        # forward + backward + optimize
         outputs = model(ins)
-        #print(outputs.size(), labels.size())
-        #loss = criterion(torch.squeeze(outputs), torch.squeeze(labels))
+
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -192,12 +205,12 @@ for epoch in range(301):  # loop over the dataset multiple times
         del outputs 
         if i % 10==0:
             print(f"[{epoch + 1}, {i + 1:5d}] loss: {running_loss / (i + 1):.3f} Time: {end - start} sec")
-    # print statistics
+
     
     test_error = 0.0
     test_out = np.zeros((test_dataset.inputs.size()[0], test_dataset.inputs.size()[1]))   
     for i_test, batch in enumerate(test_loader):
-        # get the inputs; data is a list of [inputs, labels]
+
         ins, labels = batch[0].to(device), batch[1].to(device)
         test_error += criterion_test(model(ins), labels).item()
         test_out[i_test*test_batch_size:(i_test+1)*test_batch_size,:] = np.squeeze(model(ins).detach().cpu().numpy())
@@ -206,7 +219,6 @@ for epoch in range(301):  # loop over the dataset multiple times
     losses["train"].append(running_loss/(i+1))
     losses["test"].append(test_error/(i_test+1))
 
-    #test_out = torch.squeeze(test_out).detach().numpy()
     truths = torch.squeeze(test_dataset.fp).detach().numpy()
     print(f"NMAE: {NMAE(test_out,truths)}")
     losses["NMAE_test"].append(NMAE(test_out,truths))
@@ -239,9 +251,7 @@ for epoch in range(301):  # loop over the dataset multiple times
         savename = f"{path}/{model_name}/training_imgs/{model_name}_{epoch}.png"
         plt.savefig(savename, dpi=300, bbox_inches='tight')
         plt.close()
-    ## edit this to save img
 
-    ## save checkpoint every 50 epochs
     if epoch % 50 ==0:
         torch.save({
                     'epoch': epoch,
