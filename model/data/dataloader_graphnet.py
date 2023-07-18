@@ -55,7 +55,7 @@ class FootprintsDataset(Dataset):
 
             if clever_transform_2:
                 assert len(input_names)>0, "Pass the input names to do a clever transform"
-                self.clever = True
+                self.clever_transform_2 = True
                 self.inputs_untransformed = np.copy(inputs)
                 varnames = np.array([x["var"] for x in input_names])
                 try:
@@ -194,7 +194,7 @@ class FootprintsDataset(Dataset):
 
             if clever_transform_2:
                 assert len(input_names)>0, "Pass the input names to do a clever transform"
-                self.clever = True
+                self.clever_transform_2 = True
                 self.inputs_untransformed = np.copy(inputs)
                 varnames = np.array([x["var"] for x in input_names])
                 self.transformers = {}
