@@ -52,7 +52,7 @@ See file `generate_sat_met.py` (and send to the cluster using `launch_cpu_job.sh
 
 ## Environment
 See environment_short.yml, I think those are the main packages. environment.yml contains the raw output of saving the environment.
-As BP has pytorch+cuda pre-installed, the environment cannot have torch installed to avoid clashes. Though a bit clunky, currenly I have torch (and other associated packages eg torch scatter) installed in a different environment and I manually import it when running notebooks, and import the BP torch installation when running on the cluster
+This file does not contain torch and related packages - this is because you will need to install separately a CUDA-enabled version or not depending on where you are running the code. BluePebble has pytorch+cuda pre-installed, which you can load when you submit jobs to the queue. Though a bit clunky, currenly I have torch and associated packages installed in a different environment and I manually import it when running notebooks, and import the BP torch installation when running on the cluster
 
 ## Model
 The GNN paradigm are Graph Networks, described by [Deepmind, 2018](https://arxiv.org/pdf/1806.01261.pdf). 
