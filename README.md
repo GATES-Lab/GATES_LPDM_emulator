@@ -53,18 +53,22 @@ See file `generate_sat_met.py` (and send to the cluster using `launch_cpu_job.sh
 
 ## Environment
 See environment_short.yml, I think those are the main packages. environment.yml contains the raw output of saving the environment.
-This file does not contain torch and related packages - this is because you will need to install separately a CUDA-enabled version or not depending on where you are running the code. BluePebble has pytorch+cuda pre-installed, which you can load when you submit jobs to the queue. Though a bit clunky, currenly I have torch and associated packages installed in a different environment and I manually import it when running notebooks, and import the BP torch installation when running on the cluster
+This file does not contain torch and related packages - this is because you will need to install separately a CUDA-enabled version or not depending on where you are running the code. BluePebble has pytorch+cuda pre-installed, which you can load when you submit jobs to the queue (see the launch_train.sh file). To run notebooks or files on the login node, you will need torch and associated packages installed in a different environment, which I manually import when running notebooks with the following line. Alternatively you could have two parallel envs (graphnet to run on cluster, and graphnet+torch to run on login) but that might get more confusing if you need to install packages! 
+```
+sys.path.insert(0, "/path/to/environment_with_torch/env_name/lib/python3.8/site-packages/")
+import torch
+```
 
 ## Model
 The GNN paradigm are Graph Networks, described by [Deepmind, 2018](https://arxiv.org/pdf/1806.01261.pdf). 
-![Deepmind paper - graph updates example](/deepmind_updates.PNG?raw=true)
+![Deepmind paper - graph updates example](/readme_imgs/deepmind_updates.PNG?raw=true)
 
 ### Model literature/code
-The model is based on the one described by [Keisler, 2022](https://arxiv.org/pdf/2202.07575.pdf) and the code developed from the code [in the corresponding repo](https://github.com/openclimatefix/graph_weather). I have made some changes I will detail here at some point
+The model is based on the one described by [Deepmind,2022](https://arxiv.org/pdf/2212.12794.pdf) and particularly [Keisler, 2022](https://arxiv.org/pdf/2202.07575.pdf) and the code developed from the code [in the corresponding repo](https://github.com/openclimatefix/graph_weather). I have made some changes I will detail here at some point
 
 ### Model architecture
 Here is an architecture diagram that could probably be a bit clearer
-![Architecture diagram](/diagram.jpg?raw=true)
+![Architecture diagram](/readme_imgs/diagram.jpg?raw=true)
 
 
 ## Setting up data
@@ -92,6 +96,20 @@ variables_past = {"x_wind":[3,30,51], "wind_speed":[3,30,51], "wind_angle":[3,30
 
 grid, idx_grid, inputs, names, data = get_all_inputs_graphnet_satellite_v4(data, variables_past=variables_past, jumps=[6], variables_nopast={}, topog=True, others=others, return_idx=True, centered_coords=True)
 ```
+#### Variables
+- Meteorological (time-dependent)
+  - air_pressure
+  - air_temperature
+  - atmosphere_boundary_layer_thickness
+  - surface_air_pressure
+  - upward_air_velocity
+  - x_wind
+  - y_wind
+  - wind_angle
+  - wind_speed
+- Not time dependent
+  - topography
+  - 
 ### Preparing dataset
 The `FootprintsDataset` object sets up the inputs and outputs to be loaded to the DataLoader, and makes any needed transformations.
 The transformations I'm doing currently are:
