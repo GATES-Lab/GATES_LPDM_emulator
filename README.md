@@ -13,6 +13,7 @@
 - [ ] add info on evaluation metrics
 - [ ] clean up data loading
 - [ ] clean up dataset creation
+- [ ] Add science summary and ref papers
 
 Nomenclature (needs tidying so it's less confusing but bear with me for now):
 The model has a grid (square) and a mesh (hexagonal). The nodes in the grid are grid nodes and the nodes in the mesh, mesh nodes. I use grid node, pixel and location interchangeably - they all refer to a specific coordinate with a lat/lon. The release point and the measurement point are also the same thing.
