@@ -59,18 +59,6 @@ sys.path.insert(0, "/path/to/environment_with_torch/env_name/lib/python3.8/site-
 import torch
 ```
 
-## Model
-The GNN paradigm are Graph Networks, described by [Deepmind, 2018](https://arxiv.org/pdf/1806.01261.pdf). 
-![Deepmind paper - graph updates example](/readme_imgs/deepmind_updates.PNG?raw=true)
-
-### Model literature/code
-The model is based on the one described by [Deepmind,2022](https://arxiv.org/pdf/2212.12794.pdf) and particularly [Keisler, 2022](https://arxiv.org/pdf/2202.07575.pdf) and the code developed from the code [in the corresponding repo](https://github.com/openclimatefix/graph_weather). I have made some changes I will detail here at some point
-
-### Model architecture
-Here is an architecture diagram that could probably be a bit clearer
-![Architecture diagram](/readme_imgs/diagram.jpg?raw=true)
-
-
 ## Setting up data
 ### Preparing inputs
 
@@ -87,7 +75,7 @@ Parameters:
 - jumps: hours back to load (by default the time of the footprint, `jump=0`, is added automatically)
 - variables_nopast: variables to be loaded only for jump=0, though I haven't used it in a while and could be deprecated?
 - topog: whereas to add topography as a variable
-- others: Other non-met variables that could be added to the inputs, eg lat/lon coords of each node, the euclidean distance... "x_coords", "y_coords" are the numerical indeces of each node, passing `centered_coords=True` returns 0,0 as the center otherwise 0,0 is the South-West corner - for best practice pass as True
+- others: Other non-met variables that could be added to the inputs, eg lat/lon coords of each node, the euclidean distance... see below
 
 
 ```
@@ -100,8 +88,8 @@ grid, idx_grid, inputs, names, data = get_all_inputs_graphnet_satellite_v4(data,
 - Meteorological (time-dependent)
   - air_pressure
   - air_temperature
-  - atmosphere_boundary_layer_thickness
-  - surface_air_pressure
+  - [atmosphere_boundary_layer_thickness](https://forecast.weather.gov/glossary.php?word=boundary%20layer#:~:text=Atmospheric%20Boundary%20Layer&text=For%20the%20earth%2C%20this%20layer,friction%20with%20the%20earth's%20surface.): height of the layer of the atmosphere within which the effects of friction are significant (roughly the lowest one or two kilometers of the atmosphere). 2D - no height component
+  - surface_air_pressure: 2D - no height component
   - upward_air_velocity
   - x_wind
   - y_wind
@@ -109,15 +97,15 @@ grid, idx_grid, inputs, names, data = get_all_inputs_graphnet_satellite_v4(data,
   - wind_speed
 - Not time dependent (all loaded under others parameter except topography) 
   - topography
-  - sin_lat_coords/sin_lon_coords/cos_lat_coords/cos_lon_coords
-  - lat_coords/lon_coords
-  - distance_centre
-  - x_coords/y_coords
-  - binary_centre
-- Not met but time-dependent 
-  - normalised_time_of_day
-  - normalised_time_of_year
-  - relative_time
+  - sin_lat_coords/sin_lon_coords/cos_lat_coords/cos_lon_coords - sin and cos of coordinates. This is to encode cyclical variables when using a sphere (ie the whole world), but probably is not as useful when only using a reduced domain
+  - lat_coords/lon_coords - coordinates at each node
+  - distance_centre - Euclidean distance from the release point, calculated with x/y coords rather than actual distance - this is to speed up calculation, as the lat/lon frame of reference (and therefore distances) changes only slightly for each footprint
+  - x_coords/y_coords - numerical indeces of each node in a x/y style, passing `centered_coords=True` returns 0,0 as the center (so negative x coordinates are west, negative y coordinates are south), otherwise 0,0 is the South-West corner and all x/y coords are positive, with the release point at int(size/2), int(size/2). For best practice and better inference across sizes pass centered_coords=True
+  - binary_centre - zero for all nodes except the release point which is 1
+- Not met but time-dependent - these seem to badly affect training and should not be used until properly tested!
+  - normalised_time_of_day: sin and cos of the normalised time of the day in seconds (taking sin and cos to make it cyclical)
+  - normalised_time_of_year: sin and cos of the normalised day of the year (taking sin and cos to make it cyclical)
+  - relative_time: relative time of meteorology data with respect to release - eg 6 for met at t-6
   - 
 ### Preparing dataset
 The `FootprintsDataset` object sets up the inputs and outputs to be loaded to the DataLoader, and makes any needed transformations.
@@ -141,5 +129,33 @@ train_loader = DataLoader(test_dataset, batch_size=5, shuffle=False)
 - You can align two LoadSatelliteData objects to have the same timestamps using `align_datasets(dataset1, dataset2)`. This is useful if you want to compare two sets of data, predictions etc but some datapoints have been removed in either dataset during loading, maybe due to freq, NaNs etc. 
   
 
+## Model
+The GNN paradigm are Graph Networks, described by [Deepmind, 2018](https://arxiv.org/pdf/1806.01261.pdf). 
+![Deepmind paper - graph updates example](/readme_imgs/deepmind_updates.PNG?raw=true)
 
+### Model literature/code
+The model is based on the one described by [Deepmind,2022](https://arxiv.org/pdf/2212.12794.pdf) and particularly [Keisler, 2022](https://arxiv.org/pdf/2202.07575.pdf) and the code developed from the code [in the corresponding repo](https://github.com/openclimatefix/graph_weather). I have made some changes I will detail here at some point
 
+### Model architecture
+Here is an architecture diagram that could probably be a bit clearer
+![Architecture diagram](/readme_imgs/diagram.jpg?raw=true)
+
+### Constructing a model
+Create a model with the following:
+```
+model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=np.shape(inputs)[-1]-len(others)-topog, aux_dim=len(others)+topog,num_blocks=4, node_dim=64, edge_dim=64, hidden_layers_processor_node=3, hidden_layers_processor_edge=2,  hidden_layers_decoder=1, hidden_dim_processor_node=16, hidden_dim_processor_edge=16, hidden_dim_decoder=16, "resolution=4, output_dim=1)
+```
+Parameters:
+- grid: list of lat-lon tuples for each of the nodes, outputted with get_all_inputs_graphnet_satellite_v4
+- whole_world: wether to create a mesh graph that spans the whole globe, or only mesh nodes above the grid nodes passed in grid. Always False at this stage
+- feature_dim and aux_dim: length of meteorological and non-met time inputs, respectively. Legacy from original code, right now they make no difference as long as feature_dim+aux_dim=total number of dims. feature_dim+aux_dim = length of the green node features in the Encoder in the diagram above
+- resolution: resolution of the mesh grid, as determined by the [h3 library](https://h3geo.org/docs/core-library/restable). The lower the resolution, the bigger the hexagons are. Resolution of 4 (used throughout the models) covers between one and three grid nodes, resolution of 3 covers around 10-15 grid nodes, resolution of 5 covers none or one grid nodes. Resolution of 5 and below do not work (as the mesh needs to cover the domain completely and this resolution is too fine-grained to).
+- NN parameters - please refer to diagram above which I need to label at some point:
+  -  `num_blocks` - number of processor blocks (pink cubes). These update the mesh edges and nodes sequentially
+  -  `node_dim` - size of mesh node feature array (ie length of yellow mesh node feature in diagram above)
+  - `edge_dim` - size of mesh edge feature array (ie length of dashed yellow mesh edge feature above)
+  - `hidden_layers_processor_node` - number of hidden layers in the Node Encoder and Node Updater, each of size `hidden_dim_processor_node` (blue blocks in Node Encoder and Node Updater)
+  - `hidden_layers_processor_edge` - number of hidden layers in the Edge Encoder and Edge Updater, each of size `hidden_dim_processor_edge` (blue blocks in Edge Encoder and Edge Updater)
+  - `hidden_layers_decoder` - number of hidden layers in the Decoder, each of size `hidden_dim_decoder` (blue block in Node Decoder)
+  - `output_dim` - dimension of Decoder Output (flat green square in Decoder above)
+ 
