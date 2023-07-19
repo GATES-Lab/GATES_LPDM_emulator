@@ -2,7 +2,8 @@
 
 ## To Do
 - [ ] Write readme section on model architecture
-- [ ] write readme section on model usage
+- [x] write readme section on model usage
+- [x] write readme section on predicting
 - [ ] check/update all function docstrings!!
 - [x] update example file with model loading, training and predicting
 - [x] add training file
@@ -158,4 +159,18 @@ Parameters:
   - `hidden_layers_processor_edge` - number of hidden layers in the Edge Encoder and Edge Updater, each of size `hidden_dim_processor_edge` (blue blocks in Edge Encoder and Edge Updater)
   - `hidden_layers_decoder` - number of hidden layers in the Decoder, each of size `hidden_dim_decoder` (blue block in Node Decoder)
   - `output_dim` - dimension of Decoder Output (flat green square in Decoder above)
- 
+
+
+ ## Predicting
+ To predict using a trained model, you will need 
+ - grid of lat/lon values (used during training for consistency)
+ - trained input and output transformers
+ - input, dataset and model parameters
+
+All three are pickled during training and can be loaded as shown in the `examples.ipynb`. They can then be used to create the test_inputs, test_dataset and model. Use the model to predict, and the dataset to invert the transform to the original space 
+```
+preds = model(test_dataset.inputs).detach().numpy()
+transformed_preds = test_dataset.inverse_transform(np.squeeze(preds))
+```
+### Predicting for a different domain size than trained on
+To do!
