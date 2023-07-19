@@ -107,8 +107,17 @@ grid, idx_grid, inputs, names, data = get_all_inputs_graphnet_satellite_v4(data,
   - y_wind
   - wind_angle
   - wind_speed
-- Not time dependent
+- Not time dependent (all loaded under others parameter except topography) 
   - topography
+  - sin_lat_coords/sin_lon_coords/cos_lat_coords/cos_lon_coords
+  - lat_coords/lon_coords
+  - distance_centre
+  - x_coords/y_coords
+  - binary_centre
+- Not met but time-dependent 
+  - normalised_time_of_day
+  - normalised_time_of_year
+  - relative_time
   - 
 ### Preparing dataset
 The `FootprintsDataset` object sets up the inputs and outputs to be loaded to the DataLoader, and makes any needed transformations.
