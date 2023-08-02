@@ -70,8 +70,8 @@ write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%
 write_to_file("loading data")
 
 ## load training and testing data
-data = LoadSatelliteData("201[4-5]", region="BRAZIL", metsize=50, size = 50, verbose=True, topog="default", cut_met = False, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_onlyvalid_50_")
-test_data = LoadSatelliteData(2016, region="BRAZIL", metsize=50, size =50, topog="default", verbose=True, cut_met = False, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_onlyvalid_50_")
+data = LoadSatelliteData("201[4-5]", region="BRAZIL", freq=3, metsize=50, size = 50, verbose=True, topog="default", cut_met = False, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_50_")
+test_data = LoadSatelliteData(2016, region="BRAZIL", freq=10, metsize=50, size =50, topog="default", verbose=True, cut_met = False, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_50_")
 
 
 write_to_file("setting up data")
