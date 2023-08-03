@@ -397,7 +397,7 @@ def cut_satellite_data(fp_full, size, returnlatlons = False, fill_bads_with="all
             fp_cut[:,idxs] = f
             lats[idxs, :] = fp_full.lat.values[rel_unique[0]-half:rel_unique[0]+half]
             lons[idxs, :] = fp_full.lon.values[rel_unique[1]-half:rel_unique[1]+half]
-        except IndexError: 
+        except (IndexError, ValueError): 
             # triggered if the index cannot be retrieved due to part of the cutting area being outside of the fp_full domain
             # gather stats on which direction the footprint is out of the domain and by how many cells
             if rel_unique[0]-half < 0:
