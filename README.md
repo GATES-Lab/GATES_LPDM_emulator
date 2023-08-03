@@ -1,18 +1,15 @@
 # graphnet_LPDM_emulator
 
 ## To Do
-- [ ] Write readme section on model architecture
 - [x] write readme section on model usage
 - [x] write readme section on predicting
-- [ ] check/update all function docstrings!!
+- [x] check/update all function docstrings!!
 - [x] update example file with model loading, training and predicting
 - [x] add training file
 - [x] add example trained model
-- [ ] add other trained models?
-- [ ] update example file with predicting across sizes
 - [ ] add predicting file
 - [ ] add info on evaluation metrics
-- [ ] clean up data loading
+- [x] clean up data loading
 - [ ] clean up dataset creation
 - [ ] Add science summary and ref papers
 
