@@ -142,14 +142,40 @@ class FootprintsDataset(Dataset):
                 self.boxcox=test_mode["boxcox"]
                 self.fp_untransformed = np.copy(fp)
                 try:
-                    self.fp = test_mode["boxcox"].transform(0.0000001+np.squeeze(self.fp))[:,:,None]
+                    if np.shape(fp)[1] == 200*200:
+                        # hand crafted case!
+                        print("doing special boxcox")
+                        points = np.array([(100+x,100+y) for x in list(range(-50,50)) for y in list(range(-50,50))])
+                        centre_idxs = np.ravel_multi_index([points[:,0], points[:,1]], (200,200))
+                        self.fp = np.zeros_like(fp)
+                        self.fp[:,centre_idxs] = test_mode["boxcox"]["centre"].transform(0.0000001+np.squeeze(fp[:,centre_idxs]))
+
+                        rest_idxs = list(set(range(200*200)) - set(centre_idxs))
+                        self.fp[:,rest_idxs] = np.reshape(test_mode["boxcox"]["outside"].transform(0.0000001+(fp[:,rest_idxs].flatten().reshape(-1, 1))), np.shape(self.fp[:,rest_idxs]))
+                
+                    else:
+                        self.fp = test_mode["boxcox"].transform(0.0000001+np.squeeze(self.fp))[:,:,None]
+
                     if zeroing:
                         self.fp[self.fp<0]=0
                         print("zeroing")
                 except KeyError:
                     print("no info was passed to do boxcox on the output")
                     pass
-            
+
+            if transform_output=="boxcox_all":
+                print("here!")
+                self.transform_output="boxcox_all"
+                self.boxcox=test_mode["boxcox"]
+                self.fp_untransformed = np.copy(fp)
+                try:
+                    fp = test_mode["boxcox"].transform(0.0000001+np.squeeze(self.fp.flatten()).reshape(-1, 1))[:,:,None]
+                    self.fp = np.reshape(fp, np.shape(self.fp_untransformed))
+
+                except KeyError:
+                    print("no info was passed to do boxcox on the output")
+                    pass
+
             if transform_output=="mu-law":
                 print("here!")
                 self.transform_output="mu-law"
@@ -161,6 +187,28 @@ class FootprintsDataset(Dataset):
 
                 transform_parameters=self.transform_parameters
             
+            elif transform_output=="logv1":
+                self.transform_output="logv1"
+                self.fp_untransformed = np.copy(fp)
+                logged = np.log(self.fp+1)
+                self.logged=logged
+                self.fp_mean, self.fp_var = test_mode["fp_mean"], test_mode["fp_var"]
+                self.fp = (logged-self.fp_mean)/self.fp_var
+
+            elif transform_output=="logv2":
+                self.transform_output="logv2"
+                self.fp_untransformed = np.copy(fp)
+                logged = np.log10(self.fp+0.0000001)
+                self.fp = logged
+
+            elif transform_output=="logv3":
+                self.transform_output="logv3"
+                self.fp_untransformed = np.copy(fp)
+                logged = np.log10(self.fp+0.0000001)
+                self.logged_mean = test_mode["logged_mean"]
+                self.fp = logged + abs(self.logged_mean)
+            
+                
 
 
             if scale_output:
@@ -268,25 +316,64 @@ class FootprintsDataset(Dataset):
                 #self.fp_mean = np.mean(self.fp, axis=(0,1))
                 #self.fp_var = np.var(self.fp, axis=(0,1))            
 
-            elif transform_output=="log":
-                self.transform_output="log"
+            elif transform_output=="logv1":
+                self.transform_output="logv1"
                 self.fp_untransformed = np.copy(fp)
                 logged = np.log(self.fp+1)
                 self.logged=logged
                 self.fp = (logged-np.mean(logged, axis=(0,1)))/np.var(logged, axis=(0,1))
                 self.fp_mean = np.mean(logged, axis=(0,1))
                 self.fp_var = np.var(logged, axis=(0,1))
-            
+
+            elif transform_output=="logv2":
+                self.transform_output="logv2"
+                self.fp_untransformed = np.copy(fp)
+                logged = np.log10(self.fp+0.0000001)
+                self.fp = logged
+            elif transform_output=="logv3":
+                self.transform_output="logv3"
+                self.fp_untransformed = np.copy(fp)
+                logged = np.log10(self.fp+0.0000001)
+                self.logged_mean = np.mean(np.log10(fp.flatten()[fp.flatten()>0]))
+                self.fp = logged + abs(self.logged_mean)
+
+
             elif transform_output=="boxcox":
                 self.transform_output="boxcox"
                 self.fp_untransformed = np.copy(fp)
-                pt = preprocessing.PowerTransformer(method='box-cox', standardize=True)
-                self.boxcox = pt
-                self.fp = self.boxcox.fit_transform(0.0000001+np.squeeze(self.fp))[:,:,None]
+                if np.shape(fp)[-1] == 200*200:
+                    # hand crafted case!
+                    print("doing special boxcox")
+                    pt = preprocessing.PowerTransformer(method='box-cox', standardize=True)
+                    self.boxcox_centre = pt
+                    points = np.array([(100+x,100+y) for x in list(range(-50,50)) for y in list(range(-50,50))])
+                    centre_idxs = np.ravel_multi_index([points[:,0], points[:,1]], (200,200))
+                    self.fp = np.zeros_like(fp)
+                    self.fp[:,centre_idxs] = self.boxcox_centre.fit_transform(0.0000001+np.squeeze(fp[:,centre_idxs]))
+
+                    pt = preprocessing.PowerTransformer(method='box-cox', standardize=True)
+                    self.boxcox_outside = pt
+                    rest_idxs = list(set(range(200*200)) - set(centre_idxs))
+                    self.fp[:,rest_idxs] = np.reshape(self.boxcox_outside.fit_transform(0.0000001+(fp[:,rest_idxs].flatten().reshape(-1, 1))), np.shape(self.fp[:,rest_idxs]))
+
+                    self.boxcox = {"centre":self.boxcox_centre, "outside":self.boxcox_outside}
+
+                else:
+                    pt = preprocessing.PowerTransformer(method='box-cox', standardize=True)
+                    self.boxcox = pt
+                    self.fp = self.boxcox.fit_transform(0.0000001+np.squeeze(self.fp))[:,:,None]
                 if zeroing:
                     self.fp[self.fp<0]=0
                     print("zeroing")
-                
+
+            elif transform_output=="boxcox_all":
+                self.transform_output="boxcox_all"
+                self.fp_untransformed = np.copy(fp)
+                pt = preprocessing.PowerTransformer(method='box-cox', standardize=True)
+                self.boxcox = pt
+                fp = self.boxcox.fit_transform(0.0000001+np.squeeze(self.fp.flatten()).reshape(-1, 1))[:,:,None]
+                self.fp = np.reshape(fp, np.shape(self.fp_untransformed))
+
             elif transform_output=="mu-law":
                 self.transform_output="mu-law"
                 self.fp_untransformed = np.copy(fp)       
@@ -336,20 +423,54 @@ class FootprintsDataset(Dataset):
         return self.inputs[item,:,:], self.fp[item,:,:]  
     
     def inverse_transform(self, predictions, remove_negs_before=True, remove_negs_after=True, remove_highs=False):
-        if np.shape(predictions) != np.shape(self.fp_untransformed):
+        if np.shape(predictions)[0:1] != np.shape(self.fp_untransformed)[0:1]:
             print("careful, the predictions you inputted don't have the same shape as the footprints in this dataset!")
+            print(np.shape(predictions), np.shape(self.fp_untransformed))
         if remove_highs==True and self.transform_output=="boxcox":
             predictions[predictions>3]=3
             predictions[predictions<0]=0
+
         self.predictions=predictions #.detach().numpy()
+
+        #if type(self.predictions) == torch.Tensor:
+        #    self.predictions=self.predictions.detach().numpy()
+
         if remove_negs_before==True and self.transform_output=="boxcox":
             predictions[predictions<0]=0
+
         if self.transform_output=="boxcox" and self.scale_output:
             #rescaled = (self.predictions-np.squeeze(self.test_mode["output_min"]))*(np.squeeze(self.test_mode["output_max"]) - np.squeeze(self.test_mode["output_min"]))/2
             #rescaled=np.squeeze(self.test_mode["output_min"]) + (self.predictions-np.squeeze(self.test_mode["output_min"]))*(np.squeeze(self.test_mode["output_max"]) - np.squeeze(self.test_mode["output_min"]))/2
             self.transformed_predictions=self.boxcox.inverse_transform(self.output_minmax.inverse_transform(predictions))-0.0000001
         elif self.transform_output=="boxcox" and not self.scale_output:
-            self.transformed_predictions=self.boxcox.inverse_transform(self.predictions)-0.0000001
+            if np.shape(self.fp)[1] == 200*200:
+                # hand crafted case! 
+                print("doing special boxcox")
+                points = np.array([(100+x,100+y) for x in list(range(-50,50)) for y in list(range(-50,50))])
+                centre_idxs = np.ravel_multi_index([points[:,0], points[:,1]], (200,200))
+                
+                if type(self.predictions) is torch.Tensor:
+                    
+                    self.transformed_predictions = torch.zeros(predictions.size()[0:2])
+                    print(type(self.predictions[:,centre_idxs, :]))
+                    self.transformed_predictions[:,centre_idxs] = torch.tensor(self.boxcox["centre"].inverse_transform(torch.squeeze(self.predictions[:,centre_idxs, :]))-0.0000001, dtype=torch.float)
+
+                    rest_idxs = list(set(range(200*200)) - set(centre_idxs))
+                    self.transformed_predictions[:,rest_idxs] = torch.tensor(np.reshape(self.boxcox["outside"].inverse_transform((torch.squeeze(self.predictions[:,rest_idxs,:]).reshape(-1, 1))), self.predictions[:,rest_idxs].size()[0:2])-0.0000001, dtype=torch.float)
+                else:
+                    self.transformed_predictions = np.zeros_like(self.predictions)
+                    self.transformed_predictions[:,centre_idxs] = self.boxcox["centre"].inverse_transform(np.squeeze(self.predictions[:,centre_idxs]))-0.0000001
+
+                    rest_idxs = list(set(range(200*200)) - set(centre_idxs))
+                    self.transformed_predictions[:,rest_idxs] = np.reshape(self.boxcox["outside"].inverse_transform((self.predictions[:,rest_idxs].flatten().reshape(-1, 1))), np.shape(self.predictions[:,rest_idxs]))-0.0000001                
+            else:       
+                self.transformed_predictions=self.boxcox.inverse_transform(self.predictions)-0.0000001
+
+        elif self.transform_output=="boxcox_all":
+            print("inverse boxcox all!")
+            transformed_predictions=self.boxcox.inverse_transform(self.predictions.flatten().reshape(-1, 1))-0.0000001
+            self.transformed_predictions = np.reshape(transformed_predictions, np.shape(self.predictions))
+
         if self.transform_output=="log":
             self.transformed_predictions=np.exp(((self.predictions)*self.fp_var+self.fp_mean))-1
 
@@ -357,6 +478,12 @@ class FootprintsDataset(Dataset):
             print("inverting")
             normalised = (1/self.transform_parameters["mu"])*(np.exp(predictions*(np.log(1+self.transform_parameters["mu"])))-1) 
             self.transformed_predictions = normalised*self.transform_parameters["max"]
+
+        if self.transform_output=="logv2":
+            self.transformed_predictions = 10**(predictions)-0.0000001
+
+        if self.transform_output=="logv3":
+            self.transformed_predictions = 10**(predictions - abs(self.logged_mean))-0.0000001
 
         if remove_negs_after:
             self.transformed_predictions[self.transformed_predictions<0] = 0
@@ -541,6 +668,8 @@ class SeqFootprintsDataset(Dataset):
                 except KeyError:
                     print("no info was passed to do boxcox on the output")
                     pass
+
+
             
             if transform_output=="mu-law":
                 print("here!")
@@ -659,8 +788,8 @@ class SeqFootprintsDataset(Dataset):
                 #self.fp_mean = np.mean(self.fp, axis=(0,1))
                 #self.fp_var = np.var(self.fp, axis=(0,1))            
 
-            elif transform_output=="log":
-                self.transform_output="log"
+            elif transform_output=="logv1":
+                self.transform_output="logv1"
                 self.fp_untransformed = np.copy(fp)
                 logged = np.log(self.fp+1)
                 self.logged=logged
@@ -677,7 +806,9 @@ class SeqFootprintsDataset(Dataset):
                 if zeroing:
                     self.fp[self.fp<0]=0
                     print("zeroing")
-                
+
+
+
             elif transform_output=="mu-law":
                 self.transform_output="mu-law"
                 self.fp_untransformed = np.copy(fp)       
@@ -744,8 +875,8 @@ class SeqFootprintsDataset(Dataset):
         return self.inputs[item,:,self.present+self.notime], self.inputs[item,:,self.past+self.notime], self.fp[item,:,:]  
     
     def inverse_transform(self, predictions, remove_negs=True, remove_highs=False):
-        if np.shape(predictions) != np.shape(self.fp_untransformed):
-            print("careful, the predictions you inputted don't have the same shape as the footprints in this dataset!")
+        #if np.shape(predictions) != np.shape(self.fp_untransformed):
+            #print("careful, the predictions you inputted don't have the same shape as the footprints in this dataset!")
         if remove_highs==True and self.transform_output=="boxcox":
             predictions[predictions>3]=3
             predictions[predictions<0]=0
