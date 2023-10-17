@@ -29,6 +29,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 from torch_scatter import scatter_mean
+from torch_geometric.utils import to_dense_adj
 
 from model.layers.graph_net_block import MLP
 
@@ -51,7 +52,7 @@ class SatelliteEncoder(torch.nn.Module):
         hidden_layers_processor_edge=2,
         mlp_norm_type="LayerNorm",
         use_checkpointing: bool = False,
-        dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None,
+        dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False,
 
     ):
         """
@@ -195,9 +196,47 @@ class SatelliteEncoder(torch.nn.Module):
 
         # Extra starting ones for appending to inputs, could 'learn' good starting points
         self.h3_nodes = torch.nn.Parameter(torch.zeros((self.num_h3, input_dim), dtype=torch.float))
+        self.better_meshnodes = better_meshnodes
+        
+        if self.better_meshnodes:
+            """
+            better meshnodes adds location/distance features to the nodes in the abstract layer (which otherwise would be empty)
+            # TODO test and eval (this is only experimental)
+            """
+            assert idx_latlon is not None, "pass the idx_latlon grid to do better meshnodes!"
+            size = int(np.sqrt(self.num_latlons))
+            centre_idx = np.ravel_multi_index((int(size/2),int(size/2)), (size,size))
+            print(centre_idx)
+            assert idx_latlon[centre_idx] == (0,0), "something went wrong trying to make better meshnodes"
 
+            binary_centre = np.zeros((self.num_h3,1))
+            binary_centre[self.base_h3_grid.index(self.h3_grid[centre_idx])] = 1
+
+            distance_centre = []
+
+            for idx, h3_point in enumerate(self.base_h3_grid):
+                # this calculates haversine distance, which is distance on the surface of the earth
+                distance = h3.point_dist(lat_lons[centre_idx], h3.h3_to_geo(h3_point), unit="km")
+                distance_centre.append([distance])
+            
+            distance_centre = np.array(distance_centre)
+            distance_centre = (distance_centre-np.min(distance_centre))/(np.max(distance_centre)-np.min(distance_centre))
+
+            both_features = np.hstack((binary_centre, distance_centre))
+            print(np.shape(both_features))
+            self.improved_mesh_nodes = torch.tensor(both_features, dtype=torch.float32)
+        
         self.mesh_graph = self.create_mesh_graph()
 
+        self.attention=attention
+        if attention:
+            """
+            Attention mask means attention is only applied to connected nodes
+            """
+            self.attention_mask = 1-to_dense_adj(self.mesh_graph.edge_index).squeeze()
+            self.attention_mask.fill_diagonal_(1)
+        else:
+            self.attention_mask = None
 
         # Output graph
         #print("encoder: setting up node enc")
@@ -240,6 +279,8 @@ class SatelliteEncoder(torch.nn.Module):
         self.graph = self.graph.to(features.device) 
         self.mesh_graph = self.mesh_graph.to(features.device) 
         self.edge_weights = self.edge_weights.to(features.device)
+        if self.attention:
+            self.attention_mask = self.attention_mask.to(features.device)
         features = einops.rearrange(features, "b n f -> b f n")
         #print(features.size(), torch.flatten(torch.from_numpy(self.edge_weights)).size())
         features = torch.multiply(features, torch.flatten(self.edge_weights))
@@ -256,6 +297,13 @@ class SatelliteEncoder(torch.nn.Module):
         #out = einops.rearrange(out, "(b n) f -> b n f", b=self.batch_size)
         #print("after encoding", np.shape(out))
 
+        if self.better_meshnodes:
+            self.improved_mesh_nodes = self.improved_mesh_nodes.to(features.device)
+            better_nodes = einops.repeat(self.improved_mesh_nodes, "e f -> (repeat e) f", repeat=batch_size)
+
+            print(features.size(), out.dtype, self.improved_mesh_nodes.size(), better_nodes.dtype, better_nodes.device)
+            out = torch.cat([out, better_nodes], dim=1)
+        
         
         if self.v2_edges:
             # take index of wind (actually do above!)
@@ -273,7 +321,7 @@ class SatelliteEncoder(torch.nn.Module):
 
         #mesh_edge_idx = self.mesh_graph.edge_index
 
-
+        
 
         return (
             out,

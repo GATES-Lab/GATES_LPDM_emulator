@@ -26,7 +26,8 @@ class SatelliteProcessor(torch.nn.Module):
         hidden_layers_processor_node: int = 2,
         hidden_layers_processor_edge: int = 2,
         mlp_norm_type: str = "LayerNorm",   
-        dropout: float=0
+        dropout: float=0, 
+        scatter: str="mean",disaggregated=False, attention=False,attention_mask=None
     ):
         """
         Latent graph processor
@@ -46,7 +47,7 @@ class SatelliteProcessor(torch.nn.Module):
         # Build the default graph
         # Take features from encoder and put into processor graph
         self.input_dim = input_dim
-        #print("set up graph")
+        print("set up graph")
         self.graph_processor = GraphSatelliteProcessor(
             num_blocks,
             input_dim,
@@ -55,7 +56,7 @@ class SatelliteProcessor(torch.nn.Module):
             hidden_dim_processor_edge,
             hidden_layers_processor_node,
             hidden_layers_processor_edge,
-            mlp_norm_type, dropout=dropout
+            mlp_norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention,attention_mask=attention_mask
         )
 
     def forward(self, x: torch.Tensor, edge_index, edge_attr, batch=None) -> torch.Tensor:
