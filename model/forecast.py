@@ -39,7 +39,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         decoder_final_layer=None,
         higher_mesh_res=0,
         idx_latlon=None,
-        concat_decoder_neighbours=False,
+        concat_decoder_neighbours=False, better_meshnodes=False, scatter="mean",disaggregated=False, batchsize=5, attention=False
     ):
         """
         Graph Weather Model based off https://arxiv.org/pdf/2202.07575.pdf
@@ -86,13 +86,16 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
             mlp_norm_type=norm_type,
-            use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon 
+            use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention
         )
         if not encode_edges:
             edge_dim=2
         if not encode_nodes:
             node_dim=feature_dim+aux_dim
-            
+        
+        if better_meshnodes:
+            node_dim=node_dim+2
+
         print("set up processor")
         self.processor = SatelliteProcessor(
             input_dim=node_dim,
@@ -102,7 +105,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_layers_processor_node=hidden_layers_processor_node,
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
-            mlp_norm_type=norm_type, dropout=dropout
+            mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask
         )
         print("set up decoder")
         if residuals:
