@@ -54,7 +54,7 @@ class LoadSatelliteData:
         - get_binary_threshold(threshold=0.001, zero=0, one=1): adds attribute fp_binary, of the same shape as fp_data with a "binarisation" applied - all values above threshold are assigned value one, and all values below value zero.
     """
 
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, met_jump=0, metsize=None, met_levels = [1], met_variables= None, freq=1, verbose = False, met_datadir = None, cut_met=True, fp_datadir = None, topog=None, savemet=False, savemetpath=None, fill_outofdomain_with="nans"):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, met_jump=0, metsize=None, met_levels = [], met_variables= None, freq=1, verbose = False, met_datadir = None, cut_met=True, fp_datadir = None, topog=None, savemet=False, savemetpath=None, fill_outofdomain_with="nans"):
         
         #### check domains
         if domain==None:
@@ -172,6 +172,14 @@ class LoadSatelliteData:
 
             assert "lat_coords" in met.coords, "cut_met was passed as false but passed met does not have the right format!"
             self.met = met
+
+            print("met levels", met_levels)
+            if len(met_levels)>0:
+                try:
+                    self.met = self.met.sel(levels=met_levels)
+                    print("selected")
+                except KeyError:
+                    print(f"there was an error selecting the met levels ({met_levels} you passed. Check! Loading all levels")
             
             # align the time dimension of footprints and met. This could be needed because freq was used, and/or because either of the original files are missing some indeces
             if len(self.met.time) != len(self.fp_data_full.time):
@@ -189,8 +197,8 @@ class LoadSatelliteData:
                     self.fp_data = self.fp_data[idxs2,:]
                     self.release_idxs = self.release_idxs[idxs2,:]
 
-
-            elif len(self.met.lat) > self.metsize:
+            print(len(self.met.lat), self.metsize)
+            if len(self.met.lat) > self.metsize:
                 print(f"passed met is bigger than the passed metsize (sizes {self.metsize, len(self.met.lat)}). Cutting met to match metsize.")
                 diff = int((len(self.met.lat) - self.metsize)/2)
                 cut_idxs =  self.met.lat.values[diff:-diff]
@@ -289,6 +297,7 @@ class LoadSatelliteData:
                 expand_topog=True
             else:
                 expand_topog=False
+            print(expand_topog)
             if expand_topog:
                 print("expanding topography to out-of-footprint domain! careful, this is very case-specific")
                 delta_lon = 0.352
@@ -329,8 +338,16 @@ def intersection_over_union(fps, preds, zero=-1):
     intersection = np.sum(np.logical_and(fps==1, preds==1, where=1), axis=-1)
     union = np.sum(np.logical_or(fps==1, preds==1, where=1), axis=-1)
     IoU = intersection/union
-
     return IoU
+
+def accuracy(fps, preds, zero=-1):
+    # calculates metric intersection over union (IoU) for a binary footprint 
+    assert (np.unique(fps) == np.array([zero,1])).all(), "pass binary footprints, or if they arent -1/1, pass parameter zero=lower number"
+    assert len(np.shape(fps))<=2, "currently this only supports flattened arrays (of shape (samples x pixels))"
+    accuracy = np.sum(fps==preds, axis=-1)/((np.shape(preds)[-1]))
+    return accuracy
+
+
 
 def dice_similarity(fps, preds, zero=-1):
     # calculates metric intersection over union (IoU) for a binary footprint 
@@ -507,7 +524,6 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
     """
     assert jump>=0, "jump needs to be zero or positive!!"
 
-
     if relevant_levels != None:
         for lev in relevant_levels:
             if lev not in met.model_level_number.values: 
@@ -515,6 +531,7 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
         if len(relevant_levels)==1:
             print("this is not ready for selecting only one level!")
         if verbose: print("selecting levels and loading met")
+    
         met = met.sel(model_level_number=relevant_levels)
     if relevant_variables != None:
         if verbose: print("dropping irrelevant vars")
@@ -676,6 +693,7 @@ def get_all_inputs_graphnet_satellite_v4(data, variables_past, jumps, variables_
                     cut_idxs =  mets[j].lat.values[diff:-diff]
                     mets[j] = mets[j].sel(lat=cut_idxs, lon=cut_idxs)
                     mets[j] = mets[j].assign_coords({"lat":list(range(data.metsize)), "lon":list(range(data.metsize))})
+                    print(mets[j])
 
                 try:
                     # select met
@@ -715,7 +733,7 @@ def get_all_inputs_graphnet_satellite_v4(data, variables_past, jumps, variables_
 
     print(len(data.met.time))
     for j in jumps:
-        print(j, len(mets[j].time))
+        print(j, len(mets[j].time), len(mets[j].lat))
         
 
     n_vars_with_past =(len(jumps))*np.sum([len(variables_past[var]) for var in variables_past])
@@ -743,6 +761,7 @@ def get_all_inputs_graphnet_satellite_v4(data, variables_past, jumps, variables_
     col = 0
     for v in variables_past:
         for jump in jumps:
+            #print(v, jump)
             mets[jump][v].load()
             for lev in variables_past[v]:
                 #print(col, v, jump, lev)
@@ -752,7 +771,8 @@ def get_all_inputs_graphnet_satellite_v4(data, variables_past, jumps, variables_
                 else:
                     cutmet = mets[jump][v].values
                     vartype="2D"
-
+                #print(mets[jump][v])
+                #print(np.shape(cutmet))
                 all_vars[:,:,:,col] = cutmet
                 
                 var_names.append({"var":v, "level":lev, "type": vartype, "time":f"t-{jump}"})
