@@ -56,7 +56,7 @@ def load_fps(fp_datadir):
     return fp_data_full
     
 
-def cut_met_data(date, 
+def cut_and_save_met_data(date, 
                  region="BRAZIL", 
                  met_jump=[0], size=50,
                  met_levels=[3,9,15,21,30,42,51], met_variables=["air_pressure", "air_temperature", "atmosphere_boundary_layer_thickness", "surface_air_pressure", "upward_air_velocity", "x_wind", "y_wind"], 
@@ -73,8 +73,6 @@ def cut_met_data(date,
         - met_levels: list of levels to keep from the original meteorology file
     """
     domains = {"BRAZIL":"SOUTHAMERICA", "SOUTHAMERICA":"SOUTHAMERICA", "SAHARA":"NORTHAFRICA", "INDIA":"SOUTHASIA"}
-
-    assert "lat_coords" not in met.coords, "this meteorology seems to have already been cut. are you sure you are choosing the right file?"
 
     # Load reference footprints
     if fp_datadir==None:
@@ -101,6 +99,8 @@ def cut_met_data(date,
     time_chunk = round(1000000/(size*size), -2)
     with dask.config.set(**{'array.slicing.split_large_chunks': True}):
         met = xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', parallel=True, chunks = {"level":1, "time":time_chunk})    
+
+    assert "lat_coords" not in met.coords, "this meteorology seems to have already been cut. are you sure you are choosing the right file?"
 
     """
     checking if there is extramet (ie met outside of the fp_data_full domain) that can be appended.
@@ -129,10 +129,10 @@ def cut_met_data(date,
         assert len(met_jump)==len(savemetpath), "pass as many savemetpaths as met_jumps!"
         for jump, savep in zip(met_jump, savemetpath):
             print(f"saving met for {region} and {date} for time jump t-{jump} hours, at path {savep}")
-            met = cut_satellite_met_v3(met, fp_data_full, size, met_release_idxs, jump, met_levels, met_variables, verbose=verbose, save=True, savepath=savep, delete_nans=True)
+            _ = cut_satellite_met_v3(met, fp_data_full, size, met_release_idxs, jump, met_levels, met_variables, verbose=verbose, save=True, savepath=savep, delete_nans=True)
 
     if type(met_jump) == int:
-        met = cut_satellite_met_v3(met, fp_data_full, size, met_release_idxs, met_jump, met_levels, met_variables, verbose=verbose, save=True, savepath=savemetpath, delete_nans=True)
+        _  = cut_satellite_met_v3(met, fp_data_full, size, met_release_idxs, met_jump, met_levels, met_variables, verbose=verbose, save=True, savepath=savemetpath, delete_nans=True)
 
 
 class LoadSatelliteData:
@@ -607,9 +607,9 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
     if jump==0:
         met = met.interp(time=fp.time.values)
     else:
-        print("before", met.time.values)
+        #print("before", met.time.values)
         met = met.interp(time=(pd.DatetimeIndex(fp.time.values) - pd.Timedelta(f"{jump}H")))
-        print("after", met.time.values)
+        #print("after", met.time.values)
 
     met = met.transpose("model_level_number", "latitude", "longitude", "time")
 
