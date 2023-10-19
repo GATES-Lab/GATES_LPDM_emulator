@@ -68,7 +68,6 @@ def cut_and_save_met_data(date,
     Saves extracted met as .nc file to use in LoadSatelliteData object.
         - met_jump: int or list of ints. Determines the time of the meteorology with respect to the time of the footprint - eg met_jump=0 will interpolate the meteorology to the time of the footprint, met_jump=6 will interpolate the met to t-6h where t is time of the footprint etc. If a list, a corresponding list of saving paths must be passed to savemetpath  
         - savemetpath: str or list of strs with path/filename to save the cut met
-        
         - met_variables: list of variables to keep from the original meteorology file (must be present in the meteorology)
         - met_levels: list of levels to keep from the original meteorology file
     """
@@ -137,9 +136,7 @@ def cut_and_save_met_data(date,
 
 class LoadSatelliteData:
     """
-    Main use: Load footprint and meteorological data for a particular domain and time period
-
-    Secondary use: cut and save meteorological data to the right shape and format to speed up main use (this could maybe be split into a separate function!)
+    Load footprint and meteorological data for a particular domain and time period, outputting all data cut to a square centered around the measurement point for each timestamp. 
 
 
     main inputs:
@@ -149,13 +146,14 @@ class LoadSatelliteData:
         (note - Brazil is a subset of South America!)
         - domain: Domain related to the region, used for file search (due to existing filenaming conventions). Set-up regions ("BRAZIL", "SOUTHAMERICA", "SAHARA" and "INDIA") have a default domain, all others need domain passed
         - size: size for footprint to be cut to, as an int. Resolution of the footprint is maintained, cut to a sizexsize square around the release point. 
+        - topog: if True, loads the topography and cuts it in the same way as the footprints
+
         Have only tested with even numbers!
         - metsize: size for the meteorology to be cut to, as an int. In most occasions metsize should be equal to size
         - freq: int, frequency of the data to load. freq=1 will load all the datapoints, freq=2 will load one in every two etc. Useful to reduce memory usage. Many datapoints are very close in time and space (and therefore very similar) so using freq particularly in low values (<10) does not affect much the quality of the dataset
         - select_time_index: list or 1D np array of timestamps to be selected as datapoints. Applied after sampling with freq (or pass freq=1 to load all footprints)
         - fp_datadir: str, directory for footprints. default directs to ACRG folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
         - met_datadir: str, directory for meteorology. default directs to ACRG meteorology folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/name_of_your_choice_". If passing met that has already been processed and cut, pass cut_met as false. Note that if passing processed meteorology, it does not need to be exactly the same size as metsize - the function will reshape it as long as size of loaded meteorology >= metsize
-        - topog: if True, loads the topography and cuts it in the same way as the footprints
         - fill_outofdomain_with: str, out of "all_nans", "nans" and "zeros". Determines what to do if any part of the square cut around the footprint is outside of the domain. "all_nans" fills that whole footprint with nans, "nans" and "zeros" fill only the out of domain areas with nans and zeros respectively. If "all_nans" or "nans", that footprint will be eliminated from the dataset
         - verbose: if True, prints out the steps throughout the data loading process
  
