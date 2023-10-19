@@ -9,6 +9,9 @@ from sklearn.preprocessing import MinMaxScaler
 
 
 class FootprintsDatasetV2(Dataset):
+    """
+    to write!
+    """
     def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], test_mode={}, input_names=[]):
         self.inputs = inputs
         self.fp = fp
@@ -18,98 +21,136 @@ class FootprintsDatasetV2(Dataset):
         self.test_mode = test_mode
 
 
-        valid_input_transforms = {
-            "clever_transform":{"params":["transformers"], "fun":self._clever_transform}, 
-            "clever_transform_2":{"params":["transformers"], "fun":self._clever_transform_2}, 
-            "standardise":{"params":["transformers"], "fun":self._not_implemented}, 
-            "scale":{"params":["inputs_min", "inputs_max"], "fun":self._not_implemented}}
+        self.valid_input_transforms = {
+            "clever_transform":{"params":["transformers"], "fun":_CleverTransform}, 
+            "clever_transform_2":{"params":["transformers"], "fun":_CleverTransform2}, 
+            "standardise":{"params":["transformers"], "fun":_Transform}, 
+            "scale":{"params":["inputs_min", "inputs_max"], "fun":_Transform}}
 
-        valid_output_transforms = {
-            "boxcox":{"params":["boxcox"], "fun":self._not_implemented},
-            "boxcox_all":{"params":["boxcox"], "fun":self._not_implemented}, 
-            "mu-law":{"params":["max", "mu"], "fun":self._not_implemented}, 
-            "logv1":{"params":["fp_mean", "fp_var"], "fun":self._not_implemented}, 
-            "logv2":{"params":[], "fun":self._not_implemented}, 
-            "logv3":{"params":["logged_mean"], "fun":self._not_implemented},
-            "scale":{"params":["output_minmax"], "fun":self._not_implemented}}
+        self.valid_output_transforms = {
+            "boxcox":{"params":["boxcox"], "fun":_Boxcox},
+            "boxcox_all":{"params":["boxcox"], "fun":_BoxcoxAll}, 
+            "mu-law":{"params":["max", "mu"], "fun":_Transform}, 
+            "logv1":{"params":["fp_mean", "fp_var"], "fun":_Transform}, 
+            "logv2":{"params":[], "fun":_Transform}, 
+            "logv3":{"params":["logged_mean"], "fun":_LogV3},
+            "scale":{"params":["output_minmax"], "fun":_Transform}}
 
 
         ## assert that only valid input and output transforms have been passed
-        assert set(input_transforms).issubset(valid_input_transforms.keys()), f"You passed some input transforms that are not in the list of valid transforms. \n The valid transforms are {list(valid_input_transforms.keys())}. \n The following transforms you passed but are not allowed: {set(input_transforms) - set(valid_input_transforms.keys())}"
+        assert set(self.input_transforms).issubset(self.valid_input_transforms.keys()), f"You passed some input transforms that are not in the list of valid transforms. \n The valid transforms are {list(self.valid_input_transforms.keys())}. \n The following transforms you passed but are not allowed: {set(self.input_transforms) - set(self.valid_input_transforms.keys())}"
 
-        assert set(output_transforms).issubset(valid_output_transforms.keys()), f"You passed some input transforms that are not in the list of valid transforms. \n The valid transforms are {list(valid_output_transforms.keys())}. \n The following transforms you passed but are not allowed: {set(output_transforms) - set(valid_output_transforms.keys())}"
+        assert set(self.output_transforms).issubset(self.valid_output_transforms.keys()), f"You passed some input transforms that are not in the list of valid transforms. \n The valid transforms are {list(self.valid_output_transforms.keys())}. \n The following transforms you passed but are not allowed: {set(self.output_transforms) - set(self.valid_output_transforms.keys())}"
 
 
         if len(self.test_mode)>0:
             self.mode="test"
             # if on test mode, assert that all necessary parameters for the provided input and output transforms have been passed
-            assert all([valid_input_transforms[x]["params"][0] in self.test_mode for x in self.input_transforms]), "You did not pass all the necessary parameters to test_mode for the input transformations!"
+            assert all([set(self.valid_input_transforms[x]["params"]).issubset(self.test_mode) for x in self.input_transforms]), "You did not pass all the necessary parameters to test_mode for the input transformations!"
 
-            assert all([valid_output_transforms[x]["params"][0] in self.test_mode for x in self.output_transforms]), "You did not pass all the necessary parameters to test_mode for the output transformations!"
+            assert all([set(self.valid_output_transforms[x]["params"]).issubset(self.test_mode) for x in self.output_transforms]), "You did not pass all the necessary parameters to test_mode for the output transformations!"
 
         else:
             self.mode="train"        
 
-
+        self.input_transforms = {key: None for key in self.input_transforms}
         for transform in self.input_transforms:
-            valid_input_transforms[transform]["fun"]()
+            self.input_transforms[transform]  = self.valid_input_transforms[transform]["fun"]()
+            self.input_transforms[transform].transform()
 
-    def _not_implemented(self):
-        raise NotImplementedError("this transform has not been yet implemented!")
+        self.output_transforms = {key: None for key in self.output_transforms}
+        for transform in self.output_transforms:
+            self.output_transforms[transform]  = self.valid_output_transforms[transform]["fun"](self)
+            self.output_transforms[transform].transform()
+
+
+    def inverse_transform(self, predictions):
+        for transform in self.output_transforms:
+            self.output_transforms[transform].inverse_transform(predictions)
+
+     
+class _Transform:
+    """
+    Base class for input and output transforms of data
+    If transforming inputs
+        - save untransformed inputs self.parent.inputs_untransformed = np.copy(self.parent.inputs)
+        - keep transformed inputs in self.inputs
+    If transforming outputs:
+        - save untransformed footprint self.parent.fp_untransformed = np.copy(self.parent.fp)
+        - keep transformed fp in self.fp   
+    If inverse transforming outputs:
+        - save original predictions self.parent.predictions = predictions
+        - put transformed predictions under self.parent.transformed_predictions
+
+    """
+    def __init__(self, parent):
+        self.parent = parent
     
-    def _clever_transform(self):
-        """
-        Apply a standard scaler to each variable across all levels and all timesteps
+    def transform(self):
+        raise NotImplementedError("this transform has not been yet implemented!")
 
-        If train, save scalers in a dictionary. Format example: {variable_name:scaler, variable_name:scaler, ...}
+    def inverse_transform(self):
+        raise NotImplementedError("this transform has not been yet implemented!")
 
-        If test, apply these
-        """
-        print("doing clever transformers 2")
-        assert len(self.input_names)>0, "Pass the input names to do a clever transform"
-        self.inputs_untransformed = np.copy(self.inputs)
+class _CleverTransform:
+    """
+    Apply a standard scaler to each variable across all levels and all timesteps
 
-        varnames = np.array([x["var"] for x in self.input_names])
+    If train, save scalers in a dictionary. Format example: {variable_name:scaler, variable_name:scaler, ...}
 
-        if self.mode=="train":
-            self.transformers = {}
-        if self.mode=="test":
-            self.transformers = self.test_mode["transformers"]
+    If test, apply these
 
-        for varname in np.unique(varnames):
-            var_locations = np.where(varnames==varname)[0]
-            if self.mode=="train":
+    If inverse_transform, apply saved transforms (either from test object or previous transforms) to transform the data back
+    """
+    def __init__(self, parent):
+        self.parent = parent
+        assert len(self.parent.input_names)>0, "Pass the input names to do a clever transform"
+        self.parent.inputs_untransformed = np.copy(self.parent.inputs)
+
+        self.varnames = np.array([x["var"] for x in self.parent.input_names])
+
+        if self.parent.mode=="train":
+            self.parent.transformers = {}
+        if self.parent.mode=="test":
+            self.parent.transformers = self.parent.test_mode["transformers"]
+
+    def transform(self):
+        for varname in np.unique(self.varnames):
+            var_locations = np.where(self.varnames==varname)[0]
+            if self.parent.mode=="train":
                 scaler = preprocessing.StandardScaler()
-                scaler.fit(self.inputs[:,:,var_locations].flatten
+                scaler.fit(self.parent.inputs[:,:,var_locations].flatten
             ().reshape(-1, 1))
-                self.transformers[varname]=scaler 
-            if self.mode=="test":
-                scaler = self.transformers[varname]
+                self.parent.transformers[varname]=scaler 
+            if self.parent.mode=="test":
+                scaler = self.parent.transformers[varname]
 
-            shape = np.shape(self.inputs[:,:,var_locations])
-            self.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)     
+            shape = np.shape(self.parent.inputs[:,:,var_locations])
+            self.parent.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.parent.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)  
 
-    def _clever_transform_2(self):
-        """
-        Apply a standard scaler to each variable and level, across all timesteps
+class _CleverTransform2:
+    """
+    Apply a standard scaler to each variable and level, across all timesteps
 
-        If train, save scalers in a dictionary, with subdictionaries for each level if needed. Format example: {variable_name:{levelA:scaler, levelB:scaler ...}, variable_name:scaler, ...}
+    If train, save scalers in a dictionary, with subdictionaries for each level if needed. Format example: {variable_name:{levelA:scaler, levelB:scaler ...}, variable_name:scaler, ...}
 
-        If test, apply these
-        """
-        print("doing clever transformers 2")
-        assert len(self.input_names)>0, "Pass the input names to do a clever transform"
-        self.inputs_untransformed = np.copy(self.inputs)
+    If test, apply these
+    """
+    def __init__(self, parent):
+        self.parent = parent
+        assert len(self.parent.input_names)>0, "Pass the input names to do a clever transform"
+        self.parent.inputs_untransformed = np.copy(self.parent.inputs)
 
-        varnames = np.array([x["var"] for x in self.input_names])
+        self.varnames = np.array([x["var"] for x in self.parent.input_names])
 
-        if self.mode=="train":
-            self.transformers = {}
-        if self.mode=="test":
-            self.transformers = self.test_mode["transformers"]
+        if self.parent.mode=="train":
+            self.parent.transformers = {}
+        if self.parent.mode=="test":
+            self.parent.transformers = self.parent.test_mode["transformers"]
 
-        for varname in np.unique(varnames):
-            var_locations = np.where(varnames==varname)[0]
+    def transform(self):
+        for varname in np.unique(self.varnames):
+            var_locations = np.where(self.varnames==varname)[0]
             # apply below if variable has levels
             if "level" in self.input_names[var_locations[0]]:
                 levels_dict = {}
@@ -142,10 +183,92 @@ class FootprintsDatasetV2(Dataset):
                     scaler = self.transformers[varname][level]
 
                 shape = np.shape(self.inputs[:,:,var_locations])
-                self.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)                
+                self.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)           
+              
 
+class _Boxcox(_Transform):
+    """
+    Apply boxcox + standardisation to all pixels in image. 
+    Note: Does NOT translate across domain sizes (ie fp size in training has to be the same as fp size in testing)
 
+    If train, train and transform
 
+    If test, use trained object to transform
+    """
+    def __init__(self, parent):
+        self.parent = parent
+        print("init boxcox")
+        self.parent.fp_untransformed = np.copy(self.parent.fp)
+
+        if self.parent.mode=="train":
+            self.parent.boxcox = preprocessing.PowerTransformer(method='box-cox', standardize=True)
+            self.parent.boxcox.fit(0.0000001+np.squeeze(self.parent.fp))
+
+        elif self.parent.mode=="test":
+            self.parent.boxcox =  self.parent.test_mode["boxcox"] 
+
+    def transform(self):
+        print("transforming")
+        self.parent.fp = self.parent.boxcox.transform(0.0000001+np.squeeze(self.parent.fp))      
+
+    def inverse_transform(self, predictions):
+        self.parent.predictions = predictions
+        self.parent.transformed_predictions=self.parent.boxcox.inverse_transform(self.parent.predictions)-0.0000001
+
+class _BoxcoxAll(_Transform):
+    """
+    Apply boxcox + standardisation to all pixels in image. 
+    Note: Translates across domain sizes - training dataset can have different fp size to testing
+
+    If train, train and transform
+
+    If test, use trained object to transform
+    """
+    def __init__(self, parent):
+        self.parent = parent
+        print("init boxcox all")
+        self.parent.fp_untransformed = np.copy(self.parent.fp)
+
+        if self.parent.mode=="train":
+            self.parent.boxcox = preprocessing.PowerTransformer(method='box-cox', standardize=True)
+            self.parent.boxcox.fit(0.0000001+np.squeeze(self.parent.fp.flatten()).reshape(-1, 1))
+
+        elif self.parent.mode=="test":
+            self.parent.boxcox =  self.parent.test_mode["boxcox"] 
+
+    def transform(self):
+        print("transforming")
+        self.parent.fp = self.parent.boxcox.transform(0.0000001+np.squeeze(self.parent.fp.flatten()).reshape(-1, 1))
+        self.parent.fp = np.reshape(self.parent.fp, np.shape(self.parent.fp_untransformed))   
+
+    def inverse_transform(self, predictions):
+        self.parent.predictions = predictions
+        self.parent.transformed_predictions=self.parent.boxcox.inverse_transform(self.parent.predictions.flatten().reshape(-1, 1))-0.0000001
+        self.parent.transformed_predictions = np.reshape(self.parent.transformed_predictions, np.shape(self.parent.predictions)) 
+
+class _LogV3(_Transform):
+    """
+    Takes log of (output data+0.0000001) (ofset is needed so data is strictly positive) and shifts so mean(logged(non-zero values)) = 0
+    Note: Does translate across domain sizes
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        print("init logv3")
+        self.parent.fp_untransformed = np.copy(self.parent.fp)    
+        self.logged = np.log10(self.parent.fp+0.0000001)
+
+    def transform(self):
+        if self.parent.mode=="train":
+            self.parent.logged_mean = np.mean(np.log10(self.parent.fp.flatten()[self.parent.fp.flatten()>0]))
+        if self.parent.mode=="test":
+            self.parent.logged_mean = self.parent.test_mode["logged_mean"]
+
+        self.parent.fp = self.logged + abs(self.parent.logged_mean) 
+
+    def inverse_transform(self, predictions):
+        self.parent.predictions = predictions
+        self.parent.transformed_predictions = 10**(predictions - abs(self.parent.logged_mean))-0.0000001              
 
 
 
