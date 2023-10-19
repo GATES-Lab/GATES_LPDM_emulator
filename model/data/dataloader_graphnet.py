@@ -7,6 +7,148 @@ from sklearn.preprocessing import MinMaxScaler
 
 
 
+
+class FootprintsDatasetV2(Dataset):
+    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], test_mode={}, input_names=[]):
+        self.inputs = inputs
+        self.fp = fp
+        self.input_transforms=input_transforms
+        self.output_transforms=output_transforms
+        self.input_names=input_names
+        self.test_mode = test_mode
+
+
+        valid_input_transforms = {
+            "clever_transform":{"params":["transformers"], "fun":self._clever_transform}, 
+            "clever_transform_2":{"params":["transformers"], "fun":self._clever_transform_2}, 
+            "standardise":{"params":["transformers"], "fun":self._not_implemented}, 
+            "scale":{"params":["inputs_min", "inputs_max"], "fun":self._not_implemented}}
+
+        valid_output_transforms = {
+            "boxcox":{"params":["boxcox"], "fun":self._not_implemented},
+            "boxcox_all":{"params":["boxcox"], "fun":self._not_implemented}, 
+            "mu-law":{"params":["max", "mu"], "fun":self._not_implemented}, 
+            "logv1":{"params":["fp_mean", "fp_var"], "fun":self._not_implemented}, 
+            "logv2":{"params":[], "fun":self._not_implemented}, 
+            "logv3":{"params":["logged_mean"], "fun":self._not_implemented},
+            "scale":{"params":["output_minmax"], "fun":self._not_implemented}}
+
+
+        ## assert that only valid input and output transforms have been passed
+        assert set(input_transforms).issubset(valid_input_transforms.keys()), f"You passed some input transforms that are not in the list of valid transforms. \n The valid transforms are {list(valid_input_transforms.keys())}. \n The following transforms you passed but are not allowed: {set(input_transforms) - set(valid_input_transforms.keys())}"
+
+        assert set(output_transforms).issubset(valid_output_transforms.keys()), f"You passed some input transforms that are not in the list of valid transforms. \n The valid transforms are {list(valid_output_transforms.keys())}. \n The following transforms you passed but are not allowed: {set(output_transforms) - set(valid_output_transforms.keys())}"
+
+
+        if len(self.test_mode)>0:
+            self.mode="test"
+            # if on test mode, assert that all necessary parameters for the provided input and output transforms have been passed
+            assert all([valid_input_transforms[x]["params"][0] in self.test_mode for x in self.input_transforms]), "You did not pass all the necessary parameters to test_mode for the input transformations!"
+
+            assert all([valid_output_transforms[x]["params"][0] in self.test_mode for x in self.output_transforms]), "You did not pass all the necessary parameters to test_mode for the output transformations!"
+
+        else:
+            self.mode="train"        
+
+
+        for transform in self.input_transforms:
+            valid_input_transforms[transform]["fun"]()
+
+    def _not_implemented(self):
+        raise NotImplementedError("this transform has not been yet implemented!")
+    
+    def _clever_transform(self):
+        """
+        Apply a standard scaler to each variable across all levels and all timesteps
+
+        If train, save scalers in a dictionary. Format example: {variable_name:scaler, variable_name:scaler, ...}
+
+        If test, apply these
+        """
+        print("doing clever transformers 2")
+        assert len(self.input_names)>0, "Pass the input names to do a clever transform"
+        self.inputs_untransformed = np.copy(self.inputs)
+
+        varnames = np.array([x["var"] for x in self.input_names])
+
+        if self.mode=="train":
+            self.transformers = {}
+        if self.mode=="test":
+            self.transformers = self.test_mode["transformers"]
+
+        for varname in np.unique(varnames):
+            var_locations = np.where(varnames==varname)[0]
+            if self.mode=="train":
+                scaler = preprocessing.StandardScaler()
+                scaler.fit(self.inputs[:,:,var_locations].flatten
+            ().reshape(-1, 1))
+                self.transformers[varname]=scaler 
+            if self.mode=="test":
+                scaler = self.transformers[varname]
+
+            shape = np.shape(self.inputs[:,:,var_locations])
+            self.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)     
+
+    def _clever_transform_2(self):
+        """
+        Apply a standard scaler to each variable and level, across all timesteps
+
+        If train, save scalers in a dictionary, with subdictionaries for each level if needed. Format example: {variable_name:{levelA:scaler, levelB:scaler ...}, variable_name:scaler, ...}
+
+        If test, apply these
+        """
+        print("doing clever transformers 2")
+        assert len(self.input_names)>0, "Pass the input names to do a clever transform"
+        self.inputs_untransformed = np.copy(self.inputs)
+
+        varnames = np.array([x["var"] for x in self.input_names])
+
+        if self.mode=="train":
+            self.transformers = {}
+        if self.mode=="test":
+            self.transformers = self.test_mode["transformers"]
+
+        for varname in np.unique(varnames):
+            var_locations = np.where(varnames==varname)[0]
+            # apply below if variable has levels
+            if "level" in self.input_names[var_locations[0]]:
+                levels_dict = {}
+                levels = np.array([self.input_names[x]["level"] for x in var_locations])
+                for level in np.unique(levels):
+                    levels_locations = np.where(levels==level)[0]
+                    if self.mode=="train":
+                        scaler = preprocessing.StandardScaler()
+                        scaler.fit(self.inputs[:,:,var_locations[levels_locations]].flatten
+                    ().reshape(-1, 1))
+                        levels_dict[level]=scaler
+                    if self.mode=="test":
+                        scaler = self.transformers[varname][level]
+                        
+                    shape = np.shape(self.inputs[:,:,var_locations[levels_locations]])
+                    self.inputs[:,:,var_locations[levels_locations]] = np.reshape(scaler.transform(self.inputs[:,:,var_locations[levels_locations]].flatten
+                    ().reshape(-1, 1)), shape)
+
+                if self.mode=="train":
+                    self.transformers[varname]=levels_dict
+
+            # apply below if variable has no levels
+            else:
+                if self.mode=="train":
+                    scaler = preprocessing.StandardScaler()
+                    scaler.fit(self.inputs[:,:,var_locations].flatten
+                ().reshape(-1, 1))
+                    self.transformers[varname]=scaler 
+                if self.mode=="test":
+                    scaler = self.transformers[varname][level]
+
+                shape = np.shape(self.inputs[:,:,var_locations])
+                self.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)                
+
+
+
+
+
+
 class FootprintsDataset(Dataset):
     """
     options right now:
@@ -29,10 +171,15 @@ class FootprintsDataset(Dataset):
         self.fp = fp
         self.standardise_inputs=False
         self.transform_output=False
-        self.mode="train"
         self.scale_output=False
         self.zeroing=zeroing
 
+        if len(test_mode)>0:
+            self.mode="test"
+        else:
+            self.mode="train"
+
+    
 
         if len(test_mode)>0:
             self.mode="test"
@@ -99,7 +246,6 @@ class FootprintsDataset(Dataset):
 
             if standardise_all:
                 try:
-
                     self.standardise_inputs=True
                     self.inputs_untransformed = np.copy(inputs)
                     scalers=test_mode["transformers"]
