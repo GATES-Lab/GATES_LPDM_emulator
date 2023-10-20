@@ -193,6 +193,7 @@ class LoadSatelliteData:
                    
         self.year = year
         self.date = self.year
+        self.verbose=verbose
         if month != None:
             self.month = month
             self.date = str(self.year)+month
