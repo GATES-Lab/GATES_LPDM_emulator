@@ -30,7 +30,7 @@ class FootprintsDatasetV2(Dataset):
         self.valid_output_transforms = {
             "boxcox":{"params":["boxcox"], "fun":_Boxcox},
             "boxcox_all":{"params":["boxcox"], "fun":_BoxcoxAll}, 
-            "mu-law":{"params":["max", "mu"], "fun":_Transform}, 
+            "mu-law":{"params":["max", "mu"], "fun":_MuLaw}, 
             "logv1":{"params":["fp_mean", "fp_var"], "fun":_Transform}, 
             "logv2":{"params":[], "fun":_Transform}, 
             "logv3":{"params":["logged_mean"], "fun":_LogV3},
@@ -61,14 +61,27 @@ class FootprintsDatasetV2(Dataset):
         self.output_transforms = {key: None for key in self.output_transforms}
         for transform in self.output_transforms:
             self.output_transforms[transform]  = self.valid_output_transforms[transform]["fun"](self)
-            self.output_transforms[transform].transform()
+            self.fp = self.output_transforms[transform].transform(self.fp)
 
 
     def inverse_transform(self, predictions):
         for transform in self.output_transforms:
-            self.output_transforms[transform].inverse_transform(predictions)
+            self.transformed_predictions = self.output_transforms[transform].inverse_transform(predictions)
 
-     
+    def add_prototypes(self, prototypes):
+        raise Warning("This has not been tested yet!")
+        self.prototypes = prototypes
+        for transform in self.output_transforms:
+            self.prototypes = self.output_transforms[transform].transform(self.prototypes)
+        
+        # TODO concatenate prototypes to inputs
+
+    def __len__(self):
+        return self.inputs.size()[0]
+
+    def __getitem__(self, item):
+        return self.inputs[item,:,:], self.fp[item,:,:]  
+    
 class _Transform:
     """
     Base class for input and output transforms of data
@@ -90,7 +103,7 @@ class _Transform:
         raise NotImplementedError("this transform has not been yet implemented!")
 
     def inverse_transform(self):
-        raise NotImplementedError("this transform has not been yet implemented!")
+        raise NotImplementedError("this inverse transform has not been yet implemented!")
 
 class _CleverTransform:
     """
@@ -185,7 +198,6 @@ class _CleverTransform2:
                 shape = np.shape(self.inputs[:,:,var_locations])
                 self.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)           
               
-
 class _Boxcox(_Transform):
     """
     Apply boxcox + standardisation to all pixels in image. 
@@ -207,13 +219,15 @@ class _Boxcox(_Transform):
         elif self.parent.mode=="test":
             self.parent.boxcox =  self.parent.test_mode["boxcox"] 
 
-    def transform(self):
+    def transform(self, fp):
         print("transforming")
-        self.parent.fp = self.parent.boxcox.transform(0.0000001+np.squeeze(self.parent.fp))      
+        fp = self.parent.boxcox.transform(0.0000001+np.squeeze(fp))  
+        return fp    
 
     def inverse_transform(self, predictions):
         self.parent.predictions = predictions
-        self.parent.transformed_predictions=self.parent.boxcox.inverse_transform(self.parent.predictions)-0.0000001
+        transformed_predictions=self.parent.boxcox.inverse_transform(self.parent.predictions)-0.0000001
+        return transformed_predictions
 
 class _BoxcoxAll(_Transform):
     """
@@ -236,40 +250,71 @@ class _BoxcoxAll(_Transform):
         elif self.parent.mode=="test":
             self.parent.boxcox =  self.parent.test_mode["boxcox"] 
 
-    def transform(self):
+    def transform(self, fp):
         print("transforming")
-        self.parent.fp = self.parent.boxcox.transform(0.0000001+np.squeeze(self.parent.fp.flatten()).reshape(-1, 1))
-        self.parent.fp = np.reshape(self.parent.fp, np.shape(self.parent.fp_untransformed))   
+        fp = self.parent.boxcox.transform(0.0000001+np.squeeze(fp.flatten()).reshape(-1, 1))
+        fp = np.reshape(fp, np.shape(self.parent.fp_untransformed))   
+        return fp
 
     def inverse_transform(self, predictions):
         self.parent.predictions = predictions
-        self.parent.transformed_predictions=self.parent.boxcox.inverse_transform(self.parent.predictions.flatten().reshape(-1, 1))-0.0000001
-        self.parent.transformed_predictions = np.reshape(self.parent.transformed_predictions, np.shape(self.parent.predictions)) 
+        transformed_predictions=self.parent.boxcox.inverse_transform(self.parent.predictions.flatten().reshape(-1, 1))-0.0000001
+        transformed_predictions = np.reshape(transformed_predictions, np.shape(self.parent.predictions)) 
+        return transformed_predictions
 
 class _LogV3(_Transform):
     """
     Takes log of (output data+0.0000001) (ofset is needed so data is strictly positive) and shifts so mean(logged(non-zero values)) = 0
-    Note: Does translate across domain sizes
+    Note: translates across domain sizes
     """
 
     def __init__(self, parent):
         self.parent = parent
         print("init logv3")
         self.parent.fp_untransformed = np.copy(self.parent.fp)    
-        self.logged = np.log10(self.parent.fp+0.0000001)
 
-    def transform(self):
         if self.parent.mode=="train":
             self.parent.logged_mean = np.mean(np.log10(self.parent.fp.flatten()[self.parent.fp.flatten()>0]))
         if self.parent.mode=="test":
             self.parent.logged_mean = self.parent.test_mode["logged_mean"]
 
-        self.parent.fp = self.logged + abs(self.parent.logged_mean) 
-
+    def transform(self, fp):
+        logged = np.log10(self.parent.fp+0.0000001)
+        fp = logged + abs(self.parent.logged_mean) 
+        return fp
+    
     def inverse_transform(self, predictions):
         self.parent.predictions = predictions
-        self.parent.transformed_predictions = 10**(predictions - abs(self.parent.logged_mean))-0.0000001              
+        transformed_predictions = 10**(predictions - abs(self.parent.logged_mean))-0.0000001      
+        return transformed_predictions        
 
+class _MuLaw(_Transform):
+    """
+    write
+    """
+    def __init__(self, parent, mu=256, max_val="max"):
+        self.parent = parent
+        print("init mulaw")
+        self.parent.fp_untransformed = np.copy(self.parent.fp) 
+        if self.parent.mode=="train":
+            self.parent.mu = mu
+            if max_val=="max":
+                self.parent.max = np.max(self.parent.fp)
+            else:
+                self.parent.max = max_val
+        if self.parent.mode=="test":
+            self.parent.max = self.parent.test_mode["max"]
+            self.parent.mu = self.parent.test_mode["mu"]
+
+    
+    def transform(self, fp):
+        fp = np.sign(fp)*np.log(1+self.parent.mu*(np.abs(fp/self.parent.max)))/(np.log(1+self.parent.mu))
+        return fp
+    
+    def inverse_transform(self, predictions):
+        self.parent.predictions = predictions
+        transformed_predictions = self.parent.max * np.sign(predictions) * ((1+self.parent.mu)**(np.abs(predictions))-1)/self.parent.mu 
+        return transformed_predictions   
 
 
 class FootprintsDataset(Dataset):
