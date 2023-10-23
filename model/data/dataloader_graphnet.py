@@ -44,6 +44,7 @@ class FootprintsDatasetV2(Dataset):
         self.input_names= copy.deepcopy(input_names)
         self.test_mode = copy.deepcopy(test_mode)
         self.transform_parameters = copy.deepcopy(transform_parameters)
+        self.prototypes_added = False
         
         print(transform_parameters)
         print(self.transform_parameters)
@@ -107,12 +108,28 @@ class FootprintsDatasetV2(Dataset):
             self.transformed_predictions = self.output_transforms[transform].inverse_transform(predictions)
 
     def add_prototypes(self, prototypes):
+
+        assert list(np.shape(self.fp)) == list(np.shape(prototypes)), f"The footprints and the prototypes should have the same size, but right now they have shapes {list(np.shape(self.fp))} and {list(np.shape(prototypes))} respectively"
+        
+        if self.prototypes_added:
+            print("Careful, prototypes have already been added! replacing them with the newly passed ones")
+
+
         self.prototypes = prototypes
         for transform in self.output_transforms:
             self.prototypes = self.output_transforms[transform].transform(self.prototypes)
-        raise Warning("This funcion is not yet fully implemented!")
-    
-        # TODO concatenate prototypes to inputs
+
+        if type(self.prototypes) != torch.Tensor:
+            self.prototypes = torch.tensor(self.prototypes, dtype=torch.float)
+
+        if not self.prototypes_added:
+            self.inputs = torch.cat([self.inputs, self.prototypes[:,:,None]], dim=2)
+            self.prototypes_added = True
+            if len(self.input_names)>0:
+                self.input_names.append({"var":"prototypes", "type":"not met"})
+
+        if self.prototypes_added:
+            self.inputs = torch.cat([self.inputs[:,:,:-1], self.prototypes[:,:,None]], dim=2)
         
 
     def __len__(self):
