@@ -4,8 +4,7 @@ import numpy as np
 import sklearn.preprocessing as preprocessing
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.preprocessing import MinMaxScaler
-
-
+import copy
 
 
 class FootprintsDatasetV2(Dataset):
@@ -36,14 +35,14 @@ class FootprintsDatasetV2(Dataset):
 
     """
     def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[]):
-        print(transform_parameters, "!")
+        #super().__init__()
         self.inputs = inputs
         self.fp = fp
-        self.input_transforms=input_transforms
-        self.output_transforms=output_transforms
-        self.input_names=input_names
-        self.test_mode = test_mode
-        self.transform_parameters = transform_parameters
+        self.input_transforms= copy.deepcopy(input_transforms)
+        self.output_transforms= copy.deepcopy(output_transforms)
+        self.input_names= copy.deepcopy(input_names)
+        self.test_mode = copy.deepcopy(test_mode)
+        self.transform_parameters = copy.deepcopy(transform_parameters)
         
         print(transform_parameters)
         print(self.transform_parameters)
@@ -112,6 +111,7 @@ class FootprintsDatasetV2(Dataset):
         raise Warning("This funcion is not yet fully implemented!")
     
         # TODO concatenate prototypes to inputs
+        
 
     def __len__(self):
         return self.inputs.size()[0]
@@ -368,8 +368,8 @@ class _MuLaw(_Transform):
             self.scale = np.max(self.parent.fp)
 
         self.parent.transform_parameters["mu-law"] = {}
-        self.parent.transform_parameters["mu-law"]["mu"] = mu
-        self.parent.transform_parameters["mu-law"]["scale"] = scale       
+        self.parent.transform_parameters["mu-law"]["mu"] = self.mu
+        self.parent.transform_parameters["mu-law"]["scale"] = self.scale       
     
     def transform(self, fp):
         fp = np.sign(fp)*np.log(1+self.mu*(np.abs(fp/self.scale)))/(np.log(1+self.mu))
