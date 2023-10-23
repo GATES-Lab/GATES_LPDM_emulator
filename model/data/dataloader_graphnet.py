@@ -22,6 +22,7 @@ class FootprintsDatasetV2(Dataset):
         - boxcox_all (apply boxcox to all the data)
         - mu-law (apply mu-law enconding algorithm)
         - logv3 (take log10 and shift so mean of non-zero elements is zero)
+    - transform_parameters: pass optional parameters to transform. Only used during training (during test, only parameters in test_mode are considering). Pass in format {"transform_name":{"param1":value, "param2":value}}
     
     - test_mode: dict. If training, leave empty. If testing (ie applying existing parameters and/or already fitted models), pass a dictionary or the transform_parameters of another dataset
 
@@ -47,6 +48,7 @@ class FootprintsDatasetV2(Dataset):
         print(transform_parameters)
         print(self.transform_parameters)
 
+        # note that _Transform is the base class and will raise a not_implemented error if used
         self.valid_input_transforms = {
             "clever_transform":{"params":["transformers"], "fun":_CleverTransform}, 
             "clever_transform_2":{"params":["transformers"], "fun":_CleverTransform2}, 
