@@ -1,0 +1,53 @@
+{
+    "model_name" : "test_run",
+    "train_load_data" : {
+        "year":"201[4-5]",
+        "freq":3,
+        "region":"BRAZIL",
+        "metsize":50,
+        "size":50,
+        "verbose":true,
+        "topog":"default",
+        "met_datadir":"/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_50_"
+    },
+    "test_load_data" : {
+        "year":"2016",
+        "freq":10
+    },
+
+    "variables" : {
+        "met_variables":{"x_wind":[3,9,15,21,30,42,51], "wind_speed":[3,30,51], "wind_angle":[3,30,51], "y_wind":[3,9,15,21,30,42,51], "upward_air_velocity":[3,9,15,21,30,42,51], "air_temperature":[3,9,15,21,30,42,51], "air_pressure":[3,9,15,21,30,42,51], "atmosphere_boundary_layer_thickness":[0], "surface_air_pressure":[0]},
+        "others":["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "distance_centre", "x_coords", "y_coords"],
+        "jumps":[6,12],
+        "topog":true,
+        "centered_coords":true
+    },
+
+    "dataloader_parameters":{
+        "input_transforms":["clever_transform_2"],
+        "output_transforms":["boxcox"]  
+    },
+
+    "model_parameters":{
+        "num_blocks":4, 
+        "node_dim":64, 
+        "edge_dim":64, 
+        "hidden_layers_processor_node":2, 
+        "hidden_layers_processor_edge":2,  
+        "hidden_layers_decoder":1, 
+        "hidden_dim_processor_node":16, 
+        "hidden_dim_processor_edge":16, 
+        "hidden_dim_decoder":16, 
+        "resolution":4, 
+        "output_dim":1, 
+        "residuals":false, 
+        "attention":true
+    },
+
+    "learning_rate":5e-5,
+
+    "loss_functions" : {
+        "criterion": "MSE_assymetric(alpha=2)",
+        "criterion_test": "torch.nn.MSELoss()"
+    }    
+}
