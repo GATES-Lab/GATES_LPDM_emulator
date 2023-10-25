@@ -364,10 +364,10 @@ class _LogV3(_Transform):
         if self.parent.mode=="train":
             self.logged_mean = np.mean(np.log10(self.parent.fp.flatten()[self.parent.fp.flatten()>0]))
         if self.parent.mode=="test":
-            self.logged_mean = self.parent.test_mode["logv3"]["logged mean"]
+            self.logged_mean = self.parent.test_mode["logv3"]["logged_mean"]
         
         self.parent.transform_parameters["logv3"] = {}
-        self.parent.transform_parameters["logv3"]["logged mean"] = self.logged_mean
+        self.parent.transform_parameters["logv3"]["logged_mean"] = self.logged_mean
 
     def transform(self, fp):
         logged = np.log10(self.parent.fp+0.0000001)
