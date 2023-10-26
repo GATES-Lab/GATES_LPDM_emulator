@@ -35,6 +35,19 @@ from sklearn.metrics import mean_squared_error, r2_score
 import time
 from datetime import datetime
 import json
+import argparse
+
+parser = argparse.ArgumentParser(description="Load parameters")
+parser.add_argument("file_name", help="parameter file name")
+parser.add_argument("--file_path", help="parameter file path")
+
+args = parser.parse_args()
+file_name = args.file_name
+file_path = args.file_path
+
+print(file_name, file_path)
+
+
 
 torch.manual_seed(33)
 
@@ -45,14 +58,36 @@ def write_to_file(message):
     f.write(datetime.now().strftime("%d/%m/%y %H:%M:%S") + " " + message + "\n")
     f.close()
 
+
+def load_file(file_name, file_path):
+    # file_path=False if no argument was passed to the parser
+    if not file_path:
+       file_path ="/user/work/ef17148/GCN/graphnet/graph_weather/train_satellite_files/"
+    file_path = f"{file_path}{file_name}"
+    try:
+        with open(file_path, 'r') as file:
+            if file_path.endswith('.json'):
+                data = json.load(file)
+            else:
+                data = file.read()
+                data = json.loads(data)
+        return data
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+        return None
+    except Exception as e:
+        print(f"An error occurred while loading the file: {str(e)}")
+        return None
+    
+
 # TODO make this an argument
-with open('/user/work/ef17148/GCN/graphnet/graph_weather/train_satellite_files/parameter_template.txt') as f: 
-    data = f.read() 
-parameters = json.loads(data) 
+
+parameters = load_file(file_name, file_path) 
 
 
 model_name = parameters["model_name"]
 print(model_name)
+
 
 # make files
 os.mkdir(f"/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/{model_name}")
@@ -136,7 +171,7 @@ epoch_so_far = 0
 if torch.cuda.is_available():
     model.cuda()
 
-for epoch in range(10):
+for epoch in range(300):
     epoch=epoch+epoch_so_far
     running_loss = 0.0
     print(f"Start Epoch: {epoch}")
