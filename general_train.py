@@ -14,13 +14,15 @@ import pickle
 
 sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
 sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
-from graphnet_LPDM_emulator.model.layers.encoder import *
-from graphnet_LPDM_emulator.model.layers.decoder import *
-from graphnet_LPDM_emulator.model.layers.processor import *
-from graphnet_LPDM_emulator.model.layers.graph_net_block import *
-from graphnet_LPDM_emulator.model.data.dataloader_graphnet import *
-from graphnet_LPDM_emulator.model.data.load_data import *
-from graphnet_LPDM_emulator.model.forecast import GraphSatelliteForecaster
+from model.layers.encoder import *
+from model.layers.decoder import *
+from model.layers.processor import *
+from model.layers.graph_net_block import *
+from model.data.dataloader_graphnet import *
+from model.data.load_data import *
+from model.forecast import GraphSatelliteForecaster
+from model.loss_functions import *
+
 from graphnet_LPDM_emulator.model.loss_functions import *
 
 import torch.optim as optim
