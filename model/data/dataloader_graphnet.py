@@ -114,11 +114,12 @@ class FootprintsDatasetV2(Dataset):
         if self.fp.ndim==2:
             self.fp = self.fp[:,:,None]
 
-    def inverse_transform(self, predictions):
+    def inverse_transform(self, predictions, return_transformed=True):
         self.predictions = predictions.detach().numpy()
         for transform in self.output_transforms:
             self.transformed_predictions = self.output_transforms[transform].inverse_transform(self.predictions)
-        return self.transformed_predictions
+        if return_transformed:
+            return self.transformed_predictions
     
     def add_prototypes(self, prototypes):
         """
@@ -470,7 +471,7 @@ class _MuLaw(_Transform):
         return transformed_predictions   
 
 
-def plot_footprints(original_fp, transformed_fp, prediction, transformed_prediction, idx):
+def plot_footprints(idx, original_fps=None, transformed_fps=None, predictions=None, transformed_predictions=None, size=30):
     """
     visualise footprints and predictions for the footprints at index idx
     idx can be an int or a list of ints
@@ -481,24 +482,47 @@ def plot_footprints(original_fp, transformed_fp, prediction, transformed_predict
 
     if type(idx) is int:
         idx=[idx]
+    
+    to_plot = (original_fps is not None) + (transformed_fps is not None) + (predictions is not None) + (transformed_predictions is not None)
 
-    assert hasattr(self, "predictions"), "add predictions first"
-    assert hasattr(self, "transformed_predictions"), "only works currently for transformed/normalised outputs!"
-    fig, ax = plt.subplots((len(idx)), 4, figsize=(16,4*len(idx)))
+    assert to_plot>0, "You passed none of the four original_fps, transformed_fps, predictions or transformed_predictions so nothing will be plotted!"
+    fig, ax = plt.subplots((len(idx)), to_plot, figsize=(4*to_plot,4*len(idx)))
+    if to_plot==1:
+        ax = np.array([ax])
     if len(idx)==1:
         ax = ax[None,:]
+    
     for idx_n, index in enumerate(idx):
-        ax[idx_n,0].imshow(np.reshape(original_fp[index], (self.size, self.size)), origin="lower")
-        ax[idx_n,1].imshow(np.reshape(transformed_fp[index], (self.size, self.size)), origin="lower")
-        ax[idx_n,2].imshow(np.reshape(prediction[index], (self.size, self.size)), origin="lower")
-        ax[idx_n,3].imshow(np.reshape(transformed_prediction[index], (self.size, self.size)), origin="lower")
+        ax_counter = 0
+        if original_fps is not None:
+            ax[idx_n,ax_counter].imshow(np.reshape(original_fps[index], (size, size)), origin="lower")
+            ax_counter+=1
+        if transformed_predictions is not None:
+            ax[idx_n,ax_counter].imshow(np.reshape(transformed_predictions[index],(size, size)), origin="lower")
+            ax_counter+=1
+        if transformed_fps is not None:
+            ax[idx_n,ax_counter].imshow(np.reshape(transformed_fps[index], (size, size)), origin="lower")
+            ax_counter+=1
+        if predictions is not None:
+            ax[idx_n,ax_counter].imshow(np.reshape(predictions[index], (size, size)), origin="lower")
+            ax_counter+=1
 
         ax[idx_n,0].set_ylabel(f"fp at index {index}")
 
-    ax[0,0].set_title("True Footprint \n original space")
-    ax[0,1].set_title("Predicted Footprint \n original space")
-    ax[0,2].set_title("True Footprint \n transformed space")
-    ax[0,3].set_title("Predicted Footprint \n transformed space")
+    ax_counter = 0
+    if original_fps is not None:
+        ax[0,ax_counter].set_title("True Footprint \n original space")
+        ax_counter+=1
+    if  transformed_predictions is not None:
+        ax[0,ax_counter].set_title("Predicted Footprint \n original space")
+        ax_counter+=1
+    if transformed_fps is not None:
+        ax[0,ax_counter].set_title("True Footprint \n transformed space")
+        ax_counter+=1
+    if predictions is not None:
+        ax[0,ax_counter].set_title("Predicted Footprint \n transformed space")
+        ax_counter+=1
+
 
     for axis in ax.flatten():
         axis.tick_params(left = False, bottom = False, labelbottom=False, labelleft=False) 
