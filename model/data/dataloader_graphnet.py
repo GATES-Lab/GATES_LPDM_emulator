@@ -113,7 +113,11 @@ class FootprintsDatasetV2(Dataset):
         for transform in self.output_transforms:
             self.transformed_predictions = self.output_transforms[transform].inverse_transform(predictions)
         return self.transformed_predictions
+    
     def add_prototypes(self, prototypes):
+        """
+        appends footprint prototypes to the input data
+        """
 
         assert list(np.shape(self.fp)) == list(np.shape(prototypes)), f"The footprints and the prototypes should have the same size, but right now they have shapes {list(np.shape(self.fp))} and {list(np.shape(prototypes))} respectively"
         
@@ -134,22 +138,27 @@ class FootprintsDatasetV2(Dataset):
             if len(self.input_names)>0:
                 self.input_names.append({"var":"prototypes", "type":"not met"})
 
-        if self.prototypes_added:
+        elif self.prototypes_added:
             self.inputs = torch.cat([self.inputs[:,:,:-1], self.prototypes[:,:,None]], dim=2)
         
     def evaluate(self):
-            assert hasattr(self, "transformed_predictions"), "only works currently for transformed/normalised outputs!"
+        """
+        output metrics (normalised absolute mean, MSE, accuracy, IOU) for the predictions transformed back to the original data space
+        """
+        assert hasattr(self, "transformed_predictions"), "only works currently for transformed/normalised outputs!"
 
-            assert np.shape(self.transformed_predictions) == np.shape(self.fp_untransformed), "predictions and fp have to have the same shape to evaluate errors"
+        assert np.shape(self.transformed_predictions) == np.shape(self.fp_untransformed), "predictions and fp have to have the same shape to evaluate errors"
 
-            metrics = {}
-            metrics["NMAE"] = NMAE(self.transformed_predictions, self.fp_untransformed)
-            metrics["MSE"] = mean_squared_error(self.transformed_predictions, self.fp_untransformed)
-            metrics["Accuracy"] = accuracy(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
-            metrics["IOU"] = intersection_over_union(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
+        metrics = {}
+        metrics["NMAE"] = NMAE(self.transformed_predictions, self.fp_untransformed)
+        metrics["MSE"] = mean_squared_error(self.transformed_predictions, self.fp_untransformed)
+        metrics["Accuracy"] = accuracy(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
+        metrics["IOU"] = intersection_over_union(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
 
-            print(metrics)
-            return metrics
+        print(metrics)
+        return metrics
+    
+
     
     def __len__(self):
         return self.inputs.size()[0]

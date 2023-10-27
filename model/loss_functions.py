@@ -3,6 +3,9 @@ import torch.nn as nn
 import numpy as np
 
 class MSE_weighted(nn.Module):
+    """
+
+    """
     def __init__(self):
         super().__init__()
 
@@ -13,6 +16,9 @@ class MSE_weighted(nn.Module):
         return torch.mean(torch.mul(torch.squeeze(loss),0.1*fp_sum))
     
 class MSE_assymetric(nn.Module):
+    """
+    assymetric MSE - penalises underprediction by a factor of alpha before taking square
+    """
     def __init__(self, alpha=4):
         self.alpha=alpha
         super().__init__()
@@ -45,6 +51,10 @@ def intersection_over_union(fps, preds, threshold=0):
     return np.mean(IoU)
 
 class CombinedLoss(nn.Module):
+    """
+    combines assymetric MSE loss (see above) with accuracy, weighted according to acc_weighting factor
+    accuracy is calculated as the percentage of correctly predicted pixels (ie true positives and true negatives) when "binarising" the footprint with threshold accuracy_threshold
+    """    
     def __init__(self, alpha=4, acc_weighting=1, accuracy_threshold=0):
         self.alpha=alpha
         self.acc_weighting=acc_weighting
