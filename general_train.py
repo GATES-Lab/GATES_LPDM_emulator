@@ -7,7 +7,6 @@ import matplotlib.patches as mpatches
 
 import einops
 import numpy as np
-sys.path.insert(0, "/user/work/ef17148/oldstuff/ef17148/.conda/envs/GCN_env/lib/python3.8/site-packages/")
 import torch
 import os
 import pickle
