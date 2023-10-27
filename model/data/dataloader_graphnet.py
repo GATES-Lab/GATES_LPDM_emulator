@@ -482,7 +482,8 @@ def plot_footprints(original_fp, transformed_fp, prediction, transformed_predict
     if type(idx) is int:
         idx=[idx]
 
-    assert hasattr(self, "transformed_predictions"), "what_to_plot=all only works currently for transformed/normalised outputs!"
+    assert hasattr(self, "predictions"), "add predictions first"
+    assert hasattr(self, "transformed_predictions"), "only works currently for transformed/normalised outputs!"
     fig, ax = plt.subplots((len(idx)), 4, figsize=(16,4*len(idx)))
     if len(idx)==1:
         ax = ax[None,:]
