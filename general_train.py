@@ -1,11 +1,4 @@
 import sys
-#sys.path.append("/user/work/ef17148/oldstuff/ef17148/.conda/envs/GCN_env/lib/python3.8/site-packages/")
-#sys.path.insert(0, "/user/work/ef17148/oldstuff/ef17148/.conda/envs/graphnet/lib/python3.8/site-packages/")
-
-
-sys.path.append('/user/work/ef17148/parallel_models/parallel_baselines/')
-from trees_emulator.load_data import *
-
 
 #import cartopy
 #import cartopy.crs as ccrs
