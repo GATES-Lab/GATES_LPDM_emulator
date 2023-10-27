@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import sklearn.preprocessing as preprocessing
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-
+import matplotlib.pyplot as plt
 
 from ..loss_functions import *
 
@@ -43,12 +43,16 @@ class FootprintsDatasetV2(Dataset):
         #super().__init__()
         self.inputs = inputs
         self.fp = fp
+        self.size = int(np.sqrt(np.shape(fp)[-1]))
+        print(self.size)
         self.input_transforms= copy.deepcopy(input_transforms)
         self.output_transforms= copy.deepcopy(output_transforms)
         self.input_names= copy.deepcopy(input_names)
         self.test_mode = copy.deepcopy(test_mode)
         self.transform_parameters = copy.deepcopy(transform_parameters)
         self.prototypes_added = False
+
+        
         
         print(transform_parameters)
         print(self.transform_parameters)
@@ -105,13 +109,15 @@ class FootprintsDatasetV2(Dataset):
             self.inputs = torch.tensor(self.inputs, dtype=torch.float)
         if type(self.fp) != torch.Tensor:
             self.fp = torch.tensor(self.fp, dtype=torch.float)
+            self.fp_numpy = self.fp.detach().numpy()
 
         if self.fp.ndim==2:
             self.fp = self.fp[:,:,None]
 
     def inverse_transform(self, predictions):
+        self.predictions = predictions.detach().numpy()
         for transform in self.output_transforms:
-            self.transformed_predictions = self.output_transforms[transform].inverse_transform(predictions)
+            self.transformed_predictions = self.output_transforms[transform].inverse_transform(self.predictions)
         return self.transformed_predictions
     
     def add_prototypes(self, prototypes):
@@ -158,6 +164,42 @@ class FootprintsDatasetV2(Dataset):
         print(metrics)
         return metrics
     
+    def plot_footprints(self, idx):
+        """
+        visualise footprints and predictions for the footprints at index idx
+        idx can be an int or a list of ints
+        plots graph of size (len(idx), 4) with true footprint in original space and transformed space, and prediction in both spaces
+        """
+
+        assert type(idx) is int or type(idx) is list, "idx should be an int or list of ints"
+
+        if type(idx) is int:
+            idx=[idx]
+
+        assert hasattr(self, "transformed_predictions"), "what_to_plot=all only works currently for transformed/normalised outputs!"
+        fig, ax = plt.subplots((len(idx)), 4, figsize=(16,4*len(idx)))
+        if len(idx)==1:
+            ax = ax[None,:]
+        for idx_n, index in enumerate(idx):
+            ax[idx_n,0].imshow(np.reshape(self.fp_untransformed[index], (self.size, self.size)), origin="lower")
+            ax[idx_n,1].imshow(np.reshape(self.transformed_predictions[index], (self.size, self.size)), origin="lower")
+            ax[idx_n,2].imshow(np.reshape(self.fp_numpy[index], (self.size, self.size)), origin="lower")
+            ax[idx_n,3].imshow(np.reshape(self.predictions[index], (self.size, self.size)), origin="lower")
+
+            ax[idx_n,0].set_ylabel(f"fp at index {index}")
+
+        ax[0,0].set_title("True Footprint \n original space")
+        ax[0,1].set_title("Predicted Footprint \n original space")
+        ax[0,2].set_title("True Footprint \n transformed space")
+        ax[0,3].set_title("Predicted Footprint \n transformed space")
+
+        for axis in ax.flatten():
+            axis.tick_params(left = False, bottom = False, labelbottom=False, labelleft=False) 
+            #axis.tick_params(axis='y', colors='white')   
+
+        fig.patch.set_facecolor('white')
+            
+
 
     
     def __len__(self):
@@ -426,6 +468,42 @@ class _MuLaw(_Transform):
         self.parent.predictions = predictions
         transformed_predictions = self.scale * np.sign(predictions) * ((1+self.mu)**(np.abs(predictions))-1)/self.mu 
         return transformed_predictions   
+
+
+def plot_footprints(original_fp, transformed_fp, prediction, transformed_prediction, idx):
+    """
+    visualise footprints and predictions for the footprints at index idx
+    idx can be an int or a list of ints
+    plots graph of size (len(idx), 4) with true footprint in original space and transformed space, and prediction in both spaces
+    """
+
+    assert type(idx) is int or type(idx) is list, "idx should be an int or list of ints"
+
+    if type(idx) is int:
+        idx=[idx]
+
+    assert hasattr(self, "transformed_predictions"), "what_to_plot=all only works currently for transformed/normalised outputs!"
+    fig, ax = plt.subplots((len(idx)), 4, figsize=(16,4*len(idx)))
+    if len(idx)==1:
+        ax = ax[None,:]
+    for idx_n, index in enumerate(idx):
+        ax[idx_n,0].imshow(np.reshape(original_fp[index], (self.size, self.size)), origin="lower")
+        ax[idx_n,1].imshow(np.reshape(transformed_fp[index], (self.size, self.size)), origin="lower")
+        ax[idx_n,2].imshow(np.reshape(prediction[index], (self.size, self.size)), origin="lower")
+        ax[idx_n,3].imshow(np.reshape(transformed_prediction[index], (self.size, self.size)), origin="lower")
+
+        ax[idx_n,0].set_ylabel(f"fp at index {index}")
+
+    ax[0,0].set_title("True Footprint \n original space")
+    ax[0,1].set_title("Predicted Footprint \n original space")
+    ax[0,2].set_title("True Footprint \n transformed space")
+    ax[0,3].set_title("Predicted Footprint \n transformed space")
+
+    for axis in ax.flatten():
+        axis.tick_params(left = False, bottom = False, labelbottom=False, labelleft=False) 
+        #axis.tick_params(axis='y', colors='white')   
+
+    fig.patch.set_facecolor('white')
 
 
 class FootprintsDataset(Dataset):
