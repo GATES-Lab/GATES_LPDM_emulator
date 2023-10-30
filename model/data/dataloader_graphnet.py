@@ -1,14 +1,15 @@
+import sys
+sys.path.insert(0, "/user/work/yl18410/")
+sys.path.insert(0, "/user/work/yl18410/graphnet_LPDM_emulator/")
 from torch.utils.data import DataLoader, Dataset
 import torch
 import numpy as np
 import sklearn.preprocessing as preprocessing
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-import matplotlib.pyplot as plt
-
-from ..loss_functions import *
-
 from sklearn.preprocessing import MinMaxScaler
-import copy
+from graphnet_LPDM_emulator.model.loss_functions import *
+import copy 
+
 
 
 class FootprintsDatasetV2(Dataset):
@@ -43,16 +44,12 @@ class FootprintsDatasetV2(Dataset):
         #super().__init__()
         self.inputs = inputs
         self.fp = fp
-        self.size = int(np.sqrt(np.shape(fp)[-1]))
-        print(self.size)
         self.input_transforms= copy.deepcopy(input_transforms)
         self.output_transforms= copy.deepcopy(output_transforms)
         self.input_names= copy.deepcopy(input_names)
         self.test_mode = copy.deepcopy(test_mode)
         self.transform_parameters = copy.deepcopy(transform_parameters)
         self.prototypes_added = False
-
-        
         
         print(transform_parameters)
         print(self.transform_parameters)
@@ -63,7 +60,7 @@ class FootprintsDatasetV2(Dataset):
             "clever_transform_2":{"params":["transformers"], "fun":_CleverTransform2}, 
             "standardise":{"params":["transformers"], "fun":_Transform}, 
             "scale":{"params":["inputs_min", "inputs_max"], "fun":_Transform}}
-
+        # Nawid - transforms for the labels
         self.valid_output_transforms = {
             "boxcox":{"params":["transformers"], "fun":_Boxcox},
             "boxcox_all":{"params":["transformers"], "fun":_BoxcoxAll}, 
@@ -89,12 +86,12 @@ class FootprintsDatasetV2(Dataset):
 
         else:
             self.mode="train"        
-
+        # Nawid- initialises input transform
         self.input_transforms = {key: None for key in self.input_transforms}
         for transform in self.input_transforms:
             self.input_transforms[transform]  = self.valid_input_transforms[transform]["fun"](self)
             self.input_transforms[transform].transform()
-
+        # Nawid - initialise the output transform dictionary
         self.output_transforms = {key: None for key in self.output_transforms}
         for transform in self.output_transforms:
             if transform in self.transform_parameters:
@@ -102,37 +99,35 @@ class FootprintsDatasetV2(Dataset):
                 self.output_transforms[transform]  = self.valid_output_transforms[transform]["fun"](self, **self.transform_parameters[transform])
             else:
                 self.output_transforms[transform]  = self.valid_output_transforms[transform]["fun"](self)
-
+            # Nawid - transform the output transform
             self.fp = self.output_transforms[transform].transform(self.fp)
-
+        # Nawid - change to tensor
         if type(self.inputs) != torch.Tensor:
             self.inputs = torch.tensor(self.inputs, dtype=torch.float)
         if type(self.fp) != torch.Tensor:
             self.fp = torch.tensor(self.fp, dtype=torch.float)
-            self.fp_numpy = self.fp.detach().numpy()
-
+        # Nawid -change to 3 dimensional 
         if self.fp.ndim==2:
             self.fp = self.fp[:,:,None]
 
+    # Nawid - perform inverse transform for the outputs
     def inverse_transform(self, predictions, return_transformed=True):
-        self.predictions = predictions.detach().numpy()
+        # Nawid - already been detached
+        self.predictions = predictions#.detach().numpy()
         for transform in self.output_transforms:
             self.transformed_predictions = self.output_transforms[transform].inverse_transform(self.predictions)
         if return_transformed:
             return self.transformed_predictions
-    
-    def add_prototypes(self, prototypes):
-        """
-        appends footprint prototypes to the input data
-        """
 
-        assert list(np.shape(self.fp)) == list(np.shape(prototypes)), f"The footprints and the prototypes should have the same size, but right now they have shapes {list(np.shape(self.fp))} and {list(np.shape(prototypes))} respectively"
-        
+    def add_prototypes(self, prototypes):
+
+        #assert list(np.shape(self.fp)) == list(np.shape(prototypes)), f"The footprints and the prototypes should have the same size, but right now they have shapes {list(np.shape(self.fp))} and {list(np.shape(prototypes))} respectively"
         if self.prototypes_added:
             print("Careful, prototypes have already been added! replacing them with the newly passed ones")
 
 
         self.prototypes = prototypes
+        # Nawid -  perform the same output transform on the prototype
         for transform in self.output_transforms:
             self.prototypes = self.output_transforms[transform].transform(self.prototypes)
 
@@ -144,27 +139,25 @@ class FootprintsDatasetV2(Dataset):
             self.prototypes_added = True
             if len(self.input_names)>0:
                 self.input_names.append({"var":"prototypes", "type":"not met"})
-
-        elif self.prototypes_added:
+        # Nawid - potentially a bug
+        if self.prototypes_added:
             self.inputs = torch.cat([self.inputs[:,:,:-1], self.prototypes[:,:,None]], dim=2)
-        
-    def evaluate(self):
-        """
-        output metrics (normalised absolute mean, MSE, accuracy, IOU) for the predictions transformed back to the original data space
-        """
-        assert hasattr(self, "transformed_predictions"), "only works currently for transformed/normalised outputs!"
-
-        assert np.shape(self.transformed_predictions) == np.shape(self.fp_untransformed), "predictions and fp have to have the same shape to evaluate errors"
-
-        metrics = {}
-        metrics["NMAE"] = NMAE(self.transformed_predictions, self.fp_untransformed)
-        metrics["MSE"] = mean_squared_error(self.transformed_predictions, self.fp_untransformed)
-        metrics["Accuracy"] = accuracy(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
-        metrics["IOU"] = intersection_over_union(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
-
-        print(metrics)
-        return metrics
     
+    # Nawid - evaluate the metrics
+    def evaluate(self):
+            assert hasattr(self, "transformed_predictions"), "only works currently for transformed/normalised outputs!"
+
+            assert np.shape(self.transformed_predictions) == np.shape(self.fp_untransformed), "predictions and fp have to have the same shape to evaluate errors"
+
+            metrics = {}
+            metrics["NMAE"] = NMAE(self.transformed_predictions, self.fp_untransformed)
+            metrics["MSE"] = mean_squared_error(self.transformed_predictions, self.fp_untransformed)
+            metrics["Accuracy"] = accuracy(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
+            metrics["IOU"] = intersection_over_union(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
+
+            print(metrics)
+            return metrics
+
     def plot_footprints(self, idx):
         """
         visualise footprints and predictions for the footprints at index idx
@@ -199,9 +192,6 @@ class FootprintsDatasetV2(Dataset):
             #axis.tick_params(axis='y', colors='white')   
 
         fig.patch.set_facecolor('white')
-            
-
-
     
     def __len__(self):
         return self.inputs.size()[0]
@@ -246,11 +236,12 @@ class _CleverTransform:
         self.parent = parent
         assert len(self.parent.input_names)>0, "Pass the input names to do a clever transform"
         self.parent.inputs_untransformed = np.copy(self.parent.inputs)
-
+        # Nawid - name for inputs
         self.varnames = np.array([x["var"] for x in self.parent.input_names])
 
         if self.parent.mode=="train":
             self.transformers = {}
+        # Nawid - get the transform from the parent
         if self.parent.mode=="test":
             self.transformers = self.parent.test_mode["clever_transform"]["transformers"]
 
@@ -290,7 +281,7 @@ class _CleverTransform2:
             self.transformers = {}
         if self.parent.mode=="test":
             self.transformers = self.parent.test_mode["clever_transform_2"]["transformers"]
-
+    # Nawid - transform each individual level separately I believe
     def transform(self):
         for varname in np.unique(self.varnames):
             var_locations = np.where(self.varnames==varname)[0]
@@ -328,7 +319,7 @@ class _CleverTransform2:
                 shape = np.shape(self.parent.inputs[:,:,var_locations])
                 self.parent.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.parent.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)    
 
-
+        # Nawid - initialize the code
         self.parent.transform_parameters["clever_transform_2"] = {}
         self.parent.transform_parameters["clever_transform_2"]["transformers"] = self.transformers      
               
@@ -345,7 +336,7 @@ class _Boxcox(_Transform):
         self.parent = parent
         print("init boxcox")
         self.parent.fp_untransformed = np.copy(self.parent.fp)
-
+        # Nawid - perform boxcox (add a small constant to ensure that the data points are positive)
         if self.parent.mode=="train":
             self.boxcox = preprocessing.PowerTransformer(method='box-cox', standardize=True)
             self.boxcox.fit(0.0000001+np.squeeze(self.parent.fp))
@@ -379,7 +370,7 @@ class _BoxcoxAll(_Transform):
         self.parent = parent
         print("init boxcox all")
         self.parent.fp_untransformed = np.copy(self.parent.fp)
-
+        # Nawid  unsure about the shape of the boxcox
         if self.parent.mode=="train":
             self.boxcox = preprocessing.PowerTransformer(method='box-cox', standardize=True)
             self.boxcox.fit(0.0000001+np.squeeze(self.parent.fp.flatten()).reshape(-1, 1))
@@ -414,6 +405,7 @@ class _LogV3(_Transform):
         self.parent.fp_untransformed = np.copy(self.parent.fp)    
 
         if self.parent.mode=="train":
+            # Nawud - I assume this gets the pixels which are above zero to perform the log
             self.logged_mean = np.mean(np.log10(self.parent.fp.flatten()[self.parent.fp.flatten()>0]))
         if self.parent.mode=="test":
             self.logged_mean = self.parent.test_mode["logv3"]["logged_mean"]
@@ -422,7 +414,8 @@ class _LogV3(_Transform):
         self.parent.transform_parameters["logv3"]["logged_mean"] = self.logged_mean
 
     def transform(self, fp):
-        logged = np.log10(self.parent.fp+0.0000001)
+        logged = np.log10(fp+0.0000001)
+        #logged = np.log10(self.parent.fp+0.0000001)
         fp = logged + abs(self.logged_mean) 
         return fp
     
@@ -439,8 +432,6 @@ class _MuLaw(_Transform):
     Parameter scale can be any positive value - scale=1 means no scaling is done to the data, scaling="max" rescales the data to the 0-1 range
 
     Translates across domain sizes
-
-
 
     """
     def __init__(self, parent, mu=256, scale=1):
@@ -468,67 +459,7 @@ class _MuLaw(_Transform):
     def inverse_transform(self, predictions):
         self.parent.predictions = predictions
         transformed_predictions = self.scale * np.sign(predictions) * ((1+self.mu)**(np.abs(predictions))-1)/self.mu 
-        return transformed_predictions   
-
-
-def plot_footprints(idx, original_fps=None, transformed_fps=None, predictions=None, transformed_predictions=None, size=30):
-    """
-    visualise footprints and predictions for the footprints at index idx
-    idx can be an int or a list of ints
-    plots graph of size (len(idx), 4) with true footprint in original space and transformed space, and prediction in both spaces
-    """
-
-    assert type(idx) is int or type(idx) is list, "idx should be an int or list of ints"
-
-    if type(idx) is int:
-        idx=[idx]
-    
-    to_plot = (original_fps is not None) + (transformed_fps is not None) + (predictions is not None) + (transformed_predictions is not None)
-
-    assert to_plot>0, "You passed none of the four original_fps, transformed_fps, predictions or transformed_predictions so nothing will be plotted!"
-    fig, ax = plt.subplots((len(idx)), to_plot, figsize=(4*to_plot,4*len(idx)))
-    if to_plot==1:
-        ax = np.array([ax])
-    if len(idx)==1:
-        ax = ax[None,:]
-    
-    for idx_n, index in enumerate(idx):
-        ax_counter = 0
-        if original_fps is not None:
-            ax[idx_n,ax_counter].imshow(np.reshape(original_fps[index], (size, size)), origin="lower")
-            ax_counter+=1
-        if transformed_predictions is not None:
-            ax[idx_n,ax_counter].imshow(np.reshape(transformed_predictions[index],(size, size)), origin="lower")
-            ax_counter+=1
-        if transformed_fps is not None:
-            ax[idx_n,ax_counter].imshow(np.reshape(transformed_fps[index], (size, size)), origin="lower")
-            ax_counter+=1
-        if predictions is not None:
-            ax[idx_n,ax_counter].imshow(np.reshape(predictions[index], (size, size)), origin="lower")
-            ax_counter+=1
-
-        ax[idx_n,0].set_ylabel(f"fp at index {index}")
-
-    ax_counter = 0
-    if original_fps is not None:
-        ax[0,ax_counter].set_title("True Footprint \n original space")
-        ax_counter+=1
-    if  transformed_predictions is not None:
-        ax[0,ax_counter].set_title("Predicted Footprint \n original space")
-        ax_counter+=1
-    if transformed_fps is not None:
-        ax[0,ax_counter].set_title("True Footprint \n transformed space")
-        ax_counter+=1
-    if predictions is not None:
-        ax[0,ax_counter].set_title("Predicted Footprint \n transformed space")
-        ax_counter+=1
-
-
-    for axis in ax.flatten():
-        axis.tick_params(left = False, bottom = False, labelbottom=False, labelleft=False) 
-        #axis.tick_params(axis='y', colors='white')   
-
-    fig.patch.set_facecolor('white')
+        return transformed_predictions
 
 
 class FootprintsDataset(Dataset):
@@ -547,21 +478,17 @@ class FootprintsDataset(Dataset):
     needs updating!!
     """
 
-    def __init__(self, inputs, fp, standardise=False, scale=False, transform_output=False, scale_output=False, test_mode={}, feature_dim=11, aux_dim=5, clever_transform=False, clever_transform_2=False, input_names=[], standardise_all=False, device="cpu", zeroing=False, binary_fp=None, transform_parameters={}):
+    def __init__(self, inputs, fp, prototypes, standardise=False, scale=False, transform_output=False, scale_output=False, test_mode={}, feature_dim=11, aux_dim=5, clever_transform=False, clever_transform_2=False, input_names=[], standardise_all=False, device="cpu", zeroing=False, binary_fp=None, transform_parameters={}):
         super().__init__()  
         self.inputs = inputs
         self.fp = fp
+        self.prototypes = prototypes
         self.standardise_inputs=False
         self.transform_output=False
+        self.mode="train"
         self.scale_output=False
         self.zeroing=zeroing
 
-        if len(test_mode)>0:
-            self.mode="test"
-        else:
-            self.mode="train"
-
-    
 
         if len(test_mode)>0:
             self.mode="test"
@@ -628,6 +555,7 @@ class FootprintsDataset(Dataset):
 
             if standardise_all:
                 try:
+
                     self.standardise_inputs=True
                     self.inputs_untransformed = np.copy(inputs)
                     scalers=test_mode["transformers"]
@@ -660,7 +588,8 @@ class FootprintsDataset(Dataset):
                 print("use this in weather mode only!!!")
                 idx = 0
                 try:
-                    self.fp = (self.fp-test_mode["mean"][idx])/test_mode["var"][idx]           
+                    self.fp = (self.fp-test_mode["mean"][idx])/test_mode["var"][idx]
+                    self.prototypes = (self.prototypes-test_mode["mean"][idx])/test_mode["var"][idx]           
                 except KeyError:
                     print("no info was passed to standardise output")
                     pass 
@@ -669,6 +598,7 @@ class FootprintsDataset(Dataset):
                 self.transform_output="boxcox"
                 self.boxcox=test_mode["boxcox"]
                 self.fp_untransformed = np.copy(fp)
+                self.prototypes_untransformed = np.copy(prototypes)
                 try:
                     if np.shape(fp)[1] == 200*200:
                         # hand crafted case!
@@ -680,12 +610,22 @@ class FootprintsDataset(Dataset):
 
                         rest_idxs = list(set(range(200*200)) - set(centre_idxs))
                         self.fp[:,rest_idxs] = np.reshape(test_mode["boxcox"]["outside"].transform(0.0000001+(fp[:,rest_idxs].flatten().reshape(-1, 1))), np.shape(self.fp[:,rest_idxs]))
+
+
+                        self.prototypes = np.zeros_like(prototypes)
+                        self.prototypes[:,centre_idxs] = test_mode["boxcox"]["centre"].transform(0.0000001+np.squeeze(prototypes[:,centre_idxs]))
+
+                        rest_idxs = list(set(range(200*200)) - set(centre_idxs))
+                        self.prototypes[:,rest_idxs] = np.reshape(test_mode["boxcox"]["outside"].transform(0.0000001+(prototypes[:,rest_idxs].flatten().reshape(-1, 1))), np.shape(self.prototypes[:,rest_idxs]))
+
+
                 
                     else:
                         self.fp = test_mode["boxcox"].transform(0.0000001+np.squeeze(self.fp))[:,:,None]
-
+                        self.prototypes = test_mode["boxcox"].transform(0.0000001+np.squeeze(self.prototypes))[:,:,None]
                     if zeroing:
                         self.fp[self.fp<0]=0
+                        self.prototypes[self.prototypes<0]=0
                         print("zeroing")
                 except KeyError:
                     print("no info was passed to do boxcox on the output")
@@ -696,10 +636,13 @@ class FootprintsDataset(Dataset):
                 self.transform_output="boxcox_all"
                 self.boxcox=test_mode["boxcox"]
                 self.fp_untransformed = np.copy(fp)
+                self.prototypes_untransformed = np.copy(prototypes)
                 try:
                     fp = test_mode["boxcox"].transform(0.0000001+np.squeeze(self.fp.flatten()).reshape(-1, 1))[:,:,None]
                     self.fp = np.reshape(fp, np.shape(self.fp_untransformed))
 
+                    prototypes = test_mode["boxcox"].transform(0.0000001+np.squeeze(self.prototypes.flatten()).reshape(-1, 1))[:,:,None]
+                    self.fp = np.reshape(prototypes, np.shape(self.prototypes_untransformed))
                 except KeyError:
                     print("no info was passed to do boxcox on the output")
                     pass
@@ -708,26 +651,38 @@ class FootprintsDataset(Dataset):
                 print("here!")
                 self.transform_output="mu-law"
                 self.fp_untransformed = np.copy(fp)
+                self.prototypes_untransformed = np.copy(prototypes)
                 self.transform_parameters=test_mode["transform_parameters"]
                 assert "max" in list(self.transform_parameters.keys()) and "mu" in list(self.transform_parameters.keys()), "Transform parameters need to have max and mu"
 
                 self.fp = np.log(1+self.transform_parameters["mu"]*(self.fp/self.transform_parameters["max"]))/(np.log(1+self.transform_parameters["mu"]))
-
+                self.prototypes = np.log(1+self.transform_parameters["mu"]*(self.prototypes/self.transform_parameters["max"]))/(np.log(1+self.transform_parameters["mu"]))
                 transform_parameters=self.transform_parameters
+
+
             
             elif transform_output=="logv1":
                 self.transform_output="logv1"
                 self.fp_untransformed = np.copy(fp)
+                self.prototypes_untransformed = np.copy(prototypes)
                 logged = np.log(self.fp+1)
+                logged_prototypes = np.log(self.prototypes+1)
                 self.logged=logged
+                self.logged_prototypes=logged_prototypes
                 self.fp_mean, self.fp_var = test_mode["fp_mean"], test_mode["fp_var"]
                 self.fp = (logged-self.fp_mean)/self.fp_var
-
+                self.prototypes = (logged_prototypes-self.fp_mean)/self.fp_var
+                
+                
             elif transform_output=="logv2":
                 self.transform_output="logv2"
                 self.fp_untransformed = np.copy(fp)
                 logged = np.log10(self.fp+0.0000001)
                 self.fp = logged
+
+                self.prototypes_untransformed = np.copy(prototypes)
+                logged_prototypes = np.log10(self.prototypes+0.0000001)
+                self.prototypes = logged_prototypes
 
             elif transform_output=="logv3":
                 self.transform_output="logv3"
@@ -735,6 +690,11 @@ class FootprintsDataset(Dataset):
                 logged = np.log10(self.fp+0.0000001)
                 self.logged_mean = test_mode["logged_mean"]
                 self.fp = logged + abs(self.logged_mean)
+
+                self.prototypes_untransformed = np.copy(prototypes)
+                logged_protypes = np.log10(self.prototypes+0.0000001)
+                self.prototypes = logged_protypes + abs(self.logged_mean)
+
             
                 
 
@@ -744,7 +704,7 @@ class FootprintsDataset(Dataset):
                 try:
                     self.output_minmax=test_mode["output_minmax"]
                     self.fp = self.output_minmax.transform(np.squeeze(self.fp))[:,:,None]
-
+                    self.prototypes = self.output_minmax.transform(np.squeeze(self.prototypes))[:,:,None]
                     #self.fp = -1 + (2*(self.fp - test_mode["output_min"]))/(test_mode["output_max"] - test_mode["output_min"])      
                 except KeyError:
                     print("no info was passed to rescale the output")            
@@ -840,7 +800,7 @@ class FootprintsDataset(Dataset):
                 print("use this in weather mode only!!!")
                 idx = 0
                 self.fp = (self.fp-self.inputs_mean[idx])/self.inputs_var[idx]
-
+                self.prototypes = (self.prototypes-self.inputs_mean[idx])/self.inputs_var[idx]
                 #self.fp_mean = np.mean(self.fp, axis=(0,1))
                 #self.fp_var = np.var(self.fp, axis=(0,1))            
 
@@ -853,11 +813,21 @@ class FootprintsDataset(Dataset):
                 self.fp_mean = np.mean(logged, axis=(0,1))
                 self.fp_var = np.var(logged, axis=(0,1))
 
+                self.prototypes_untransformed = np.copy(prototypes)
+                logged_prototypes = np.log(self.prototypes+1)
+                self.logged_prototypes=logged_prototypes
+                # subtract mean of footprint data as well as other data
+                self.prototypes = (logged_prototypes-np.mean(logged, axis=(0,1)))/np.var(logged, axis=(0,1))
+
             elif transform_output=="logv2":
                 self.transform_output="logv2"
                 self.fp_untransformed = np.copy(fp)
                 logged = np.log10(self.fp+0.0000001)
                 self.fp = logged
+                
+                self.prototypes_untransformed = np.copy(prototypes)
+                logged_prototypes = np.log10(self.prototypes+0.0000001)
+                self.prototypes = logged_prototypes
             elif transform_output=="logv3":
                 self.transform_output="logv3"
                 self.fp_untransformed = np.copy(fp)
@@ -865,10 +835,16 @@ class FootprintsDataset(Dataset):
                 self.logged_mean = np.mean(np.log10(fp.flatten()[fp.flatten()>0]))
                 self.fp = logged + abs(self.logged_mean)
 
+                self.prototypes_untransformed = np.copy(prototypes)
+                logged_prototypes = np.log10(self.prototypes+0.0000001)
+                self.prototypes = logged_prototypes + abs(self.logged_mean)
 
             elif transform_output=="boxcox":
                 self.transform_output="boxcox"
                 self.fp_untransformed = np.copy(fp)
+                
+                self.prototypes_untransformed = np.copy(prototypes)
+
                 if np.shape(fp)[-1] == 200*200:
                     # hand crafted case!
                     print("doing special boxcox")
@@ -879,10 +855,14 @@ class FootprintsDataset(Dataset):
                     self.fp = np.zeros_like(fp)
                     self.fp[:,centre_idxs] = self.boxcox_centre.fit_transform(0.0000001+np.squeeze(fp[:,centre_idxs]))
 
+                    self.prototypes = np.zeros_like(prototypes)
+                    self.prototypes[:,centre_idxs] = self.boxcox_centre.fit_transform(0.0000001+np.squeeze(prototypes[:,centre_idxs]))
+
                     pt = preprocessing.PowerTransformer(method='box-cox', standardize=True)
                     self.boxcox_outside = pt
                     rest_idxs = list(set(range(200*200)) - set(centre_idxs))
                     self.fp[:,rest_idxs] = np.reshape(self.boxcox_outside.fit_transform(0.0000001+(fp[:,rest_idxs].flatten().reshape(-1, 1))), np.shape(self.fp[:,rest_idxs]))
+                    self.prototypes[:,rest_idxs] = np.reshape(self.boxcox_outside.fit_transform(0.0000001+(prototypes[:,rest_idxs].flatten().reshape(-1, 1))), np.shape(self.prototypes[:,rest_idxs]))
 
                     self.boxcox = {"centre":self.boxcox_centre, "outside":self.boxcox_outside}
 
@@ -890,26 +870,37 @@ class FootprintsDataset(Dataset):
                     pt = preprocessing.PowerTransformer(method='box-cox', standardize=True)
                     self.boxcox = pt
                     self.fp = self.boxcox.fit_transform(0.0000001+np.squeeze(self.fp))[:,:,None]
+                    self.prototypes = self.boxcox.fit_transform(0.0000001+np.squeeze(self.prototypes))[:,:,None]
+
                 if zeroing:
                     self.fp[self.fp<0]=0
+                    # Nawid - Not sure if should zero
+                    self.prototypes[self.prototypes<0]=0
                     print("zeroing")
 
             elif transform_output=="boxcox_all":
                 self.transform_output="boxcox_all"
                 self.fp_untransformed = np.copy(fp)
+                self.prototypes_untransformed = np.copy(prototypes)
+
                 pt = preprocessing.PowerTransformer(method='box-cox', standardize=True)
                 self.boxcox = pt
                 fp = self.boxcox.fit_transform(0.0000001+np.squeeze(self.fp.flatten()).reshape(-1, 1))[:,:,None]
                 self.fp = np.reshape(fp, np.shape(self.fp_untransformed))
 
+                prototypes = self.boxcox.fit_transform(0.0000001+np.squeeze(self.prototypes.flatten()).reshape(-1, 1))[:,:,None]
+                self.prototypes = np.reshape(prototypes, np.shape(self.prototypes_untransformed))
+
             elif transform_output=="mu-law":
                 self.transform_output="mu-law"
-                self.fp_untransformed = np.copy(fp)       
+                self.fp_untransformed = np.copy(fp)
+                self.prototypes_untransformed = np.copy(prototypes)       
                 if "max" not in list(transform_parameters.keys()):
                     transform_parameters["max"] = 0.1
                 if "mu" not in list(transform_parameters.keys()):
                     transform_parameters["mu"] = 256             
                 self.fp = np.log(1+transform_parameters["mu"]*(self.fp/transform_parameters["max"]))/(np.log(1+transform_parameters["mu"]))
+                self.prototypes = np.log(1+transform_parameters["mu"]*(self.prototypes/transform_parameters["max"]))/(np.log(1+transform_parameters["mu"]))
 
                 self.transform_parameters=transform_parameters
 
@@ -922,6 +913,7 @@ class FootprintsDataset(Dataset):
                 #self.fp = -1 + (2*(self.fp - self.output_min))/(self.output_max - self.output_min)     
                 self.output_minmax = MinMaxScaler(feature_range=(0,1))
                 self.fp = self.output_minmax.fit_transform(np.squeeze(self.fp))[:,:,None]
+                self.prototypes = self.output_minmax.fit_transform(np.squeeze(self.prototypes))[:,:,None]
 
         if type(self.inputs) != torch.Tensor:
             self.inputs = torch.tensor(self.inputs, dtype=torch.float)#, device=device)
@@ -930,9 +922,14 @@ class FootprintsDataset(Dataset):
         if len(self.fp.size())==2:
             self.fp = self.fp[:,:,None]
 
+        if type(self.prototypes) != torch.Tensor:
+            self.prototypes = torch.tensor(self.prototypes, dtype=torch.float)#, device=device)
+        if len(self.prototypes.size())==2:
+            self.prototypes = self.prototypes[:,:,None]
+
         #print(self.inputs.size()[:-1], self.fp.size()[:-1])
         assert self.inputs.size()[:-1] == self.fp.size()[:-1], f"Shapes don't match up: inputs has shape {self.inputs.size()}, fp has shape {self.fp.size()}"
-
+        assert self.inputs.size()[:-1] == self.prototypes.size()[:-1], f"Shapes don't match up: inputs has shape {self.inputs.size()}, prototypes has shape {self.fp.size()}"
 
         if binary_fp is not None:
             print("adding binary fp", torch.squeeze(self.fp).size())
@@ -943,12 +940,16 @@ class FootprintsDataset(Dataset):
             self.fp = torch.stack((torch.squeeze(self.fp), binary_fp))
             self.fp = self.fp.permute((1,2,0))
             #print(np.shape(self.fp))
-
+            '''
+            # Nawid - Not sure about this one
+            self.prototypes = torch.stack((torch.squeeze(self.prototypes), binary_fp))
+            self.prototypes = self.prototy[es].permute((1,2,0))
+            '''
     def __len__(self):
         return self.inputs.size()[0]
 
     def __getitem__(self, item):
-        return self.inputs[item,:,:], self.fp[item,:,:]  
+        return self.inputs[item,:,:], self.fp[item,:,:], self.prototypes[item,:,:]  
     
     def inverse_transform(self, predictions, remove_negs_before=True, remove_negs_after=True, remove_highs=False):
         if np.shape(predictions)[0:1] != np.shape(self.fp_untransformed)[0:1]:
@@ -1491,5 +1492,3 @@ def NMAE(pred, target, mode="all"):
         return np.mean(mean_absolute_error(target, pred, multioutput="raw_values")/(np.mean(target, axis=0)))
     if mode=="all":
         return np.mean(mean_absolute_error(target, pred)/(np.mean(target)))        
-
-
