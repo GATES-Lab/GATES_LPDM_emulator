@@ -37,7 +37,8 @@ def accuracy(fps, preds, threshold=0):
         accuracy = torch.sum((fps>threshold)==(preds>threshold))/torch.prod(torch.tensor(fps.size()))
         return torch.mean(accuracy)
     else:
-        accuracy = np.sum((fps>threshold)==(preds>threshold), axis=-1)/((np.shape(preds)[-1]))        
+        print(np.shape(np.sum((fps>threshold)==(preds>threshold), axis=(-1,-2))))
+        accuracy = np.sum((fps>threshold)==(preds>threshold), axis=(-1,-2))/((np.shape(preds)[1]*np.shape(preds)[2]))        
         return np.mean(accuracy)
 
 
@@ -45,8 +46,8 @@ def intersection_over_union(fps, preds, threshold=0):
     # calculates metric intersection over union (IoU) for a binary footprint 
     fps_bin = np.copy(fps)>threshold
     preds_bin = np.copy(preds)>threshold
-    intersection = np.sum(np.logical_and(fps_bin==1, preds_bin==1, where=1), axis=-1)
-    union = np.sum(np.logical_or(fps_bin==1, preds_bin==1, where=1), axis=-1)
+    intersection = np.sum(np.logical_and(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
+    union = np.sum(np.logical_or(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
     IoU = intersection/union
     return np.mean(IoU)
 
@@ -65,7 +66,7 @@ class CombinedLoss(nn.Module):
         loss=target-output
         loss[loss>0] = self.alpha*loss[loss>0]
         loss = torch.mean(loss**2)
-        acc = accuracy(target, output, threshold=self.accuracy_threshold)
+        acc = 1-accuracy(target, output, threshold=self.accuracy_threshold)
         return loss + self.acc_weighting*acc
     
-        
+      
