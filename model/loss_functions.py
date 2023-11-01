@@ -30,7 +30,7 @@ class MSE_assymetric(nn.Module):
         loss = torch.mean(loss**2)
         return loss
     
-def accuracy(fps, preds, threshold=0):
+def accuracy(preds, fps, threshold=0):
     # calculates metric intersection over union (IoU) for a footprint, binarised by threshold 
     # if using logv3 , use threshold around -1 or -2
     if type(fps) == torch.Tensor:
@@ -63,15 +63,16 @@ def dice_similarity(fps, preds, threshold=0):
     return np.mean(dice)
 
 
-def intersection_over_union(fps, preds, threshold=0):
+def intersection_over_union(preds, fps, threshold=0):
     # calculates metric intersection over union (IoU) for a binary footprint 
     if len(np.shape(fps))==3:
         fps = np.reshape(np.copy(fps), (len(fps), np.shape(fps)[1]*np.shape(fps)[1]))
         preds = np.reshape(np.copy(preds), (len(preds), np.shape(preds)[1]*np.shape(preds)[1]))
-
+        
     fps_bin = np.copy(fps)>threshold
     preds_bin = np.copy(preds)>threshold
-    intersection = np.sum(np.logical_and(fps_bin==1, preds_bin==1, where=1), axis=(-1))
+    intersection = np.sum(np.logical_and(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
+    print(intersection)
     union = np.sum(np.logical_or(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
     IoU = intersection/union
     return np.mean(IoU)
@@ -91,7 +92,7 @@ class CombinedLoss(nn.Module):
         loss=target-output
         loss[loss>0] = self.alpha*loss[loss>0]
         loss = torch.mean(loss**2)
-        acc = 1-accuracy(target, output, threshold=self.accuracy_threshold)
+        acc = 1-accuracy(output, target, threshold=self.accuracy_threshold)
         return loss + self.acc_weighting*acc
     
       
