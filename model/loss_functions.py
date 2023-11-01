@@ -82,17 +82,18 @@ class CombinedLoss(nn.Module):
     combines assymetric MSE loss (see above) with accuracy, weighted according to acc_weighting factor
     accuracy is calculated as the percentage of correctly predicted pixels (ie true positives and true negatives) when "binarising" the footprint with threshold accuracy_threshold
     """    
-    def __init__(self, alpha=4, acc_weighting=1, accuracy_threshold=0):
+    def __init__(self, alpha=4, acc_weighting=1, accuracy_threshold=0, metric=accuracy):
         self.alpha=alpha
         self.acc_weighting=acc_weighting
         self.accuracy_threshold=accuracy_threshold
+        self.metric = metric
         super().__init__()        
 
     def forward(self, output, target):
         loss=target-output
         loss[loss>0] = self.alpha*loss[loss>0]
         loss = torch.mean(loss**2)
-        acc = 1-accuracy(output, target, threshold=self.accuracy_threshold)
+        acc = 1-self.metric(output, target, threshold=self.accuracy_threshold)
         return loss + self.acc_weighting*acc
     
       
