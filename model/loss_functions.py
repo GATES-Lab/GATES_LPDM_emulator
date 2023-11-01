@@ -37,16 +37,41 @@ def accuracy(fps, preds, threshold=0):
         accuracy = torch.sum((fps>threshold)==(preds>threshold))/torch.prod(torch.tensor(fps.size()))
         return torch.mean(accuracy)
     else:
-        print(np.shape(np.sum((fps>threshold)==(preds>threshold), axis=(-1,-2))))
-        accuracy = np.sum((fps>threshold)==(preds>threshold), axis=(-1,-2))/((np.shape(preds)[1]*np.shape(preds)[2]))        
+        if len(np.shape(fps))==3:
+            fps = np.reshape(np.copy(fps), (len(fps), np.shape(fps)[1]*np.shape(fps)[1]))
+            preds = np.reshape(np.copy(preds), (len(preds), np.shape(preds)[1]*np.shape(preds)[1]))
+
+        accuracy = np.sum((fps>threshold)==(preds>threshold), axis=(-1))/((np.shape(preds)[1]))
+
         return np.mean(accuracy)
+
+def dice_similarity(fps, preds, threshold=0):
+    # calculates metric Dice Similarity for a binary footprint 
+
+    if len(np.shape(fps))==3:
+        fps = np.reshape(np.copy(fps), (len(fps), np.shape(fps)[1]*np.shape(fps)[1]))
+        preds = np.reshape(np.copy(preds), (len(preds), np.shape(preds)[1]*np.shape(preds)[1]))
+
+    fps_bin = np.copy(fps)>threshold
+    preds_bin = np.copy(preds)>threshold
+
+
+    TP = np.sum(np.logical_and(fps_bin==1, preds_bin==1, where=1), axis=(-1))
+    FP = np.sum(np.logical_and(fps_bin==0, preds_bin==1, where=1), axis=(-1))
+    FN = np.sum(np.logical_or(fps_bin==1, preds_bin==0, where=1), axis=(-1))
+    dice = 2*TP/(2*TP + FP + FN)
+    return np.mean(dice)
 
 
 def intersection_over_union(fps, preds, threshold=0):
     # calculates metric intersection over union (IoU) for a binary footprint 
+    if len(np.shape(fps))==3:
+        fps = np.reshape(np.copy(fps), (len(fps), np.shape(fps)[1]*np.shape(fps)[1]))
+        preds = np.reshape(np.copy(preds), (len(preds), np.shape(preds)[1]*np.shape(preds)[1]))
+
     fps_bin = np.copy(fps)>threshold
     preds_bin = np.copy(preds)>threshold
-    intersection = np.sum(np.logical_and(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
+    intersection = np.sum(np.logical_and(fps_bin==1, preds_bin==1, where=1), axis=(-1))
     union = np.sum(np.logical_or(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
     IoU = intersection/union
     return np.mean(IoU)
