@@ -21,7 +21,7 @@ The code works fine if used right but it's not robust and needs some cleaning up
 ## Loading data
 Use the `LoadSatelliteData` object to load data for a date period.
 ``` 
-data = LoadSatelliteData(year=2016, region="BRAZIL", freq=2, metsize=50, size =50, topog="default", verbose=True, cut_met = False, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_50_")
+data = LoadSatelliteData(year=2016, region="BRAZIL", freq=2, metsize=50, size =50, topog="default", verbose=True, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_50_")
 ```
 
 - All of the necessary data is in the ACRG folder (/group/chemistry/acrg/), the paths all default to this unless specifed
@@ -32,22 +32,20 @@ data = LoadSatelliteData(year=2016, region="BRAZIL", freq=2, metsize=50, size =5
   - The latitudes and longitudes of the cut square for each footprint is stored in `data.fp_lats` and `data.fp_lons` (each of these has size (time, size))
   - Size should be even 
 - Met:
-  - Passing `cut_met=True` (and no `met_datadir`) does the same for the meteorology files cutting to `metsize`, outputting the met centered around the release point for each footprint where the where the coordinates are not lat-lon but 0,1,2,...size where int(size/2) is the release point.
-  - However, this is very memory intensive so I have been running the above monthly, save that cut met file in `/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big`, and then load the pre-cut meteorology as above using `met_datadir`. You can pass any cut met file as long as the size is bigger than metsize though best to past the exact if it exists (eg `Met_cut_v2_50_` will be properly resized for `metsize=50` and below, but not for bigger sizes.
+  - met_datadir should contain pre-cut meteorology (ie met that has already been cut to a square domain centered around the measurement point). You can pass any pre-cut met file as long as the size is bigger than metsize though best to past the exact if it exists (eg `Met_cut_v2_50_` will be properly resized for `metsize=50` and below, but not for bigger sizes.
   - The met data is stored in `data.met`.
-  - See below for running LoadSatelliteData to generate the cut meteorology files.
-  - Currently `size` should be equal to  `metsize`.
+  - See below to generate the cut meteorology files
+  - Currently `size` should be equal to  `metsize`
 - `freq` reduces the time frequency of the data before loading to reduce computational expense (ie `freq=3` will only load one in every three footprints and corresponding data).
 - The function removes any datapoints where there are Nans in the met or fp data, be it because of a data problem or because the footprint is partially out of the domain.
 - The topography for each footprint is stored at `data.topog` of size (time, size, size) 
 
 ### Preparing met files
 See file `generate_sat_met.py` (and send to the cluster using `launch_cpu_job.sh`). Meteorology files are in `/group/chemistry/acrg/met_archive/UM/{domain}/{domain}_Met_`, at the same lat-lon resolution as the footprints and with hourly time resolution. Relevant pararameters:
-
-- Here `metsize` needs to be the desired cutting size but `size` can be anything as it isn't used
+- Here `size` needs to be the desired cutting size
 - `met_levels` and `met_variables` define which levels and variables will be saved
 - By default the meteorology is linearly interpolated to the timestamp of each footprint
-- `met_jump` can be an int or a list. If a list, for each int `jump` in `met_jump`, the met is interpolated to `T - jump` where `T` is the timestamp of each footprint, and saved to the corresponding path in `savemetpath`.
+- `met_jump` can be an int or a list. If a list, for each int `jump` in `met_jump`, the met is interpolated to `T - jump` where `T` is the timestamp of each footprint, and saved to the corresponding path in `savemetpath`. time "T" is added automatically
 
 ## Environment
 See environment_short.yml, I think those are the main packages. environment.yml contains the raw output of saving the environment.
