@@ -103,7 +103,7 @@ grid, idx_grid, inputs, names, data = get_all_inputs_graphnet_satellite_v4(data,
   - normalised_time_of_year: sin and cos of the normalised day of the year (taking sin and cos to make it cyclical)
   - relative_time: relative time of meteorology data with respect to release - eg 6 for met at t-6
   - 
-### Preparing dataset
+### Preparing dataset - this has changed, need to update!
 The `FootprintsDataset` object sets up the inputs and outputs to be loaded to the DataLoader, and makes any needed transformations.
 The transformations I'm doing currently are:
 - outputs:
