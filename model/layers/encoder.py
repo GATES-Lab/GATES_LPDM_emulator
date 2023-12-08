@@ -52,7 +52,7 @@ class SatelliteEncoder(torch.nn.Module):
         hidden_layers_processor_edge=2,
         mlp_norm_type="LayerNorm",
         use_checkpointing: bool = False,
-        dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False,
+        dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False, release_coords="default", release_edges=False
 
     ):
         """
@@ -72,6 +72,8 @@ class SatelliteEncoder(torch.nn.Module):
             mlp_norm_type: Type of norm for the MLPs
                 one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
             use_checkpointing: Whether to use gradient checkpointing to use less memory
+            release_coords - latlon coordinates of the release point
+            release_edges - bool, if true connect all nodes in abstract layer to corresponding release node
 
         modifications to og code:
             - adapted to work in the whole world or only for the area defined by the lat lon coords 
@@ -91,6 +93,17 @@ class SatelliteEncoder(torch.nn.Module):
             assert input_names is not None, "Pass input names to do edges v2 (wind on the mesh edges)"
             self.input_names=input_names
 
+        self.release_edges = release_edges
+        if self.release_edges:
+            if release_coords=="default":
+                size = int(np.sqrt(len(lat_lons)))
+                release_coords = lat_lons[np.ravel_multi_index([int(size/2), int(size/2)], (size,size))]
+            else:
+                release_coords = release_coords
+                print("be careful! not tested with anything else than default")
+
+            self.release_h3 = h3.geo_to_h3(release_coords[0], release_coords[1], resolution)
+
         print("in satellite encoder!")
         if whole_world:
             self.base_h3_grid = sorted(list(h3.uncompact(h3.get_res0_indexes(), resolution)))
@@ -99,7 +112,9 @@ class SatelliteEncoder(torch.nn.Module):
         else:
             if higher_res==0:
                 # regular size grid
-                self.h3_grid = [h3.geo_to_h3(lat, lon, resolution) for lat, lon in lat_lons]   
+                self.h3_grid = [h3.geo_to_h3(lat, lon, resolution) for lat, lon in lat_lons] 
+
+                #self.release_h3_idx =   
             else:
                 assert idx_latlon is not None, "Pass idx_latlon with the x-y index of each node!"
                 self.h3_grid = []
@@ -355,6 +370,14 @@ class SatelliteEncoder(torch.nn.Module):
                     # this except will be triggered if h (one of the neighbouring points to h3_index) is not in the list
                     # this can only happen if using a reduced domain (whole_world = False), at the edges of this domain
                     continue
+            if self.release_edges:
+                print("here!")
+                if h3_index != self.release_h3 and (self.release_h3 not in h_points):
+                    # add edge to centre, only if edge does not already exist
+                    edge_targets.append(self.base_h3_map[self.release_h3])
+                    edge_attrs.append([distance, loc_point[0]-loc_neighbour[0], loc_point[1]-loc_neighbour[1]])
+                    edge_sources.append(self.base_h3_map[h3_index])
+
         edge_index = torch.tensor([edge_sources, edge_targets], dtype=torch.long)
         edge_attrs = torch.tensor(edge_attrs, dtype=torch.float)
         # Use heterogeneous graph as input and output dims are not same for the encoder
