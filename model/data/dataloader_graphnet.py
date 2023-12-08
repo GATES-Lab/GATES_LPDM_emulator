@@ -166,8 +166,31 @@ class FootprintsDatasetV2(Dataset):
         metrics["Accuracy"] = accuracy(self.transformed_predictions, self.fp_untransformed, threshold=5e-5)
         metrics["IOU"] = intersection_over_union(self.transformed_predictions, self.fp_untransformed, threshold=5e-5)
 
-        print(metrics)
+        print("evaluation metrics:", metrics)
         return metrics
+
+    def predict_fluxes(self, flux, units_transform = "default"):
+        ## convolute predicted footprints and fluxes, returns two np arrays, one with the true flux and one with the emulated flux, of shape (n_footprints,)
+        ## flux is an array, regridded and cut to the same resolution and size of the footprints
+        ## units_transform can be None (use fluxes directly), "default" (performs flux*1e3 / CH4molarmass) or another function (which should return an array of the same shape as the original flux)
+        try:
+            self.transformed_predictions
+        except AttributeError:
+            print("only works currently for transformed/normalised outputs!")
+
+        if units_transform != None:
+            if units_transform == "default":
+                molarmass = 16.0425
+                flux = flux*1e3 / molarmass
+            else:
+                flux = units_transform(flux)
+        true_concentration = np.reshape(self.fp_untransformed, (len(self.fp_untransformed), self.size, self.size))*flux
+        self.true_flux = np.sum(true_concentration, axis = (1,2))
+        pred_concentration = np.reshape(self.transformed_predictions, (len(self.transformed_predictions), self.size, self.size))*flux
+        self.pred_flux = np.sum(pred_concentration, axis = (1,2))
+        
+        return self.true_flux, self.pred_flux
+
 
     def evaluate_flux(self, mode="uniform"):
         def checkerboard(boardsize, squaresize=1):
@@ -185,12 +208,14 @@ class FootprintsDatasetV2(Dataset):
         elif mode=="checkerboard_1":
             flux = checkerboard(self.size, 1)
 
-        flux=flux.flatten()
 
-        true_flux = np.sum(self.fp_untransformed*flux, axis=1)
-        pred_flux = np.sum(self.transformed_predictions*flux, axis=1)
+        if mode in ["uniform","checkerboard_10","checkerboard_5", "checkerboard_1"]:
+            self.predict_fluxes(flux, units_transform = None)
 
-        return {"MAE":mean_absolute_error(true_flux, pred_flux), "R2": r2_score(true_flux, pred_flux)}
+
+        metrics = {"MAE":mean_absolute_error(self.true_flux, self.pred_flux), "R2": r2_score(self.true_flux, self.pred_flux)}
+        print("flux metrics:", metrics)
+        return metrics
     
     def plot_footprints(self, idx):
         """
@@ -204,22 +229,28 @@ class FootprintsDatasetV2(Dataset):
         if type(idx) is int:
             idx=[idx]
 
-        assert hasattr(self, "transformed_predictions"), "what_to_plot=all only works currently for transformed/normalised outputs!"
-        fig, ax = plt.subplots((len(idx)), 4, figsize=(16,4*len(idx)))
+        if hasattr(self, "transformed_predictions"): 
+            plots = 4
+        else:
+            plots=2
+
+        fig, ax = plt.subplots((len(idx)), plots, figsize=(plots*4,plots*len(idx)))
         if len(idx)==1:
             ax = ax[None,:]
         for idx_n, index in enumerate(idx):
             ax[idx_n,0].imshow(np.reshape(self.fp_untransformed[index], (self.size, self.size)), origin="lower")
-            ax[idx_n,1].imshow(np.reshape(self.transformed_predictions[index], (self.size, self.size)), origin="lower")
-            ax[idx_n,2].imshow(np.reshape(self.fp_numpy[index], (self.size, self.size)), origin="lower")
-            ax[idx_n,3].imshow(np.reshape(self.predictions[index], (self.size, self.size)), origin="lower")
+            ax[idx_n,1].imshow(np.reshape(self.fp_numpy[index], (self.size, self.size)), origin="lower")
+            if plots==4:
+                ax[idx_n,2].imshow(np.reshape(self.transformed_predictions[index], (self.size, self.size)), origin="lower")
+                ax[idx_n,3].imshow(np.reshape(self.predictions[index], (self.size, self.size)), origin="lower")
 
             ax[idx_n,0].set_ylabel(f"fp at index {index}")
 
         ax[0,0].set_title("True Footprint \n original space")
-        ax[0,1].set_title("Predicted Footprint \n original space")
-        ax[0,2].set_title("True Footprint \n transformed space")
-        ax[0,3].set_title("Predicted Footprint \n transformed space")
+        ax[0,1].set_title("True Footprint \n transformed space")
+        if plots==4:
+            ax[0,2].set_title("Predicted Footprint \n original space")
+            ax[0,3].set_title("Predicted Footprint \n transformed space")
 
         for axis in ax.flatten():
             axis.tick_params(left = False, bottom = False, labelbottom=False, labelleft=False) 
@@ -227,7 +258,16 @@ class FootprintsDatasetV2(Dataset):
 
         fig.patch.set_facecolor('white')
             
+    def plot_flux(self, window_n, window_size=100):
+        
+        # plot fluxes at a particular window in time (determined by window_size and window_n). 
+        # Plot true flux + pred flux
 
+        fig = plt.figure(figsize=(15,5))
+        plt.plot(self.true_flux[window_size*window_n:window_size*(1+window_n)], label="truth")
+        plt.plot(self.pred_flux[window_size*window_n:window_size*(1+window_n)], label="preds")
+
+        plt.legend()
 
     
     def __len__(self):
