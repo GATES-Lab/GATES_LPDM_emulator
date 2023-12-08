@@ -10,6 +10,15 @@
         "topog":"default",
         "met_datadir":"/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_50_"
     },
+
+    "reference_models" : {
+        "_comment" : "use reference model to generate predictions of a particular domainsize that is different that the training size",
+        "trained_model_name" : "smaller_test_run",
+        "trained_domain_size" : 30,
+        "same_size_model_name":"test_run_of_same_size"
+
+    },
+
     "test_load_data" : {
         "year":"2016",
         "freq":10
@@ -41,7 +50,7 @@
         "resolution":4, 
         "output_dim":1, 
         "residuals":false, 
-        "attention":true
+        "attention":false
     },
 
     "learning_rate":5e-5,
