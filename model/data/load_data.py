@@ -386,7 +386,7 @@ class LoadSatelliteData:
         self.fp_binary[self.fp_binary>0] = one
 
 
-
+"""
 def intersection_over_union(fps, preds, zero=-1):
     # calculates metric intersection over union (IoU) for a binary footprint 
     assert (np.unique(fps) == np.array([zero,1])).all(), "pass binary footprints, or if they arent -1/1, pass parameter zero=lower number"
@@ -415,7 +415,7 @@ def dice_similarity(fps, preds, zero=-1):
 
     dice = 2*TP/(2*TP + FP + FN)
     return dice
-
+"""
 
 
 def get_release_idxs(fp_full, domain_lats=None, domain_lons=None):
