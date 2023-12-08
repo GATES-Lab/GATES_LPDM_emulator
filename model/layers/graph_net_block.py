@@ -669,12 +669,12 @@ class NodeSatelliteProcessorAttention(nn.Module):
         """
         #print("node batch", batch)
         self.attention_mask = self.attention_mask.bool().to(x.device)
-        print(self.attention_mask.device)
+        #print(self.attention_mask.device)
 
         row, col = edge_index
         #print(x.size(), self.attention_mask.size())  
         if batch is not None:
-            print("rearranging")
+            #print("rearranging")
             x = einops.rearrange(x, "(b n) f -> n b f", b=batch)
 
         #print(x.size(), self.attention_mask.size())        
@@ -682,15 +682,15 @@ class NodeSatelliteProcessorAttention(nn.Module):
         attn_output, attn_output_weights = self.attn_layer(x, x, x, attn_mask=self.attention_mask)
 
         #print(x)
-        print(attn_output.size(), attn_output_weights.size())
+        #print(attn_output.size(), attn_output_weights.size())
         #print(attn_output_weights, attn_output_weights.size())
         
         if batch is not None:
-            print("rearranging back")
+            #print("rearranging back")
             x = einops.rearrange(x, "n b f -> (b n) f", b=batch)
             attn_output = einops.rearrange(attn_output, "n b f -> (b n) f", b=batch)
 
-            print(attn_output.size())
+            #print(attn_output.size())
             
         if self.approach=="nodes_only":
             out = self.node_mlp_2(cat([x, attn_output], dim=-1))
