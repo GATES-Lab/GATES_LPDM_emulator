@@ -22,7 +22,6 @@ from model.data.load_data import *
 from model.forecast import GraphSatelliteForecaster
 from model.loss_functions import *
 
-from graphnet_LPDM_emulator.model.loss_functions import *
 
 import torch.optim as optim
 from sklearn.metrics import mean_squared_error, r2_score
@@ -165,7 +164,7 @@ epoch_so_far = 0
 if torch.cuda.is_available():
     model.cuda()
 
-for epoch in range(300):
+for epoch in range(302):
     epoch=epoch+epoch_so_far
     running_loss = 0.0
     print(f"Start Epoch: {epoch}")
