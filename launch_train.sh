@@ -19,4 +19,4 @@ module load lang/python/anaconda/3.8.8-2021.05-torch
 
 
 echo "train"
-python train_model.py
+python general_train.py parameter_template.txt --file_path /user/work/ef17148/GCN/graphnet/repo_test/graphnet_LPDM_emulator/
