@@ -39,7 +39,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         decoder_final_layer=None,
         higher_mesh_res=0,
         idx_latlon=None,
-        concat_decoder_neighbours=False, better_meshnodes=False, scatter="mean",disaggregated=False, batchsize=5, attention=False
+        concat_decoder_neighbours=False, better_meshnodes=False, scatter="mean",disaggregated=False, batchsize=5, attention=False, release_coords="default", release_edges=False
     ):
         """
         Graph Weather Model based off https://arxiv.org/pdf/2202.07575.pdf
@@ -86,7 +86,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
             mlp_norm_type=norm_type,
-            use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention
+            use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges
         )
         if not encode_edges:
             edge_dim=2
