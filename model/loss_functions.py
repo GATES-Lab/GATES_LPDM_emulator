@@ -63,19 +63,30 @@ def dice_similarity(fps, preds, threshold=0):
     return np.mean(dice)
 
 
-def intersection_over_union(preds, fps, threshold=0):
+def intersection_over_union(preds, fps, threshold=0, return_mean=True):
     # calculates metric intersection over union (IoU) for a binary footprint 
-    if len(np.shape(fps))==3:
-        fps = np.reshape(np.copy(fps), (len(fps), np.shape(fps)[1]*np.shape(fps)[1]))
-        preds = np.reshape(np.copy(preds), (len(preds), np.shape(preds)[1]*np.shape(preds)[1]))
-        
-    fps_bin = np.copy(fps)>threshold
-    preds_bin = np.copy(preds)>threshold
-    intersection = np.sum(np.logical_and(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
-    print(intersection)
-    union = np.sum(np.logical_or(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
-    IoU = intersection/union
-    return np.mean(IoU)
+    if type(fps) == torch.Tensor:
+        intersection = torch.sum(torch.logical_and((fps>threshold)==True, (preds>threshold)==True), dim=tuple(range(1, fps.dim())))
+        union = torch.sum(torch.logical_or((fps>threshold)==True, (preds>threshold)==True), dim=tuple(range(1, fps.dim())))
+        IoU = torch.divide(intersection,union)
+        if return_mean:
+            return torch.mean(IoU) 
+        else:
+            return IoU
+    
+    else:  
+        #print("?")
+        if len(np.shape(fps))==3:
+            fps = np.reshape(np.copy(fps), (len(fps), np.shape(fps)[1]*np.shape(fps)[1]))
+            preds = np.reshape(np.copy(preds), (len(preds), np.shape(preds)[1]*np.shape(preds)[1]))
+            
+        fps_bin = np.copy(fps)>threshold
+        preds_bin = np.copy(preds)>threshold
+        intersection = np.sum(np.logical_and(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
+        #print(intersection)
+        union = np.sum(np.logical_or(fps_bin==1, preds_bin==1, where=1), axis=(-1,-2))
+        IoU = intersection/union
+        return np.mean(IoU)
 
 class CombinedLoss(nn.Module):
     """
@@ -97,3 +108,51 @@ class CombinedLoss(nn.Module):
         return loss + self.acc_weighting*acc
     
       
+class MSEassymetricSummed(nn.Module):
+    """
+    assymetric MSE - penalises underprediction by a factor of alpha before taking square
+    """
+    def __init__(self, alpha=4, sum_weighting=1):
+        self.alpha=alpha
+        self.sum_weighting = sum_weighting
+        super().__init__()
+        
+
+    def forward(self, output, target):
+        loss=target-output
+        loss[loss>0] = self.alpha*loss[loss>0]
+        loss = torch.mean(loss**2)
+        
+        summed = torch.mean(torch.nn.functional.mse_loss(torch.sum(target, dim=-1), torch.sum(output, dim=-1)))
+
+        loss = loss + self.sum_weighting*summed
+        return loss
+    
+
+class MSE_ACC_SUM(nn.Module):
+    """
+    assymetric MSE + summed footprint penalisation + accuracy = loss. penalises underprediction by a factor of alpha before taking square
+    """
+    def __init__(self, alpha=4, sum_weighting=1, acc_weighting=1, accuracy_threshold=0, metric=accuracy):
+        self.alpha=alpha
+        self.sum_weighting = sum_weighting
+        self.acc_weighting=acc_weighting
+        self.accuracy_threshold=accuracy_threshold
+        self.metric = metric
+
+        super().__init__()
+        
+    def forward(self, output, target):
+        loss=target-output
+        loss[loss>0] = self.alpha*loss[loss>0]
+        loss = torch.mean(loss**2)
+        
+        summed = torch.nn.functional.mse_loss(torch.sum(target, dim=-1), torch.sum(output, dim=-1))
+
+        acc = 1-self.metric(output, target, threshold=self.accuracy_threshold)
+
+        loss = loss + self.sum_weighting*summed + self.acc_weighting*acc
+        return loss
+    
+
+
