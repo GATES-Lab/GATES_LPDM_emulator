@@ -2,7 +2,7 @@ from torch.utils.data import DataLoader, Dataset
 import torch
 import numpy as np
 import sklearn.preprocessing as preprocessing
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
 
 from ..loss_functions import *
@@ -67,6 +67,7 @@ class FootprintsDatasetV2(Dataset):
         self.valid_output_transforms = {
             "boxcox":{"params":["transformers"], "fun":_Boxcox},
             "boxcox_all":{"params":["transformers"], "fun":_BoxcoxAll}, 
+            "distance_boxcox":{"params":["transformers", "distances", "zero_shift"], "fun":_DistanceBoxcox},
             "mu-law":{"params":["scale", "mu"], "fun":_MuLaw}, 
             "logv1":{"params":["fp_mean", "fp_var"], "fun":_Transform}, 
             "logv2":{"params":[], "fun":_Transform}, 
@@ -115,7 +116,10 @@ class FootprintsDatasetV2(Dataset):
             self.fp = self.fp[:,:,None]
 
     def inverse_transform(self, predictions, return_transformed=True):
-        self.predictions = predictions.detach().numpy()
+        self.predictions=predictions
+        if type(self.predictions) == torch.Tensor:
+            self.predictions = self.predictions.detach().numpy()
+            
         for transform in self.output_transforms:
             self.transformed_predictions = self.output_transforms[transform].inverse_transform(self.predictions)
         if return_transformed:
@@ -159,11 +163,34 @@ class FootprintsDatasetV2(Dataset):
         metrics = {}
         metrics["NMAE"] = NMAE(self.transformed_predictions, self.fp_untransformed)
         metrics["MSE"] = mean_squared_error(self.transformed_predictions, self.fp_untransformed)
-        metrics["Accuracy"] = accuracy(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
-        metrics["IOU"] = intersection_over_union(self.transformed_predictions, self.fp_untransformed, threshold=1e-5)
+        metrics["Accuracy"] = accuracy(self.transformed_predictions, self.fp_untransformed, threshold=5e-5)
+        metrics["IOU"] = intersection_over_union(self.transformed_predictions, self.fp_untransformed, threshold=5e-5)
 
         print(metrics)
         return metrics
+
+    def evaluate_flux(self, mode="uniform"):
+        def checkerboard(boardsize, squaresize=1):
+            boardsize= (boardsize,boardsize)
+            squaresize=(squaresize, squaresize)
+            return np.fromfunction(lambda i, j: (i//squaresize[0])%2 != (j//squaresize[1])%2, boardsize).astype(int)
+
+
+        if mode=="uniform":
+            flux = np.ones((self.size, self.size))
+        elif mode=="checkerboard_10":
+            flux = checkerboard(self.size, 10)
+        elif mode=="checkerboard_5":
+            flux = checkerboard(self.size, 5)
+        elif mode=="checkerboard_1":
+            flux = checkerboard(self.size, 1)
+
+        flux=flux.flatten()
+
+        true_flux = np.sum(self.fp_untransformed*flux, axis=1)
+        pred_flux = np.sum(self.transformed_predictions*flux, axis=1)
+
+        return {"MAE":mean_absolute_error(true_flux, pred_flux), "R2": r2_score(true_flux, pred_flux)}
     
     def plot_footprints(self, idx):
         """
@@ -366,6 +393,81 @@ class _Boxcox(_Transform):
         transformed_predictions=self.boxcox.inverse_transform(self.parent.predictions)-0.0000001
         return transformed_predictions
 
+class _DistanceBoxcox(_Transform):
+    """
+    Apply boxcox + standardisation. A boxcox tranformer is fit for all non-zero datapoints that are at the same distance from the centre (distance is euclidean in pixels, rounded to nearest int)
+    Note: Does NOT translate across domain sizes
+
+    Parameter zero_shift indicates the shift to apply to original zeros - as these aren't transformed, they will remain as zeros and therefore need to be moved "out of the way" so they are not confused with the original 
+
+    If train, train and transform
+
+    If test, use trained object to transform
+    """
+    def __init__(self, parent, zero_shift=-5):
+        self.parent = parent
+        print("!!")
+        print("init distance boxcox")
+        self.parent.fp_untransformed = np.copy(self.parent.fp)
+        self.zero_shift=zero_shift
+
+        if self.parent.mode=="train":
+            centre = int(self.parent.size/2)
+            # calculate distances between all cells and measurement cell
+            X, Y = np.meshgrid(np.arange(self.parent.size), np.arange(self.parent.size))
+            self.distances = np.sqrt((centre - X)**2 + (centre - Y)**2)
+            self.distances = self.distances.flatten()
+            # calculate boxcox for all datapoints that are at the same distance from the release point
+            # distances are rounded for smoothness
+            self.transformers = {}
+            for dist in np.unique(self.distances.round(decimals=0)):
+                dist_idxs = np.where(self.distances.round(decimals=0)==dist)
+                pt = preprocessing.PowerTransformer(method="box-cox", standardize=True)
+                pt.fit(self.parent.fp[:,dist_idxs].flatten()[self.parent.fp[:,dist_idxs].flatten()>0].reshape(-1, 1))
+                self.transformers[dist] = pt
+
+        elif self.parent.mode=="test":
+            self.transformers =  self.parent.test_mode["distance_boxcox"]["transformers"] 
+            self.distances = self.parent.test_mode["distance_boxcox"]["distances"] 
+            self.zero_shift = self.parent.test_mode["distance_boxcox"]["zero_shift"] 
+
+        self.parent.transform_parameters["distance_boxcox"] = {}
+        self.parent.transform_parameters["distance_boxcox"]["transformers"] = self.transformers
+        self.parent.transform_parameters["distance_boxcox"]["distances"] = self.distances
+        self.parent.transform_parameters["distance_boxcox"]["zero_shift"] = self.zero_shift
+
+    def transform(self, fp):
+        print("transforming")
+        fp_untransformed = np.copy(fp)
+        fp = np.zeros_like(fp) + self.zero_shift
+
+        for dist in np.unique(self.distances.round(decimals=0)):
+            dist_idxs = np.where(self.distances.round(decimals=0)==dist)[0]
+            pt = self.transformers[dist]
+            for w in dist_idxs:
+                non_zero_idxs = np.squeeze(fp_untransformed[:,w]>0)
+                if np.sum(non_zero_idxs)>0:
+                    fp[:,w][non_zero_idxs] = np.squeeze(pt.transform(fp_untransformed[:,w][non_zero_idxs].reshape(-1, 1)))    
+        return fp    
+
+    def inverse_transform(self, predictions):
+        self.parent.predictions = predictions
+        transformed_predictions = np.zeros_like(predictions)
+
+        for dist in np.unique(self.distances.round(decimals=0)):
+            dist_idxs = np.where(self.distances.round(decimals=0)==dist)[0]
+            pt = self.transformers[dist]
+            for w in dist_idxs:
+                if self.zero_shift>0:
+                    non_zero_idxs = np.squeeze(predictions[:,w]<0.75*self.zero_shift)
+                if self.zero_shift<0:
+                    non_zero_idxs = np.squeeze(predictions[:,w]>0.75*self.zero_shift)
+
+                if np.sum(non_zero_idxs)>0:
+                    transformed_predictions[:,w][non_zero_idxs] = np.squeeze(pt.inverse_transform(predictions[:,w][non_zero_idxs].reshape(-1, 1)))                
+
+        return transformed_predictions
+
 class _BoxcoxAll(_Transform):
     """
     Apply boxcox + standardisation to all pixels in image. 
@@ -475,7 +577,7 @@ def plot_footprints(idx, original_fps=None, transformed_fps=None, predictions=No
     """
     visualise footprints and predictions for the footprints at index idx
     idx can be an int or a list of ints
-    plots graph of size (len(idx), 4) with true footprint in original space and transformed space, and prediction in both spaces
+    pass any combination of original_fps, transformed_fps, predictions and transformed_predictions to plot
     """
 
     assert type(idx) is int or type(idx) is list, "idx should be an int or list of ints"
