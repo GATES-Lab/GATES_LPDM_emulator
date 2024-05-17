@@ -182,7 +182,7 @@ def loci_adjustment(observed_precip, model_precip, mode="2D"):
     return adjusted_precip
 
     
-def apply_threshold(observed_precip, model_precip, to_correct=None):
+def apply_threshold(observed_precip, model_precip, to_correct=None, thr=0, mult_factor=1):
     """
     Perform only the threshold step from the Local Intensity Scaling (LOCI) method.
 
@@ -195,9 +195,9 @@ def apply_threshold(observed_precip, model_precip, to_correct=None):
         - If to_correct=None, returns threshold
         - else, adjusts test data passed and returns it
     """
-    wet_day_frequency_observed = np.sum(observed_precip > 0)
-    wet_day_threshold_model = np.percentile(model_precip, (100.0 * wet_day_frequency_observed) /  np.prod(np.shape(model_precip)))
-
+    wet_day_frequency_observed = mult_factor*np.sum(observed_precip > thr)
+    wet_day_threshold_model = np.percentile(model_precip, 100-((100.0 * wet_day_frequency_observed) /  np.prod(np.shape(model_precip))))
+    #print(wet_day_threshold_model)
     if to_correct is not None:
         corrected=np.copy(to_correct)
         corrected[corrected<=wet_day_threshold_model] = 0
@@ -241,9 +241,44 @@ def corrective_layer(truths, preds, size=100, to_correct=None, return_models=Tru
     else:
         return models
 
+def corrective_layer_footprint_residuals(truths, preds, size=100, to_correct=None, degree=2, return_models=True):
+    """
+    Applies a quadratic polynomial correction to residuals
+
+    Parameters:
+        observed_precip (numpy.ndarray): Array of observed daily precipitation values.
+        model_precip (numpy.ndarray): Array of model daily precipitation values.
+        to_correct - optional. Pass array of test data to be corrected with the threshold determined on the validation data
+
+    Returns:
+        - If to_correct=None, returns only trained models
+        - else, returns corrected data, and models if return_models=True
+    """
+    if to_correct is not None:
+        corrected=np.zeros_like(to_correct)
+    try:
+        model = np.poly1d(np.polyfit(preds.flatten(), truths.flatten() -  preds.flatten(), degree))
+
+        if to_correct is not None:
+            correction = np.reshape(model(to_correct.flatten()), np.shape(to_correct))
+            corrected= to_correct + correction
+    except Exception as e:
+        print(f"warning, there was an error with the fitter. returning zeros")
+        print("Error:", e)
+
+    if to_correct is not None:
+        if return_models:
+            return model, corrected
+        else:
+            return corrected
+    else:
+        return model
+
+
+
 def corrective_layer_footprint(truths, preds, size=100, to_correct=None, degree=2, return_models=True):
     """
-    Applies a quadratic polynomial correction (on a full footprint basis, interpolates quadratic polynomial for error based on the predicted value)
+    Applies a quadratic polynomial correction to distribution!
 
     Parameters:
         observed_precip (numpy.ndarray): Array of observed daily precipitation values.
@@ -262,9 +297,10 @@ def corrective_layer_footprint(truths, preds, size=100, to_correct=None, degree=
         if to_correct is not None:
             correction = np.reshape(model(to_correct.flatten()), np.shape(to_correct))
             corrected= to_correct + correction
-    except:
+    except Exception as e:
         print(f"warning, there was an error with the fitter. returning zeros")
-
+        print("Error:", e)
+        
     if to_correct is not None:
         if return_models:
             return model, corrected
@@ -272,6 +308,9 @@ def corrective_layer_footprint(truths, preds, size=100, to_correct=None, degree=
             return corrected
     else:
         return model
+
+
+
 
 
 # eval funs
@@ -310,6 +349,17 @@ def getint(name):
     return int(num)
 
 
+def correlation_coeff(truth, pred, log=True):
+    pred[pred<1e-10] = 0
+    truth[truth<1e-10] = 0
+    if log:
+        pred = np.log10(pred)
+        truth = np.log10(truth)
+
+    pred_nonnan1 = pred[np.where(np.logical_and(~np.isinf(truth), ~np.isinf(pred)))]
+    truth_nonnan1 = truth[np.where(np.logical_and(~np.isinf(truth), ~np.isinf(pred)))]
+    rr1 = np.corrcoef(truth_nonnan1, pred_nonnan1)[0, 1]
+    return rr1
 
 class ModelEv():
     """
@@ -354,6 +404,12 @@ class ModelEv():
         self.preds_test.load()
 
         self.preds_test.trans_predictions.values = self.preds_test.trans_predictions.where(self.preds_test.trans_predictions<0.1, other=0)
+
+        # if there are nans in the true values (happens for 200x200), replace with zeros
+        for d in [self.preds_validation, self.preds_test]:
+            nan_mask = d.fp.isnull()
+            d["fp"] = d["fp"].where(~nan_mask, 0)
+            d["trans_predictions"] = d["trans_predictions"].where(~nan_mask, 0)
 
         if size < len(self.preds_validation.lat):
             print("size passed is smaller than actual array size. cutting array to match size parameter")
@@ -403,6 +459,11 @@ class ModelEv():
 
             self.variations = {"preds":model_precip, "thr":adjusted_precipitation_thr,"bias_pbp_q":adjusted_precipitation_bias_pbp, "bias_pbp_l":adjusted_precipitation_bias_pbp_linear, "bias_q":adjusted_precipitation_bias, "bias_l":adjusted_precipitation_bias_linear,"bias_thr":adjusted_precipitation_bias_thr, "bias_thr_l":adjusted_precipitation_bias_l_thr, "2D":adjusted_precipitation,"3D":adjusted_precipitation_3D,"mix":adjusted_precipitation_mix}
 
+        if which=="thr_only":
+            adjusted_precipitation_thr = apply_threshold(observed_precip_val, model_precip_val, to_correct=model_precip_test)
+            self.variations = {"preds":model_precip, "thr":adjusted_precipitation_thr}            
+
+
         if which=="small":
             adjusted_precipitation_bias_pbp = corrective_layer(observed_precip_val, model_precip_val, to_correct=model_precip_test, return_models=False, size=self.size)
 
@@ -413,12 +474,19 @@ class ModelEv():
 
             adjusted_precipitation_bias_linear = corrective_layer_footprint(observed_precip_val, model_precip_val, to_correct=model_precip_test, return_models=False, size=self.size, degree=1)
 
+            adjusted_precipitation_bias_linear_res = corrective_layer_footprint_residuals(observed_precip_val, model_precip_val, to_correct=model_precip_test, return_models=False, size=self.size, degree=1)
+
             adjusted_precipitation_thr = apply_threshold(observed_precip_val, model_precip_val, to_correct=model_precip_test)
             adjusted_precipitation_bias_thr = apply_threshold(observed_precip_val, model_precip_val, to_correct=adjusted_precipitation_bias)
             adjusted_precipitation_bias_l_thr = apply_threshold(observed_precip_val, model_precip_val, to_correct=adjusted_precipitation_bias_linear)
 
+            adjusted_precipitation_bias_linear_afterthr = corrective_layer_footprint(observed_precip_val, model_precip_val, to_correct=adjusted_precipitation_thr, return_models=False, size=self.size, degree=1)
 
-            self.variations = {"preds":model_precip, "thr":adjusted_precipitation_thr,"bias_pbp_q":adjusted_precipitation_bias_pbp, "bias_pbp_l":adjusted_precipitation_bias_pbp_linear, "bias_q":adjusted_precipitation_bias, "bias_l":adjusted_precipitation_bias_linear,"bias_thr":adjusted_precipitation_bias_thr, "bias_thr_l":adjusted_precipitation_bias_l_thr}            
+            validation_adjusted_precipitation_thr = apply_threshold(observed_precip_val, model_precip_val, to_correct=model_precip_val)
+            adjusted_precipitation_bias_linear_afterthr_onval = corrective_layer_footprint(observed_precip_val, validation_adjusted_precipitation_thr, to_correct=adjusted_precipitation_thr, return_models=False, size=self.size, degree=1)
+
+
+            self.variations = {"preds":model_precip, "thr":adjusted_precipitation_thr,"bias_pbp_q":adjusted_precipitation_bias_pbp, "bias_pbp_l":adjusted_precipitation_bias_pbp_linear, "bias_q":adjusted_precipitation_bias, "bias_l":adjusted_precipitation_bias_linear,"bias_thr":adjusted_precipitation_bias_thr, "bias_thr_l":adjusted_precipitation_bias_l_thr, "bias_res_l":adjusted_precipitation_bias_linear_res, "bias_thr_l_inorder":adjusted_precipitation_bias_linear_afterthr, "bias_thr_l_inorder_wval":adjusted_precipitation_bias_linear_afterthr_onval}            
 
         self.variations_meanings = {
             "preds":"model predictions", 
@@ -447,7 +515,7 @@ class ModelEv():
         self.segmentation_metrics = {"IoU":ious, "Dice":dices, "Acc":accuracies} 
 
     def get_fluxes(self, fluxes="def"):
-        print(type(fluxes))
+        #print(type(fluxes))
         if type(fluxes) is str and fluxes=="def":
             fluxes = np.ones((self.size,self.size))
         observed_precip = np.copy(self.preds_test.fp.values)
@@ -466,6 +534,8 @@ class ModelEv():
             this_metric = {"adj":name}
             this_metric["MAE"] = mae(observed_precip, self.variations[name])
             this_metric["MSE"] = mean_squared_error(observed_precip.flatten(), self.variations[name].flatten())
+            this_metric["corr_coeff"] = correlation_coeff(observed_precip,self.variations[name])
+            
             if hasattr(self, "segmentation_metrics"):
                 for seg_metric in self.segmentation_metrics:
                     this_metric[seg_metric] = round(100*np.mean(self.segmentation_metrics[seg_metric][name]),2)
@@ -510,3 +580,37 @@ class ModelEv():
         self.get_fluxes()
         self.evaluate(verbose=verbose)
 
+
+def quantile_mapping_interp(truths, preds, to_correct, n_quantiles=100, mode="replace", mult_factor=1, fp_noise=0):
+
+    truths = np.copy(truths)
+    truths = np.where(truths<fp_noise, 0, truths)
+
+    corrected_val = apply_threshold(truths, preds, to_correct=preds, mult_factor=mult_factor)
+    corrected_test = apply_threshold(truths, preds, to_correct=to_correct, mult_factor=mult_factor)
+
+    percentiles = np.arange(0,100.0001,100/n_quantiles)
+
+    percentiles_observed = np.percentile(truths.flatten()[truths.flatten()>0], percentiles)
+    percentiles_simulated = np.percentile(corrected_val.flatten()[corrected_val.flatten()>0], percentiles)
+    #print(percentiles_observed)
+    #print(percentiles_simulated)
+    
+    corrected = np.zeros_like(to_correct)
+    corrected = corrected.flatten()
+
+
+    preds_percentiles = np.interp(corrected_test.flatten()[corrected_test.flatten()>0],  percentiles_simulated, percentiles)
+    corresponding_truths = np.interp(preds_percentiles, percentiles, percentiles_observed)
+
+    if mode=="replace": # this is equivalent to quantile mapping here https://www.metoffice.gov.uk/binaries/content/assets/metofficegovuk/pdf/research/ukcp/ukcp18-guidance---how-to-bias-correct.pdf
+        corrected[corrected_test.flatten()>0] = corresponding_truths
+    #if mode=="sum":
+
+    #print(np.shape(to_correct))
+    
+    corrected = np.reshape(corrected, np.shape(to_correct))
+
+    #print(np.shape(corrected))
+    
+    return corrected
