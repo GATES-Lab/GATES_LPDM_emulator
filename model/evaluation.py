@@ -182,7 +182,7 @@ def loci_adjustment(observed_precip, model_precip, mode="2D"):
     return adjusted_precip
 
     
-def apply_threshold(observed_precip, model_precip, to_correct=None, thr=0, mult_factor=1):
+def apply_threshold(observed_precip, model_precip, to_correct=None, thr=0, replacement_val= 0, mult_factor=1):
     """
     Perform only the threshold step from the Local Intensity Scaling (LOCI) method.
 
@@ -200,7 +200,7 @@ def apply_threshold(observed_precip, model_precip, to_correct=None, thr=0, mult_
     #print(wet_day_threshold_model)
     if to_correct is not None:
         corrected=np.copy(to_correct)
-        corrected[corrected<=wet_day_threshold_model] = 0
+        corrected[corrected<=wet_day_threshold_model] = replacement_val
         return corrected
     else:
         return wet_day_threshold_model
@@ -325,6 +325,7 @@ def checkerboard(boardsize, squaresize=1):
 
 def mean_bias(truths, preds):
     return np.mean(truths-preds)
+
 def nmae(y_true, predictions):
     y_true, predictions = np.array(y_true), np.array(predictions)
     return np.mean(np.abs(y_true - predictions))/np.mean(y_true)
@@ -581,30 +582,53 @@ class ModelEv():
         self.evaluate(verbose=verbose)
 
 
-def quantile_mapping_interp(truths, preds, to_correct, n_quantiles=100, mode="replace", mult_factor=1, fp_noise=0):
+def quantile_mapping_interp(truths, preds, to_correct, n_quantiles=100, mode="replace", thr=0, replacement_val=0, mult_factor=1, fp_noise=None):
+    """
+    apply quantile mapping to a test set "to_correct", based on a validation set "truths" and "preds"
+    steps:
+        1. apply threshold (remove background values based on validation set) 
+            background values in the original space are zero, in the logspace are around -3
+            thr is the value under which we consider background values
+            replacement_val is the value to replace background with
+        
+        2. calculate the CDF of the true footprints and of the predicted footprints (on the validation set)
+
+        3. do quantile mapping
+            - find linear relationship f that does f(predicted validation CDF) = percentile
+            - apply to test set f(predicted test CDF) = percentile labels
+            - find linear relationship g that does g(percentile) = true validation CDF
+            - apply to test percentile labels  g(percentile labels) = bias-corrected test values
+        
+        4. maintain all values identified as background
+    
+    if applying on original space, use default values
+    if applying on logspace, recommended params are thr=-2, replacement_val=-3
+
+    """
 
     truths = np.copy(truths)
-    truths = np.where(truths<fp_noise, 0, truths)
+    if fp_noise is not None:
+        truths = np.where(truths<fp_noise, 0, truths)
 
-    corrected_val = apply_threshold(truths, preds, to_correct=preds, mult_factor=mult_factor)
-    corrected_test = apply_threshold(truths, preds, to_correct=to_correct, mult_factor=mult_factor)
+    corrected_val = apply_threshold(truths, preds, to_correct=preds, mult_factor=mult_factor, thr=thr, replacement_val=replacement_val)
+    corrected_test = apply_threshold(truths, preds, to_correct=to_correct, mult_factor=mult_factor, thr=thr, replacement_val=replacement_val)
+
 
     percentiles = np.arange(0,100.0001,100/n_quantiles)
 
-    percentiles_observed = np.percentile(truths.flatten()[truths.flatten()>0], percentiles)
-    percentiles_simulated = np.percentile(corrected_val.flatten()[corrected_val.flatten()>0], percentiles)
-    #print(percentiles_observed)
-    #print(percentiles_simulated)
+    percentiles_observed = np.percentile(truths.flatten()[truths.flatten()>thr], percentiles)
+    percentiles_simulated = np.percentile(corrected_val.flatten()[corrected_val.flatten()>thr], percentiles)
     
     corrected = np.zeros_like(to_correct)
+    corrected = corrected+replacement_val
     corrected = corrected.flatten()
 
 
-    preds_percentiles = np.interp(corrected_test.flatten()[corrected_test.flatten()>0],  percentiles_simulated, percentiles)
+    preds_percentiles = np.interp(corrected_test.flatten()[corrected_test.flatten()>thr],  percentiles_simulated, percentiles)
     corresponding_truths = np.interp(preds_percentiles, percentiles, percentiles_observed)
 
     if mode=="replace": # this is equivalent to quantile mapping here https://www.metoffice.gov.uk/binaries/content/assets/metofficegovuk/pdf/research/ukcp/ukcp18-guidance---how-to-bias-correct.pdf
-        corrected[corrected_test.flatten()>0] = corresponding_truths
+        corrected[corrected_test.flatten()>thr] = corresponding_truths
     #if mode=="sum":
 
     #print(np.shape(to_correct))
