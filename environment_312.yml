@@ -1,0 +1,22 @@
+name: new_graphnet
+channels:
+  - anaconda
+  - conda-forge
+  - defaults
+dependencies:
+  - cartopy=0.22.0
+  - dask=2024.5.0
+  - einops=0.8.0
+  - h3-py=3.7.7
+  - hdf4=4.2.13
+  - hdf5=1.12.1
+  - matplotlib=3.8.4
+  - netcdf4=1.6.2
+  - numpy=1.26.4
+  - pandas=2.2.2
+  - python=3.12
+  - scikit-learn=1.5.1
+  - scipy=1.13.1
+  - typing_extensions=4.12.2
+  - xarray=2023.6.0
+prefix: /user/work/ef17148/oldstuff/ef17148/.conda/envs/new_graphnet
