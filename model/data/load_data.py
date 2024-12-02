@@ -1121,6 +1121,14 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
 
     # mets contains all of the met objects, the key is the jump
     mets={}
+    """
+    Met files should already be 
+        1) cut in space, so that it has size NxX and centered around measurement point
+        2) interpolated in time, to align with t (time of the measurements) or t-H
+
+    data.met contains the meteorological data at the time of the measurement. the rest of the times are loaded below. 
+    the met data is stored in a dictionary with format mets[H] = data array for that H (so that mets = {0: met at time=t, 6: met at time=t-6 etc})
+    """
     mets[0] = data.met
     valid_timestamps = np.copy(data.met.time.values)
     for j in jumps:
@@ -1144,6 +1152,7 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
 
                 try:
                     # select met
+                    ## making sure that only the right indices are selected
                     print(j, len(mets[j].time), len(mets[j].lat))
                     mets[j] = mets[j].sel(time=(pd.DatetimeIndex(data.fp_data_full.time.values) - pd.Timedelta(f"{j}H")))
                     print(j, len(mets[j].time), len(mets[j].lat))
@@ -1166,6 +1175,8 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
             mets[j]["wind_speed"]=np.sqrt(mets[j].x_wind**2 + mets[j].y_wind**2)
             print("done?")
 
+    # this makes sure that all the footprint data and all the met files are aligned in time 
+            # met data is still a dictionary of independent arrays!
     print(len(valid_timestamps), len(data.met.time.values))
     if len(valid_timestamps) < len(data.met.time.values):
         print(f"deleting {len(mets[0].time.values) - len(valid_timestamps)} nan indeces (in the time axis) from jump mets and from the data object")
@@ -1224,6 +1235,9 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
         n_variables = (n_variables-1) + 2*len(jumps)  
         # this messes up the training big time! do not pass
     print(n_variables)
+
+    ## all_vars is a numpy array, in the right shape, that will host the input variables
+    # the for loop below "fills up" this numpy array, per variable and timestep, extracting the variable from each corresponding array in the mets dictionary
     all_vars = np.zeros((np.shape(data.fp_lats)[1], np.shape(data.fp_lons)[1], len(data.met.time), int(n_variables)))
 
     
@@ -1267,7 +1281,8 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
             
             all_vars[:,:,:,col] = cutmet
             col=col+1
-    print("brrr", len(variables_reduced), len(jumps_reduced))
+    #print("brrr", len(variables_reduced), len(jumps_reduced))
+    ## ignore these below!
     if len(variables_reduced)>0 and len(jumps_reduced)>0:
         for v in variables_reduced:
             for njump, jump in enumerate(jumps_reduced):
@@ -1296,7 +1311,7 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
                         var_names.append({"var":v, "level":lev, "type": vartype, "time":f"t-{jump}"})
                     col = col+1
 
-
+    ## adds the variables that are not meteorological
     if len(others) > 0:
         for oth in others:
             ## add option for  solar radiation, orography, land-sea mask
@@ -1443,7 +1458,7 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
                 print(f"{oth} not recognised!")   
                 _ = var_names.pop() 
 
-              
+    ## adds topography and land cover to the output array         
     if topog:
         if hasattr(data, "topog"):
             all_vars[:,:,:,-1] = np.transpose(data.topog, [1,2,0])
