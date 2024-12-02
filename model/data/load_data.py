@@ -62,7 +62,7 @@ def cut_and_save_met_data(date,
                  met_levels=[3,9,15,21,30,42,51], met_variables=["air_pressure", "air_temperature", "atmosphere_boundary_layer_thickness", "surface_air_pressure", "upward_air_velocity", "x_wind", "y_wind"], 
                  verbose=True, 
                  met_datadir=None, fp_datadir=None, 
-                 savemetpath=[]):
+                 savemetpath=[], expand_met = {"lat":0, "lon":0}):
     """
     Cuts meteorology from default format (full lat-lon grid, regular time steps) to match footprint domain and timesteps, as well as to match levels and variables specified as inputs. Can be used for multiple timesteps back in the past, saving the meteorology in the same domain at t-x for each x in met_jump.
     Saves extracted met as .nc file to use in LoadSatelliteData object.
@@ -71,6 +71,7 @@ def cut_and_save_met_data(date,
         - met_variables: list of variables to keep from the original meteorology file (must be present in the meteorology)
         - met_levels: list of levels to keep from the original meteorology file
     """
+    print("inside")
     domains = {"BRAZIL":"SOUTHAMERICA", "SOUTHAMERICA":"SOUTHAMERICA", "SAHARA":"NORTHAFRICA", "INDIA":"SOUTHASIA"}
 
     # Load reference footprints
@@ -112,8 +113,8 @@ def cut_and_save_met_data(date,
     """
     dims = {"ExtraE":"longitude", "ExtraW":"longitude", "ExtraN":"latitude",  "ExtraS":"latitude"}
     for extra in list(dims.keys()):
-        if len(glob.glob(met_datadir+extra+"_"+date+"*"))>0:
-            extra_met = xr.open_mfdataset(sorted(glob.glob(met_datadir+extra+"_"+date+"*")), combine='by_coords', parallel=True, chunks = {"level":1})
+        if len(glob.glob(met_datadir[:-10]+extra+"_"+date+"*"))>0:
+            extra_met = xr.open_mfdataset(sorted(glob.glob(met_datadir[:-10]+extra+"_"+date+"*")), combine='by_coords', parallel=True, chunks = {"level":1})
 
             met = xr.concat([met, extra_met], dim=dims[extra])
 
@@ -121,7 +122,24 @@ def cut_and_save_met_data(date,
 
     if verbose: print("Cutting met to size")     
 
+    # just expanding met by interpolating even further away from the domain...
+    print(expand_met)
+    if expand_met["lat"] > 0 or expand_met["lon"] > 0:
+        delta_lon = 0.352
+        delta_lat = 0.234
+
+        lat_values = np.array(sorted(list(met.latitude.values) + [np.max(met.latitude.values)+delta_lat*i for i in range(expand_met["lat"])]+ [np.min(met.latitude.values)-delta_lat*i for i in range(expand_met["lat"])]))
+
+        lon_values = np.array(sorted(list(met.longitude.values) + [np.max(met.longitude.values)+delta_lon*i for i in range(expand_met["lon"])]+ [np.min(met.longitude.values)-delta_lon*i for i in range(expand_met["lon"])]))
+
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            met = met.drop_duplicates(...)
+
+        met = met.interp(latitude=sorted(lat_values), longitude=sorted(lon_values), method="nearest", kwargs={"fill_value": "extrapolate"})
+
+
     met_release_idxs = get_release_idxs(fp_data_full, domain_lats = met.latitude.values, domain_lons = met.longitude.values)
+
 
     # cut the satellite meteorology for each jump in list and save at corresponding path
     if type(met_jump) == list:
@@ -151,6 +169,8 @@ class LoadSatelliteData:
         Have only tested with even numbers!
         - metsize: size for the meteorology to be cut to, as an int. In most occasions metsize should be equal to size
         - freq: int, frequency of the data to load. freq=1 will load all the datapoints, freq=2 will load one in every two etc. Useful to reduce memory usage. Many datapoints are very close in time and space (and therefore very similar) so using freq particularly in low values (<10) does not affect much the quality of the dataset
+        - sampling_mode: if "regular", subsamples footprints regularly (e.g. one in every two, sequentially with freq=2). if random, subsamples N/freq footprints randomly (where N is the total number of footprints). default is "regular"
+        - freq_offset: if using sampling_mode="regular", offsets the start of the regular sampling, e.g. freq=2 and freq_offset=0 will sample even footprints, and freq_offset=1 will sample uneven footprints
         - select_time_index: list or 1D np array of timestamps to be selected as datapoints. Applied after sampling with freq (or pass freq=1 to load all footprints)
         - fp_datadir: str, directory for footprints. default directs to ACRG folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
         - met_datadir: str, directory for meteorology. default directs to ACRG meteorology folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/name_of_your_choice_". If passing met that has already been processed and cut, pass cut_met as false. Note that if passing processed meteorology, it does not need to be exactly the same size as metsize - the function will reshape it as long as size of loaded meteorology >= metsize
@@ -176,7 +196,7 @@ class LoadSatelliteData:
         - get_binary_threshold(threshold=0.001, zero=0, one=1): adds attribute fp_binary, of the same shape as fp_data with a "binarisation" applied - all values above threshold are assigned value one, and all values below value zero.
     """
 
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, met_jump=0, metsize=None, met_levels = [], met_variables= [], freq=1, verbose = False, met_datadir = None, fp_datadir = None, topog=None,fill_outofdomain_with="nans", select_time_index=[], sampling_mode="regular"):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, met_jump=0, metsize=None, met_levels = [], met_variables= [], freq=1, freq_offset=0, verbose = False, met_datadir = None, fp_datadir = None, topog=None,fill_outofdomain_with="nans", select_time_index=[], sampling_mode="regular"):
         
         #### check domains
         if domain==None:
@@ -190,6 +210,8 @@ class LoadSatelliteData:
                 else:    
                     print("If domain is not passed custom path for met_datadir should be passed.")
                     self.domain=""
+        else:
+            self.domain = domain
                    
         self.year = year
         self.date = self.year
@@ -221,7 +243,7 @@ class LoadSatelliteData:
         self.original_fp_time_length = len(self.fp_data_full.time.values)
         if freq>1 and sampling_mode=="regular":
             print(f"reduced the number of datapoints by frequency {freq}")
-            self.fp_data_full = self.fp_data_full.sel(time=self.fp_data_full.time.values[::freq])
+            self.fp_data_full = self.fp_data_full.sel(time=self.fp_data_full.time.values[freq_offset::freq])
         
         elif freq>1 and sampling_mode=="random":
             print(f"reduced the number of datapoints by frequency {freq}, chosen at random")
@@ -257,7 +279,7 @@ class LoadSatelliteData:
             self.met = xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk})
 
         # load already processed met data
-        assert "lat_coords" in self.met.coords, "this meteorology does not seem to have been cut! use the cut_met_data function first"
+        assert "lat_coords" in self.met.coords, "this meteorology does not seem to have been cut! use the cut_and_save_met_data function first"
 
         print("met levels", met_levels)
         if len(met_levels)>0:
@@ -312,12 +334,16 @@ class LoadSatelliteData:
             print(f"loading topography from {topog}")
             topog_file = xr.load_dataset(topog)
 
-            if "onlyvalid" in self.met_datadir:
+
+            land_cover_file = xr.load_dataset("/group/chemistry/acrg/LPDM/topog_NAME/land_cover.nc")
+            
+            # if "onlyvalid" in self.met_datadir:
+            if "200" in self.met_datadir:
                 expand_topog=True
             else:
                 expand_topog=False
 
-            self.topog, self.failed_idxs = self._cut_topog(topog_file, expand_topog)
+            self.topog, self.land_cover, self.disaggregated_land_cover, self.failed_idxs = self._cut_topog(topog_file, land_cover_file, expand_topog)
             print(f"remove {len(self.failed_idxs)} failed idxs for topog")
             print(self.failed_idxs)
             self.remove_indeces(self.failed_idxs)
@@ -346,14 +372,14 @@ class LoadSatelliteData:
         self.fp_data = self.fp_data[idxs2,:]
         self.release_idxs = self.release_idxs[idxs2,:]
 
-    def _cut_topog(self, topog_file, expand_topog=False):
+    def _cut_topog(self, topog_file, land_cover_file, expand_topog=False):
         # cut topography to the same domain covered by the cut footprints (ie a sizexsize square centered around measurement point). 
         # If expand_topog=False, assumes all cut footprints are within the fp domain. If expand_topog=True, loads a bigger domain of the topography to allow for footprints that escape the fp domain
         if expand_topog:
             print("expanding topography to out-of-footprint domain! careful, this is very case-specific")
             delta_lon = 0.352
             delta_lat = 0.234
-            expand_by = 50
+            expand_by = 150
             lat_values = list(self.fp_data_full.lat.values)
             lon_values = list(self.fp_data_full.lon.values)
             lat_values = np.array(sorted(lat_values + [np.max(lat_values)+delta_lat*i for i in range(expand_by)]+ [np.min(lat_values)-delta_lat*i for i in range(expand_by)]))
@@ -364,19 +390,42 @@ class LoadSatelliteData:
         
         # interpolate topography to domain (either fp_domain if not expand_topog, or wider if expand_topog
         self.topog_file = topog_file.interp(latitude=lat_values, longitude=lon_values)
+        land_cover_file = land_cover_file.assign_coords(lon=(((land_cover_file.lon + 180) % 360) - 180))
+        self.land_cover_file = land_cover_file.interp(lat=lat_values, lon=lon_values, method="nearest")
+        self.land_cover_file = self.land_cover_file.transpose("lat", "lon","pseudo_level")
+
         topog_release_idxs = get_release_idxs(self.fp_data_full, domain_lats=self.topog_file.latitude.values, domain_lons=self.topog_file.longitude.values)
         half = int(self.size/2)
         full_topog=np.zeros_like(self.fp_data)
+        full_landcover=np.zeros_like(self.fp_data)
+
         full_topog=np.reshape(full_topog, full_topog.shape[:-1] + (self.size, self.size))
+        full_landcover=np.reshape(full_landcover, full_landcover.shape[:-1] + (self.size, self.size))
+        disaggregated_landcover = np.zeros((np.shape(self.fp_data)[0], self.size, self.size, 10)) # sea mask + nine types of land cover
+
         failed_idxs = []
         for rel_unique in np.unique(topog_release_idxs, axis=0):
             idxs = np.where((topog_release_idxs == rel_unique).all(axis=1))[0]  
             try:
                 full_topog[idxs, :,:] = self.topog_file.surface_altitude.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half][np.newaxis, :]
-            except:
+                full_landcover[idxs, :,:] = self.land_cover_file.landcover_type.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half][np.newaxis, :]  
+
+                disaggregated_landcover[idxs, :,:,0] = self.land_cover_file.land_binary_mask.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half][np.newaxis, :]   
+                disaggregated_landcover[idxs, :,:,1:] = self.land_cover_file.landcover_fraction.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half,:][np.newaxis, :]   
+
+
+            except IndexError:
                 full_topog[idxs, :,:] = np.zeros_like(full_topog[idxs, :,:])
+                full_landcover[idxs, :,:] = np.zeros_like(full_landcover[idxs, :,:])
                 failed_idxs = failed_idxs + list(idxs)
-        return full_topog, failed_idxs
+            
+        
+        # reverse sea mask so that 1 is sea and zero is land
+        disaggregated_landcover[:, :,:,0] = 1 - disaggregated_landcover[:, :,:,0] 
+        # remove the nans that in the original file show the sea mask
+        disaggregated_landcover[:, :,:,1:] = np.nan_to_num(disaggregated_landcover[:, :,:,1:], copy=False)
+
+        return full_topog, full_landcover, disaggregated_landcover, failed_idxs
 
     def remove_indeces(self, nan_idxs):
         self.fp_data_full = self.fp_data_full.sel(time=np.delete(self.fp_data_full.time.values, nan_idxs))
@@ -751,6 +800,7 @@ def cut_emissions_data(flux, fp_full, size):
 
     return flux_cut
 
+
 def cut_satellite_data(fp_full, size, returnlatlons = False, fill_bads_with="all_nans", return_as="array", verbose=True, fill_latlons=True):
     """
     cuts footprint to size around release point and returns as a flattened np array (n_samples, size**2)
@@ -891,7 +941,7 @@ def cut_satellite_data(fp_full, size, returnlatlons = False, fill_bads_with="all
 
 
 
-def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels=None, relevant_variables=None, save=False, savepath=None, verbose=False, add_wind_direction=True, delete_nans=False):
+def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels=None, relevant_variables=None, save=False, savepath=None, verbose=False, add_wind_direction=True, delete_nans=False, attrs_dict={}):
     """
     cuts the meteorology to right shape and format, and either saves or returns as xarray
 
@@ -996,7 +1046,7 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
     data_vars["lat_coords"] = (["time", "lat"], metlats)
     data_vars["lon_coords"] = (["time", "lon"], metlons)
     if verbose: print("creating new array with cut vars")
-    met_cut = xr.Dataset(data_vars=data_vars, coords=coords)
+    met_cut = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs_dict)
     met_cut = met_cut.set_coords(("lat_coords", "lon_coords"))
 
     if add_wind_direction:
@@ -1018,9 +1068,10 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
     return met_cut
 
 
-def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_nopast, others=[], topog=True, latlon_fp=0, transform=True, add_current_time=True, centered_coords=False, return_idx=False):
+
+def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_nopast, others=[], jumps_reduced=[], variables_reduced=[], topog=True, latlon_fp=0, transform=True, add_current_time=True, centered_coords=False, return_idx=False, relative_met=False):
     """
-    get inputs from LoadSatelliteData object and format as array of size (time, variables)
+    LATEST VERSION - get inputs from LoadSatelliteData object and format as array of size (time, variables)
 
     Inputs:
         - data - LoadSatelliteData object
@@ -1034,6 +1085,8 @@ def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_
         - transform - bool, if False return data with shape (size,size, time, features), if True return with shape (time, size*size, features) 
         - centered_coords - bool, only used if x_coords and/or y_coords are in others. If True, x/y coords have the release point as (0,0), if false the south-west corner is (0,0) and the release point is (size/2, size/2) 
         - return_idx - bool, if True return node indeces
+
+        - relative_met: if false, return met at t-xh for each x in jumps, if true return met relative to t0 (ie t0, tx - t0 ...)
 
     Returns:
         - latlons - latlon grid to pass to model
@@ -1054,6 +1107,13 @@ def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_
 
     all_vars = []
     var_names = []
+    og_jumps = jumps.copy()
+
+    jumps = og_jumps+jumps_reduced
+
+    if relative_met:
+        assert (0 in jumps) or add_current_time, "jump 0 is needed to do relative met!"
+
     if not (0 in jumps) and add_current_time:
         jumps.append(0) # append 0 to get present met too
     jumps=list(sorted(set(jumps)))
@@ -1063,7 +1123,443 @@ def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_
     mets={}
     mets[0] = data.met
     valid_timestamps = np.copy(data.met.time.values)
-    already_updated_jumps=[]
+    for j in jumps:
+        if j!=0:
+            met_files = glob.glob(f"{data.met_datadir}{j}h_{data.date}*")
+            if len(met_files)==0:
+                print(f"couldnt find files for jump {j} at {data.met_datadir}{j}h_")
+            else:
+                time_chunk = round(1000000/(data.size*data.size), -2)
+                with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+                    #mets[j] = xr.open_mfdataset(met_files, parallel=True, chunks = {"level":1,"time":time_chunk})
+                    mets[j] = xr.open_mfdataset(sorted(met_files), combine='by_coords', data_vars="minimal", compat="override", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk})
+
+                if len(mets[j].lat) > data.metsize:
+                    print(f"file for jump {j}h is bigger than metsize, cutting down")
+                    diff = int((len(mets[j].lat) - data.metsize)/2)
+                    cut_idxs =  mets[j].lat.values[diff:-diff]
+                    mets[j] = mets[j].sel(lat=cut_idxs, lon=cut_idxs)
+                    mets[j] = mets[j].assign_coords({"lat":list(range(data.metsize)), "lon":list(range(data.metsize))})
+                    print(mets[j])
+
+                try:
+                    # select met
+                    print(j, len(mets[j].time), len(mets[j].lat))
+                    mets[j] = mets[j].sel(time=(pd.DatetimeIndex(data.fp_data_full.time.values) - pd.Timedelta(f"{j}H")))
+                    print(j, len(mets[j].time), len(mets[j].lat))
+                except KeyError:
+                    print("in here")
+                    # there was a problem with the time indeces - likely because the first datapoints are outside of the range
+                    intersect, idxs1, idxs2 = np.intersect1d(pd.DatetimeIndex(data.fp_data_full.time.values) - pd.Timedelta(f"{j}H"), pd.DatetimeIndex(mets[j].time.values), return_indices=True)
+                    mets[j] = mets[j].sel(time=intersect)
+                    valid_timestamps = pd.DatetimeIndex(np.copy(intersect))+pd.Timedelta(f"{j}H")
+                print(j, len(mets[j].time), len(mets[j].lat), len(valid_timestamps))
+
+                if np.any(mets[j].x_wind.isnull()):
+                    print(f"there are some nans in the met for jump {j}")
+                    mets[j] = mets[j].dropna(dim="time")
+                    valid_timestamps = pd.DatetimeIndex(np.copy(mets[j].time.values))+pd.Timedelta(f"{j}H")
+
+        if "wind_speed" not in list(mets[j].keys()):
+            print(f"wind speed isnt present in {j}h data, adding now")
+            mets[j]["wind_angle"]=np.arctan2(-mets[j].x_wind,-mets[j].y_wind)
+            mets[j]["wind_speed"]=np.sqrt(mets[j].x_wind**2 + mets[j].y_wind**2)
+            print("done?")
+
+    print(len(valid_timestamps), len(data.met.time.values))
+    if len(valid_timestamps) < len(data.met.time.values):
+        print(f"deleting {len(mets[0].time.values) - len(valid_timestamps)} nan indeces (in the time axis) from jump mets and from the data object")
+        # indeces that are nan wrt the original data:
+        time_idx_nan = []
+        for n,t in enumerate(data.met.time.values):
+            if t not in valid_timestamps:
+                time_idx_nan.append(n)
+
+        ## keep from here
+
+        for j in jumps:
+            print(j, len(mets[j].time), len(mets[j].lat))
+            mets[j] = mets[j].sel(time=pd.DatetimeIndex(valid_timestamps) - pd.Timedelta(f"{j}H"))
+            print(j, len(mets[j].time), len(mets[j].lat))
+        
+        data.fp_data = np.delete(data.fp_data, np.unique(time_idx_nan), axis=0)
+        data.fp_lats = np.delete(data.fp_lats, np.unique(time_idx_nan), axis=0)
+        data.fp_lons = np.delete(data.fp_lons, np.unique(time_idx_nan), axis=0)
+        data.topog = np.delete(data.topog, np.unique(time_idx_nan), axis=0)
+        data.met = data.met.sel(time=valid_timestamps)
+        if hasattr(data, "fp_binary"):
+            data.fp_binary = np.delete(data.fp_binary, np.unique(time_idx_nan), axis=0)
+
+
+    print(len(data.met.time))
+
+    for j in jumps:
+        print(j, len(mets[j].time), len(mets[j].lat))
+        
+
+    n_vars_with_past =(len(jumps))*np.sum([len(variables_past[var]) for var in variables_past])
+    if len([len(variables_nopast[var]) for var in variables_nopast])==0:
+        n_vars_no_past=0
+    else:
+        n_vars_no_past =np.sum([len(variables_nopast[var]) for var in variables_nopast]) 
+
+    
+    n_vars_reduced =(len(jumps_reduced))*np.sum([len(variables_reduced[var]) for var in variables_reduced])
+    
+    n_variables = n_vars_with_past+n_vars_no_past+len(others)+topog+n_vars_reduced
+
+    if "full_land_cover" in others or "binary_land_cover" in others:
+        # there are nine types of land cover, plus sea-land mask
+        # ignoring the last type of land cover (ICE) as this doesn't apply in most domains!
+        n_variables = n_variables + 8
+
+    if "relative_time" in others:
+        n_variables = n_variables + len(jumps) -  1 
+            ## as relative time adds one uniform variable to all nodes to signpost time of the inputs with respect to release - ie met at release will have variable with value 0, six hours before will have value 6 etc
+            # this messes up the training big time! do not pass
+    
+    if "normalised_time_of_year" in others:
+        n_variables = (n_variables-1) + 2*len(jumps)   
+    if "normalised_time_of_day" in others:
+        n_variables = (n_variables-1) + 2*len(jumps)  
+        # this messes up the training big time! do not pass
+    print(n_variables)
+    all_vars = np.zeros((np.shape(data.fp_lats)[1], np.shape(data.fp_lons)[1], len(data.met.time), int(n_variables)))
+
+    
+    col = 0
+    for v in variables_past:
+        for njump, jump in enumerate(og_jumps):
+            #print(v, jump)
+            mets[jump][v].load()
+            for lev in variables_past[v]:
+                #print(col, v, jump, lev)
+                if hasattr(mets[jump][v], "levels"):
+                    print(jump, v, lev)
+                    cutmet = mets[jump][v].sel(levels=lev).values
+                    vartype="3D"
+                else:
+                    print(jump, v)
+                    cutmet = mets[jump][v].values
+                    vartype="2D"
+                #print(mets[jump][v])
+                #print(np.shape(cutmet))
+                if relative_met and njump>0:
+                    all_vars[:,:,:,col] = cutmet - all_vars[:,:,:,col-njump]
+
+                    var_names.append({"var":v, "level":lev, "type": vartype, "time":f"t-{jump} - t0"})
+                else:
+                    all_vars[:,:,:,col] = cutmet
+                
+                    var_names.append({"var":v, "level":lev, "type": vartype, "time":f"t-{jump}"})
+                col = col+1
+
+    for v in variables_nopast:
+        for lev in variables_nopast[v]:
+            if hasattr(mets[0][v], "levels"):
+                cutmet = mets[0][v].sel(levels=lev).values
+                var_names.append({"var":v, "level":lev, "time":"present", "type": "3D"})
+            else:
+                cutmet = data.met[v].values
+                var_names.append({"var":v, "level":lev, "time":"present", "type": "2D"})
+                if lev!=0:
+                    print("Careful! This varible has no levels but you passed a level different from 0")
+            
+            all_vars[:,:,:,col] = cutmet
+            col=col+1
+    print("brrr", len(variables_reduced), len(jumps_reduced))
+    if len(variables_reduced)>0 and len(jumps_reduced)>0:
+        for v in variables_reduced:
+            for njump, jump in enumerate(jumps_reduced):
+                print("here", jump)
+                #print(v, jump)
+                mets[jump][v].load()
+                for lev in variables_past[v]:
+                    #print(col, v, jump, lev)
+                    if hasattr(mets[jump][v], "levels"):
+                        print(jump, v, lev)
+                        cutmet = mets[jump][v].sel(levels=lev).values
+                        vartype="3D"
+                    else:
+                        print(jump, v)
+                        cutmet = mets[jump][v].values
+                        vartype="2D"
+                    #print(mets[jump][v])
+                    #print(np.shape(cutmet))
+                    if relative_met and njump>0:
+                        all_vars[:,:,:,col] = cutmet - all_vars[:,:,:,col-njump]
+
+                        var_names.append({"var":v, "level":lev, "type": vartype, "time":f"t-{jump} - t0"})
+                    else:
+                        all_vars[:,:,:,col] = cutmet
+                    
+                        var_names.append({"var":v, "level":lev, "type": vartype, "time":f"t-{jump}"})
+                    col = col+1
+
+
+    if len(others) > 0:
+        for oth in others:
+            ## add option for  solar radiation, orography, land-sea mask
+            var_names.append({"var":oth, "type": "not met"})
+
+            numRows, numCols = np.shape(data.fp_lats)[1], np.shape(data.fp_lons)[1]
+            if oth == "lat_coords":
+                x =np.copy(data.fp_lats)
+                x = x.reshape(1,len(x), numCols)
+                x = x.repeat(numRows, axis=0)
+                coord = np.transpose(x, [0,2,1])                
+                all_vars[:,:,:,col] = coord
+                del x, coord
+                col+=1
+                
+            elif oth == "lon_coords":
+                y =np.copy(data.fp_lons)
+                y = y.reshape(len(y), numRows,1)
+                coord = y.repeat(numCols, axis=2)
+                coord = np.transpose(y, [1,2,0]) 
+                all_vars[:,:,:,col] = coord
+                del y, coord
+                col+=1
+            elif oth == "sin_lat_coords":
+                x = np.sin(np.copy(data.fp_lats))*np.pi / 180
+                x = x.reshape(1,len(x), numCols)
+                x = x.repeat(numRows, axis=0)
+                coord = np.transpose(x, [0,2,1])   
+                print(np.shape(coord))
+                all_vars[:,:,:,col] = coord
+                del x, coord
+                col+=1
+                
+            elif oth == "sin_lon_coords":
+                y = np.sin(np.copy(data.fp_lons)) * np.pi / 180
+                y = y.reshape(len(y), numRows,1)
+                coord = y.repeat(numCols, axis=2)
+                coord = np.transpose(y, [1,2,0]) 
+                all_vars[:,:,:,col] = coord
+                del y, coord
+                col+=1
+
+            elif oth == "cos_lat_coords":
+                x = np.cos(np.copy(data.fp_lats))*np.pi / 180
+                x = x.reshape(1,len(x), numCols)
+                x = x.repeat(numRows, axis=0)
+                coord = np.transpose(x, [0,2,1])   
+                all_vars[:,:,:,col] = coord
+                del x, coord
+                col+=1
+                
+            elif oth == "cos_lon_coords":
+                y = np.cos(np.copy(data.fp_lons)) * np.pi / 180
+                y = y.reshape(len(y), numRows,1)
+                coord = y.repeat(numCols, axis=2)
+                coord = np.transpose(y, [1,2,0]) 
+                all_vars[:,:,:,col] = coord
+                del y, coord
+                col+=1
+
+            elif oth == "x_coords":
+                grid_coords = np.meshgrid(np.arange(np.shape(data.fp_lats)[1]), np.arange(np.shape(data.fp_lons)[1]))     
+                coord = np.dstack([grid_coords[0]]*np.shape(all_vars)[2])  
+                if centered_coords:
+                    coord = coord - int(data.size/2)    
+                all_vars[:,:,:,col] = coord
+                col+=1
+            elif oth == "y_coords":
+                grid_coords = np.meshgrid(np.arange(np.shape(data.fp_lats)[1]), np.arange(np.shape(data.fp_lons)[1]))            
+                coord = np.dstack([grid_coords[1]]*np.shape(all_vars)[2])    
+                if centered_coords:
+                    coord = coord - int(data.size/2)    
+                all_vars[:,:,:,col] = coord
+                col+=1
+            elif oth=="binary_centre":
+                centre = int(data.size/2)
+                grid = np.zeros((numRows, numCols)) -1
+                grid[centre, centre] = 1
+                coord = np.dstack([grid]*np.shape(all_vars)[2])               
+                all_vars[:,:,:,col] = coord
+                col+=1
+            elif oth=="distance_centre":
+                ## distance centre is not real km currently, it's in arbitrary units
+                centre = int(np.shape(data.fp_lats)[1]/2)
+                grid_coords = np.meshgrid(np.arange(numRows), np.arange(numCols)) 
+                distance = np.sqrt(np.abs(grid_coords[0]-centre)**2 + np.abs(grid_coords[1]-centre)**2)
+                coord = np.dstack([distance]*np.shape(all_vars)[2])               
+                all_vars[:,:,:,col] = coord
+                col+=1
+            elif oth=="normalised_time_of_day":
+                _ = var_names.pop() 
+                for j in jumps:
+                    t = pd.DatetimeIndex(mets[j].time.values)
+                    seconds = (t.hour * 60 + t.minute) * 60 + t.second
+                    seconds = np.tile(seconds, (np.shape(all_vars)[0],np.shape(all_vars)[1],1))
+                    seconds_in_day = 86400
+                    all_vars[:,:,:,col] = np.sin(2*np.pi*seconds/seconds_in_day)
+                    col+=1
+                    all_vars[:,:,:,col] = np.cos(2*np.pi*seconds/seconds_in_day)
+                    col+=1
+                    var_names.append({"var":"sin_time_day", "type": "not met", "time":f"t-{j}"})
+                    var_names.append({"var":"cos_time_day", "type": "not met", "time":f"t-{j}"})
+
+
+            elif oth=="normalised_day_of_year":
+                _ = var_names.pop() 
+                t = pd.DatetimeIndex(mets[0].time.values)
+                hours = (t - pd.to_datetime(t.year, format='%Y')).days/365
+                hours = np.tile(hours, (np.shape(all_vars)[0],np.shape(all_vars)[1],1))
+                all_vars[:,:,:,col] = np.sin(2*np.pi*hours)
+                col+=1
+                all_vars[:,:,:,col] = np.cos(2*np.pi*hours)
+                col+=1
+                var_names.append({"var":"sin_time_year", "type": "not met", "time":f"0"})
+                var_names.append({"var":"cos_time_year", "type": "not met", "time":f"0"})
+
+            elif oth=="normalised_time_of_year":
+                _ = var_names.pop() 
+                for j in jumps:
+                    t = pd.DatetimeIndex(mets[j].time.values)
+                    hours = (t - pd.to_datetime(t.year, format='%Y')).days*24 + (t - pd.to_datetime(t.year, format='%Y')).seconds/3600
+                    hours_in_year = 8760
+                    hours = np.tile(hours, (np.shape(all_vars)[0],np.shape(all_vars)[1],1))
+                    all_vars[:,:,:,col] = np.sin(2*np.pi*hours/hours_in_year)
+                    col+=1
+                    all_vars[:,:,:,col] = np.cos(2*np.pi*hours/hours_in_year)
+                    col+=1
+                    var_names.append({"var":"sin_time_year", "type": "not met", "time":f"t-{j}"})
+                    var_names.append({"var":"cos_time_year", "type": "not met", "time":f"t-{j}"})
+
+
+            elif oth=="relative_time":
+                _ = var_names.pop() 
+                for j in jumps:
+                    grid = np.zeros((numRows, numCols)) + j
+                    coord = np.dstack([grid]*np.shape(all_vars)[2])  
+                    all_vars[:,:,:,col] = coord
+                    col+=1
+                    var_names.append({"var":oth, "type": "not met", "time":f"t-{j}"})
+            elif "land_cover" in oth:
+                _ = var_names.pop() 
+                continue
+            else:
+                print(f"{oth} not recognised!")   
+                _ = var_names.pop() 
+
+              
+    if topog:
+        if hasattr(data, "topog"):
+            all_vars[:,:,:,-1] = np.transpose(data.topog, [1,2,0])
+        else:
+            print("topog was passed as true but there is no topography in the data class. Load the data again using custom topog or 'default'. Last column of input will be empty ")
+
+        if "sea_mask" in others:
+            if hasattr(data, "disaggregated_land_cover"):
+                # ignoring the last type of land cover (ICE) as this doesn't apply in most domains!
+                all_vars[:,:,:,col] = np.transpose(data.disaggregated_land_cover[:,:,:,0], [1,2,0])
+                var_names.append({"var":f"binary sea mask", "type": "not met"})
+            else:
+                print("sea_mask was passed as true but there is no disaggregated_land_cover in the data class. the corresponding column in the inputs will be empty!")        
+
+        if "land_cover" in others:
+            if hasattr(data, "land_cover"):
+                all_vars[:,:,:,-2] = np.transpose(data.land_cover, [1,2,0])
+            else:
+                print("land_cover was passed as true but there is no land_cover in the data class. Second to last column of input will be empty ")                                 
+            
+            var_names.append({"var":"land_cover", "type": "not met"}) 
+
+        if "full_land_cover" in others:
+            if hasattr(data, "disaggregated_land_cover"):
+                # ignoring the last type of land cover (ICE) as this doesn't apply in most domains!
+                for pseudolevel in range(9):
+                    all_vars[:,:,:,col] = np.transpose(data.disaggregated_land_cover[:,:,:,pseudolevel], [1,2,0])
+                    col = col+1
+
+                    var_names.append({"var":f"land_cover pseudolevel {pseudolevel}", "type": "not met"})
+            else:
+                print("full_land_cover was passed as true but there is no disaggregated_land_cover in the data class. all land cover related cols of returned inputs will be empty!")                                 
+        print(others)
+        print("binary_land_cover" in others)
+        if "binary_land_cover" in others:
+            if hasattr(data, "disaggregated_land_cover"):
+                # ignoring the last type of land cover (ICE) as this doesn't apply in most domains!
+                for pseudolevel in range(9):
+                    all_vars[:,:,:,col] = 1*np.transpose(data.land_cover==pseudolevel, [1,2,0])
+                    col = col+1
+
+                    var_names.append({"var":f"binary_land_cover pseudolevel {pseudolevel}", "type": "not met"})
+            else:
+                print("full_land_cover was passed as true but there is no disaggregated_land_cover in the data class. all land cover related cols of returned inputs will be empty!")                 
+
+             
+
+
+        var_names.append({"var":"topog", "type": "not met"}) 
+
+
+    latlons, idx_latlons = get_grid(data, latlon_fp)
+
+    if transform:
+        all_vars = np.reshape(all_vars, (np.shape(all_vars)[0]*np.shape(all_vars)[1], np.shape(all_vars)[2], np.shape(all_vars)[3]))
+        all_vars = np.transpose(all_vars, [1,0,2])
+    
+    if return_idx:
+        return latlons, idx_latlons, all_vars, var_names, data
+    else:
+        return latlons, all_vars, var_names, data
+
+
+
+
+def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_nopast, others=[], topog=True, latlon_fp=0, transform=True, add_current_time=True, centered_coords=False, return_idx=False, relative_met=False):
+    """
+    get inputs from LoadSatelliteData object and format as array of size (time, variables)
+
+    Inputs:
+        - data - LoadSatelliteData object
+        - variables_past - dictionary of variables to load for all times in jumps with format {"varname":levels to load} eg {{"x_wind":[3,9]} 
+        - jumps - list of ints. Met for vars in variables_past will be used as inputs for t-jump for all jumps, where t is the timestamp of the footprint
+        - add_current_time - wether to add the meteorology at the timestamps of the footprint (just adds 0 to jumps if it isnt there already)
+        - variables_nopast - dictionary of variables to load only at t=0 with format {"varname":levels to load} eg {{"x_wind":[3,9]} 
+        - others - list of other non-meterological variables to load. see below for names and explanation
+        - topog - bool, if True add topography at each lat/lon as a feature
+        - latlon_fp - int, index of footprint to use as reference to create the latlon grid. default is 0, first footprint in the dataset
+        - transform - bool, if False return data with shape (size,size, time, features), if True return with shape (time, size*size, features) 
+        - centered_coords - bool, only used if x_coords and/or y_coords are in others. If True, x/y coords have the release point as (0,0), if false the south-west corner is (0,0) and the release point is (size/2, size/2) 
+        - return_idx - bool, if True return node indeces
+
+        - relative_met: if false, return met at t-xh for each x in jumps, if true return met relative to t0 (ie t0, tx - t0 ...)
+
+    Returns:
+        - latlons - latlon grid to pass to model
+        - idx_latlons - node indeces - only returned if return_idx=True
+        - all_vars - features, shape depends on transform
+        - var_names - list containing information about each of the features, of length len(features). Each entry is a dictionary with attributes "var" (name), "level", "type" (3D if it's a variable with levels, 2D otherwise, "not met" if it's topography or others) and "time" ("t-0" indicates the meteorology is for the time of the footprint, "t-6" six hours before and so on)
+        - data - the LoadSatelliteData object, with any updates to the datasets if there are nans in the past data 
+
+    Accepted values in others:
+        - lat_coords/lon_coords: lat/lon coordinate for each node
+        - sin_lat_coords/sin_lon_coords/cos_lat_coords/cos_lon_coords: useful mostly if working with a big/whole world domain to encode the sphere
+        - x_coords/y_coords: x/y index of each node (see centered_coords above)
+        - binary_centre: zero for each node except 1 for release node
+        - distance_centre: euclidean distance to the release node (using x/y coords, not lat/lon coords for speed of calculation)
+        - normalised_time_of_day and normalised_time_of_year: sin and cos of the time of the normalised time of the day and year. Meant to encode cyclical patterns. For some reason it really messes up with training, do not use!
+        - relative_time - ignore too
+    """
+
+    all_vars = []
+    var_names = []
+
+    if relative_met:
+        assert (0 in jumps) or add_current_time, "jump 0 is needed to do relative met!"
+
+    if not (0 in jumps) and add_current_time:
+        jumps.append(0) # append 0 to get present met too
+    jumps=list(sorted(set(jumps)))
+    print(f"hours back in time: {jumps}")
+
+    # mets contains all of the met objects, the key is the jump
+    mets={}
+    mets[0] = data.met
+    valid_timestamps = np.copy(data.met.time.values)
     for j in jumps:
         if j!=0:
             met_files = glob.glob(f"{data.met_datadir}{j}h_{data.date}*")
@@ -1146,6 +1642,11 @@ def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_
     
     n_variables = n_vars_with_past+n_vars_no_past+len(others)+topog
 
+    if "full_land_cover" in others:
+        # there are nine types of land cover, plus sea-land mask
+        # ignoring the last type of land cover (ICE) as this doesn't apply in most domains!
+        n_variables = n_variables + 8
+
     if "relative_time" in others:
         n_variables = n_variables + len(jumps) -  1 
             ## as relative time adds one uniform variable to all nodes to signpost time of the inputs with respect to release - ie met at release will have variable with value 0, six hours before will have value 6 etc
@@ -1162,7 +1663,7 @@ def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_
     
     col = 0
     for v in variables_past:
-        for jump in jumps:
+        for njump, jump in enumerate(jumps):
             #print(v, jump)
             mets[jump][v].load()
             for lev in variables_past[v]:
@@ -1172,13 +1673,19 @@ def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_
                     cutmet = mets[jump][v].sel(levels=lev).values
                     vartype="3D"
                 else:
+                    print(jump, v)
                     cutmet = mets[jump][v].values
                     vartype="2D"
                 #print(mets[jump][v])
                 #print(np.shape(cutmet))
-                all_vars[:,:,:,col] = cutmet
+                if relative_met and njump>0:
+                    all_vars[:,:,:,col] = cutmet - all_vars[:,:,:,col-njump]
+
+                    var_names.append({"var":v, "level":lev, "type": vartype, "time":f"t-{jump} - t0"})
+                else:
+                    all_vars[:,:,:,col] = cutmet
                 
-                var_names.append({"var":v, "level":lev, "type": vartype, "time":f"t-{jump}"})
+                    var_names.append({"var":v, "level":lev, "type": vartype, "time":f"t-{jump}"})
                 col = col+1
 
     for v in variables_nopast:
@@ -1299,6 +1806,19 @@ def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_
                     var_names.append({"var":"sin_time_day", "type": "not met", "time":f"t-{j}"})
                     var_names.append({"var":"cos_time_day", "type": "not met", "time":f"t-{j}"})
 
+
+            elif oth=="normalised_day_of_year":
+                _ = var_names.pop() 
+                t = pd.DatetimeIndex(mets[0].time.values)
+                hours = (t - pd.to_datetime(t.year, format='%Y')).days/365
+                hours = np.tile(hours, (np.shape(all_vars)[0],np.shape(all_vars)[1],1))
+                all_vars[:,:,:,col] = np.sin(2*np.pi*hours)
+                col+=1
+                all_vars[:,:,:,col] = np.cos(2*np.pi*hours)
+                col+=1
+                var_names.append({"var":"sin_time_year", "type": "not met", "time":f"0"})
+                var_names.append({"var":"cos_time_year", "type": "not met", "time":f"0"})
+
             elif oth=="normalised_time_of_year":
                 _ = var_names.pop() 
                 for j in jumps:
@@ -1322,25 +1842,45 @@ def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_
                     all_vars[:,:,:,col] = coord
                     col+=1
                     var_names.append({"var":oth, "type": "not met", "time":f"t-{j}"})
-            elif oth=="land_sea_mask":
+            elif oth=="land_cover" or oth=="full_land_cover":
+                _ = var_names.pop() 
                 continue
             else:
                 print(f"{oth} not recognised!")   
                 _ = var_names.pop() 
 
               
-
     if topog:
         if hasattr(data, "topog"):
             all_vars[:,:,:,-1] = np.transpose(data.topog, [1,2,0])
         else:
             print("topog was passed as true but there is no topography in the data class. Load the data again using custom topog or 'default'. Last column of input will be empty ")
 
-        if hasattr(others, "land_sea_mask"):
-            all_vars[:,:,:,-2] = np.transpose(data.topog, [1,2,0])                                     
+        if "land_cover" in others:
+            if hasattr(data, "land_cover"):
+                all_vars[:,:,:,-2] = np.transpose(data.land_cover, [1,2,0])
+            else:
+                print("land_cover was passed as true but there is no land_cover in the data class. Second to last column of input will be empty ")                                 
+            
+            var_names.append({"var":"land_cover", "type": "not met"}) 
 
+        if "full_land_cover" in others:
+            print("here")
+            if hasattr(data, "disaggregated_land_cover"):
+                # ignoring the last type of land cover (ICE) as this doesn't apply in most domains!
+                for pseudolevel in range(9):
+                    all_vars[:,:,:,col] = np.transpose(data.disaggregated_land_cover[:,:,:,pseudolevel], [1,2,0])
+                    col = col+1
+
+                    var_names.append({"var":f"land_cover pseudolevel {pseudolevel}", "type": "not met"})
         
-        var_names.append({"var":"topog", "type": "not met"})  
+            else:
+                print("full_land_cover was passed as true but there is no disaggregated_land_cover in the data class. all land cover related cols of returned inputs will be empty!")                                 
+
+             
+
+
+        var_names.append({"var":"topog", "type": "not met"}) 
 
 
     latlons, idx_latlons = get_grid(data, latlon_fp)
@@ -1479,6 +2019,9 @@ def get_all_inputs_graphnet_satellite_v4(data, variables_past, jumps, variables_
     
     n_variables = n_vars_with_past+n_vars_no_past+len(others)+topog
 
+    if "time_of_year" in others:
+        n_variables = n_variables +1
+
     if "relative_time" in others:
         n_variables = n_variables + len(jumps) -  1 
             ## as relative time adds one uniform variable to all nodes to signpost time of the inputs with respect to release - ie met at release will have variable with value 0, six hours before will have value 6 etc
@@ -1646,6 +2189,20 @@ def get_all_inputs_graphnet_satellite_v4(data, variables_past, jumps, variables_
                     var_names.append({"var":"sin_time_year", "type": "not met", "time":f"t-{j}"})
                     var_names.append({"var":"cos_time_year", "type": "not met", "time":f"t-{j}"})
 
+            elif oth=="time_of_year":
+                _ = var_names.pop() 
+                t = pd.DatetimeIndex(mets[j].time.values)
+                hours = (t - pd.to_datetime(t.year, format='%Y')).days*24 + (t - pd.to_datetime(t.year, format='%Y')).seconds/3600
+                hours_in_year = 8760
+                hours = np.tile(hours, (np.shape(all_vars)[0],np.shape(all_vars)[1],1))
+                all_vars[:,:,:,col] = np.sin(2*np.pi*hours/hours_in_year)
+                col+=1
+                all_vars[:,:,:,col] = np.cos(2*np.pi*hours/hours_in_year)
+                col+=1
+                var_names.append({"var":"sin_time_year", "type": "not met"})
+                var_names.append({"var":"cos_time_year", "type": "not met"})
+
+
 
             elif oth=="relative_time":
                 _ = var_names.pop() 
@@ -1669,10 +2226,6 @@ def get_all_inputs_graphnet_satellite_v4(data, variables_past, jumps, variables_
         else:
             print("topog was passed as true but there is no topography in the data class. Load the data again using custom topog or 'default'. Last column of input will be empty ")
 
-        if hasattr(others, "land_sea_mask"):
-            all_vars[:,:,:,-2] = np.transpose(data.topog, [1,2,0])                                     
-
-        
         var_names.append({"var":"topog", "type": "not met"})  
 
 

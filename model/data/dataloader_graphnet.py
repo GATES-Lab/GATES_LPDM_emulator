@@ -39,28 +39,33 @@ class FootprintsDatasetV2(Dataset):
     - add_prototypes(prototypes) : unfinished! Takes prototypes of same shape as footprints, applies to them the same transform applied to the fps and appends them to the inputs array.
 
     """
-    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[]):
+    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[], full_land_cover=False):
         #super().__init__()
-        self.inputs = inputs
-        self.fp = fp
+        self.inputs = np.copy(inputs)
+        self.fp = np.copy(fp)
         self.size = int(np.sqrt(np.shape(fp)[-1]))
         print(self.size)
         self.input_transforms= copy.deepcopy(input_transforms)
         self.output_transforms= copy.deepcopy(output_transforms)
-        self.input_names= copy.deepcopy(input_names)
+        self.input_names = copy.deepcopy(input_names)
         self.test_mode = copy.deepcopy(test_mode)
         self.transform_parameters = copy.deepcopy(transform_parameters)
         self.prototypes_added = False
-
-        
         
         print(transform_parameters)
         print(self.transform_parameters)
+
+        if full_land_cover:
+            landcover_idxs = [n for n in range(len(self.input_names)) if "land_cover" in self.input_names[n]["var"]]
+            self.landcover_features  = np.copy(inputs[:,:,landcover_idxs])
+
+
 
         # note that _Transform is the base class and will raise a not_implemented error if used
         self.valid_input_transforms = {
             "clever_transform":{"params":["transformers"], "fun":_CleverTransform}, 
             "clever_transform_2":{"params":["transformers"], "fun":_CleverTransform2}, 
+            "clever_transform_3":{"params":["transformers"], "fun":_CleverTransform3},
             "standardise":{"params":["transformers"], "fun":_Transform}, 
             "scale":{"params":["inputs_min", "inputs_max"], "fun":_Transform}}
 
@@ -72,7 +77,10 @@ class FootprintsDatasetV2(Dataset):
             "logv1":{"params":["fp_mean", "fp_var"], "fun":_Transform}, 
             "logv2":{"params":[], "fun":_Transform}, 
             "logv3":{"params":["logged_mean"], "fun":_LogV3},
-            "scale":{"params":["output_minmax"], "fun":_Transform}}
+            "logv4":{"params":[], "fun":_LogV4},
+            "logv3e":{"params":["logged_mean"], "fun":_LogV3e},
+            "scale":{"params":["output_minmax"], "fun":_Transform},
+            "mixed_log":{"params":[], "fun":_MixedLog}}
 
 
         ## assert that only valid input and output transforms have been passed
@@ -105,6 +113,11 @@ class FootprintsDatasetV2(Dataset):
                 self.output_transforms[transform]  = self.valid_output_transforms[transform]["fun"](self)
 
             self.fp = self.output_transforms[transform].transform(self.fp)
+
+        if full_land_cover:
+            # replace the transformed inputs with the original values
+            self.inputs[:,:,landcover_idxs] = self.landcover_features
+
 
         if type(self.inputs) != torch.Tensor:
             self.inputs = torch.tensor(self.inputs, dtype=torch.float)
@@ -180,6 +193,7 @@ class FootprintsDatasetV2(Dataset):
 
         if units_transform != None:
             if units_transform == "default":
+                # only if the flux is in kg m s
                 molarmass = 16.0425
                 flux = flux*1e3 / molarmass
             else:
@@ -275,6 +289,25 @@ class FootprintsDatasetV2(Dataset):
 
     def __getitem__(self, item):
         return self.inputs[item,:,:], self.fp[item,:,:]  
+
+class FootprintsDatasetV3(FootprintsDatasetV2):
+    """
+    LATEST VERSION
+    prepare the inputs and outputs as a dataset to pass to the model
+    """
+
+    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[],full_land_cover=False, returning="original_footprints"):
+        super().__init__(inputs, fp, input_transforms, output_transforms, transform_parameters, test_mode, input_names, full_land_cover=full_land_cover)
+
+        if returning=="original_footprints":
+            self.original_fp = torch.tensor(self.fp_untransformed, dtype=torch.float)
+        elif returning == "transformed_footprints":
+            self.original_fp = fp
+        if self.original_fp.ndim==2:
+            self.original_fp = self.original_fp[:,:,None]
+
+    def __getitem__(self, item):
+        return self.inputs[item,:,:], self.fp[item,:,:], self.original_fp[item,:,:]
     
 class _Transform:
     """
@@ -358,47 +391,138 @@ class _CleverTransform2:
         if self.parent.mode=="test":
             self.transformers = self.parent.test_mode["clever_transform_2"]["transformers"]
 
+        self.vars_to_ignore = ["sin_time_year", "cos_time_year"]
+
     def transform(self):
         for varname in np.unique(self.varnames):
-            var_locations = np.where(self.varnames==varname)[0]
-            # apply below if variable has levels
-            if "level" in self.parent.input_names[var_locations[0]]:
-                levels_dict = {}
-                levels = np.array([self.parent.input_names[x]["level"] for x in var_locations])
-                for level in np.unique(levels):
-                    levels_locations = np.where(levels==level)[0]
+            if varname not in self.vars_to_ignore:
+                var_locations = np.where(self.varnames==varname)[0]
+                # apply below if variable has levels
+                if "level" in self.parent.input_names[var_locations[0]]:
+                    levels_dict = {}
+                    levels = np.array([self.parent.input_names[x]["level"] for x in var_locations])
+                    for level in np.unique(levels):
+                        levels_locations = np.where(levels==level)[0]
+                        if self.parent.mode=="train":
+                            scaler = preprocessing.StandardScaler()
+                            scaler.fit(self.parent.inputs[:,:,var_locations[levels_locations]].flatten
+                        ().reshape(-1, 1))
+                            levels_dict[level]=scaler
+                        if self.parent.mode=="test":
+                            scaler = self.transformers[varname][level]
+                            
+                        shape = np.shape(self.parent.inputs[:,:,var_locations[levels_locations]])
+                        self.parent.inputs[:,:,var_locations[levels_locations]] = np.reshape(scaler.transform(self.parent.inputs[:,:,var_locations[levels_locations]].flatten
+                        ().reshape(-1, 1)), shape)
+
+                    if self.parent.mode=="train":
+                        self.transformers[varname]=levels_dict
+
+                # apply below if variable has no levels
+                else:
                     if self.parent.mode=="train":
                         scaler = preprocessing.StandardScaler()
-                        scaler.fit(self.parent.inputs[:,:,var_locations[levels_locations]].flatten
+                        scaler.fit(self.parent.inputs[:,:,var_locations].flatten
                     ().reshape(-1, 1))
-                        levels_dict[level]=scaler
+                        self.transformers[varname]=scaler 
                     if self.parent.mode=="test":
-                        scaler = self.transformers[varname][level]
-                        
-                    shape = np.shape(self.parent.inputs[:,:,var_locations[levels_locations]])
-                    self.parent.inputs[:,:,var_locations[levels_locations]] = np.reshape(scaler.transform(self.parent.inputs[:,:,var_locations[levels_locations]].flatten
-                    ().reshape(-1, 1)), shape)
+                        scaler = self.transformers[varname]
 
-                if self.parent.mode=="train":
-                    self.transformers[varname]=levels_dict
-
-            # apply below if variable has no levels
+                    shape = np.shape(self.parent.inputs[:,:,var_locations])
+                    self.parent.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.parent.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)    
             else:
-                if self.parent.mode=="train":
-                    scaler = preprocessing.StandardScaler()
-                    scaler.fit(self.parent.inputs[:,:,var_locations].flatten
-                ().reshape(-1, 1))
-                    self.transformers[varname]=scaler 
-                if self.parent.mode=="test":
-                    scaler = self.transformers[varname]
-
-                shape = np.shape(self.parent.inputs[:,:,var_locations])
-                self.parent.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.parent.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)    
-
+                print(f"ignoring var {varname} and leaving as is")
 
         self.parent.transform_parameters["clever_transform_2"] = {}
         self.parent.transform_parameters["clever_transform_2"]["transformers"] = self.transformers      
-              
+
+
+class _CleverTransform3:
+    """
+    SAME as clever transform 2 but applies minmax to land cover and ignores full landcover 
+    Apply a standard scaler to each variable and level, across all timesteps
+
+    If train, save scalers in a dictionary, with subdictionaries for each level if needed. Format example: {variable_name:{levelA:scaler, levelB:scaler ...}, variable_name:scaler, ...}
+
+    If test, apply these
+    """
+    def __init__(self, parent):
+        self.parent = parent
+        assert len(self.parent.input_names)>0, "Pass the input names to do a clever transform"
+        self.parent.inputs_untransformed = np.copy(self.parent.inputs)
+
+        self.varnames = np.array([x["var"] for x in self.parent.input_names])
+
+        if self.parent.mode=="train":
+            self.transformers = {}
+        if self.parent.mode=="test":
+            self.transformers = self.parent.test_mode["clever_transform_3"]["transformers"]
+
+        self.vars_to_ignore = ["sin_time_year", "cos_time_year"]
+
+    def transform(self):
+        for varname in np.unique(self.varnames):
+            if varname not in self.vars_to_ignore and "land_cover" not in varname:
+                var_locations = np.where(self.varnames==varname)[0]
+                # apply below if variable has levels
+                if "level" in self.parent.input_names[var_locations[0]]:
+                    levels_dict = {}
+                    levels = np.array([self.parent.input_names[x]["level"] for x in var_locations])
+                    for level in np.unique(levels):
+                        levels_locations = np.where(levels==level)[0]
+                        if self.parent.mode=="train":
+                            scaler = preprocessing.StandardScaler()
+                            scaler.fit(self.parent.inputs[:,:,var_locations[levels_locations]].flatten
+                        ().reshape(-1, 1))
+                            levels_dict[level]=scaler
+                        if self.parent.mode=="test":
+                            scaler = self.transformers[varname][level]
+                            
+                        shape = np.shape(self.parent.inputs[:,:,var_locations[levels_locations]])
+                        self.parent.inputs[:,:,var_locations[levels_locations]] = np.reshape(scaler.transform(self.parent.inputs[:,:,var_locations[levels_locations]].flatten
+                        ().reshape(-1, 1)), shape)
+
+                    if self.parent.mode=="train":
+                        self.transformers[varname]=levels_dict
+
+                # apply below if variable has no levels
+                else:
+                    if self.parent.mode=="train":
+                        scaler = preprocessing.StandardScaler()
+                        scaler.fit(self.parent.inputs[:,:,var_locations].flatten
+                    ().reshape(-1, 1))
+                        self.transformers[varname]=scaler 
+                    if self.parent.mode=="test":
+                        scaler = self.transformers[varname]
+
+                    shape = np.shape(self.parent.inputs[:,:,var_locations])
+                    self.parent.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.parent.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)    
+            else:
+                if varname == "land_cover":
+                    var_locations = np.where(self.varnames==varname)[0]
+                    print("landcover  bit!")
+                    print(np.max(self.parent.inputs[:,:,var_locations]))
+                    if self.parent.mode=="train":
+                        scaler = preprocessing.MinMaxScaler()
+                        scaler.fit(self.parent.inputs[:,:,var_locations].flatten
+                    ().reshape(-1, 1))
+                        self.transformers[varname]=scaler 
+                    if self.parent.mode=="test":
+                        scaler = self.transformers[varname]
+
+                    shape = np.shape(self.parent.inputs[:,:,var_locations])
+                    self.parent.inputs[:,:,var_locations] = np.reshape(scaler.transform(self.parent.inputs[:,:,var_locations].flatten().reshape(-1, 1)), shape)            
+                    print(np.max(self.parent.inputs[:,:,var_locations]))   
+                    print(var_locations)    
+
+                else:
+                    print(f"ignoring var {varname} and leaving as is")
+
+        self.parent.transform_parameters["clever_transform_3"] = {}
+        self.parent.transform_parameters["clever_transform_3"]["transformers"] = self.transformers      
+
+
+
 class _Boxcox(_Transform):
     """
     Apply boxcox + standardisation to all pixels in image. 
@@ -544,6 +668,64 @@ class _BoxcoxAll(_Transform):
         transformed_predictions = np.reshape(transformed_predictions, np.shape(self.parent.predictions)) 
         return transformed_predictions
 
+class _LogFootNet(_Transform):
+    """
+    Takes log of (output data+0.0000001) (ofset is needed so data is strictly positive) and shifts so mean(logged(non-zero values)) = 0
+    Note: translates across domain sizes
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        print("init logv3")
+        self.parent.fp_untransformed = np.copy(self.parent.fp)    
+
+        if self.parent.mode=="train":
+            self.logged_mean = np.mean(np.log10(self.parent.fp.flatten()[self.parent.fp.flatten()>0]))
+        if self.parent.mode=="test":
+            self.logged_mean = self.parent.test_mode["logv3"]["logged_mean"]
+        
+        self.parent.transform_parameters["logv3"] = {}
+        self.parent.transform_parameters["logv3"]["logged_mean"] = self.logged_mean
+
+    def transform(self, fp):
+        logged = np.log10(self.parent.fp+0.0000001)
+        fp = logged + abs(self.logged_mean) 
+        return fp
+    
+    def inverse_transform(self, predictions):
+        self.parent.predictions = predictions
+        transformed_predictions = 10**(predictions - abs(self.logged_mean))-0.0000001      
+        return transformed_predictions   
+    
+class _LogV3e(_Transform):
+    """
+    Takes log of (output data+0.0000001) (ofset is needed so data is strictly positive) and shifts so mean(logged(non-zero values)) = 0
+    Note: translates across domain sizes
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        print("init logv3")
+        self.parent.fp_untransformed = np.copy(self.parent.fp)    
+
+        if self.parent.mode=="train":
+            self.logged_mean = np.mean(np.log(self.parent.fp.flatten()[self.parent.fp.flatten()>0]))
+        if self.parent.mode=="test":
+            self.logged_mean = self.parent.test_mode["logv3e"]["logged_mean"]
+        
+        self.parent.transform_parameters["logv3e"] = {}
+        self.parent.transform_parameters["logv3e"]["logged_mean"] = self.logged_mean
+
+    def transform(self, fp):
+        logged = np.log(self.parent.fp+0.0000001)
+        fp = logged + abs(self.logged_mean) 
+        return fp
+    
+    def inverse_transform(self, predictions):
+        self.parent.predictions = predictions
+        transformed_predictions = np.exp(predictions - abs(self.logged_mean))-0.0000001      
+        return transformed_predictions        
+    
 class _LogV3(_Transform):
     """
     Takes log of (output data+0.0000001) (ofset is needed so data is strictly positive) and shifts so mean(logged(non-zero values)) = 0
@@ -571,6 +753,57 @@ class _LogV3(_Transform):
     def inverse_transform(self, predictions):
         self.parent.predictions = predictions
         transformed_predictions = 10**(predictions - abs(self.logged_mean))-0.0000001      
+        return transformed_predictions        
+
+class _LogV4(_Transform):
+    """
+    Takes log of output data where non-zero, and offsets by minimum value so its above
+    Note: translates across domain sizes
+    """
+
+    def __init__(self, parent, minimum_oom=5):
+        self.parent = parent
+        print("init logv4")
+        self.parent.fp_untransformed = np.copy(self.parent.fp)    
+        self.minimum_oom = minimum_oom
+        
+        self.parent.transform_parameters["logv4"] = {}
+
+    def transform(self, fp):
+        logged = np.copy(self.parent.fp)
+        logged[logged>0] = self.minimum_oom+np.log10(logged[logged>0])
+        logged[logged<0] = 0 
+        return logged
+    
+    def inverse_transform(self, predictions):
+        transformed_predictions = np.copy(predictions)
+        self.parent.predictions = predictions
+        
+        # if using relu this shouldnt be necessary but just in case
+        transformed_predictions[transformed_predictions <0] = 0
+        transformed_predictions[transformed_predictions>0] = 10**(transformed_predictions[transformed_predictions>0]-self.minimum_oom)
+        return transformed_predictions        
+
+
+class _MixedLog(_Transform):
+
+    def __init__(self, parent):
+        self.parent = parent
+        print("init mixed log")
+        self.parent.fp_untransformed = np.copy(self.parent.fp)    
+
+    def transform(self, fp):
+        c1 = 0
+        self.c2 = -1.5
+        self.min_val = 1e-6
+        self.maxval = 1
+        x = c1*np.minimum(fp, self.maxval) + self.c2*((np.log(np.maximum(fp, self.min_val))-np.log(self.min_val))/np.log(self.min_val))
+        return x
+
+    def inverse_transform(self, predictions):
+        self.parent.predictions = predictions
+        transformed_predictions = np.copy(predictions)
+        transformed_predictions[predictions>0] = np.exp((np.log(self.min_val)/self.c2)*predictions[predictions>0] + np.log(self.min_val))  
         return transformed_predictions        
 
 class _MuLaw(_Transform):
@@ -613,7 +846,7 @@ class _MuLaw(_Transform):
         return transformed_predictions   
 
 
-def plot_footprints(idx, original_fps=None, transformed_fps=None, predictions=None, transformed_predictions=None, size=30):
+def plot_footprints(idx, original_fps=None, transformed_fps=None, predictions=None, transformed_predictions=None, size=30, log=False):
     """
     visualise footprints and predictions for the footprints at index idx
     idx can be an int or a list of ints
@@ -637,10 +870,16 @@ def plot_footprints(idx, original_fps=None, transformed_fps=None, predictions=No
     for idx_n, index in enumerate(idx):
         ax_counter = 0
         if original_fps is not None:
-            ax[idx_n,ax_counter].imshow(np.reshape(original_fps[index], (size, size)), origin="lower")
+            if log:
+                ax[idx_n,ax_counter].imshow(np.reshape(np.log10(original_fps[index]), (size, size)), origin="lower")
+            else:
+                ax[idx_n,ax_counter].imshow(np.reshape(original_fps[index], (size, size)), origin="lower")
             ax_counter+=1
         if transformed_predictions is not None:
-            ax[idx_n,ax_counter].imshow(np.reshape(transformed_predictions[index],(size, size)), origin="lower")
+            if log:
+                ax[idx_n,ax_counter].imshow(np.reshape(np.log10(transformed_predictions[index]),(size, size)), origin="lower")
+            else:
+                ax[idx_n,ax_counter].imshow(np.reshape(transformed_predictions[index],(size, size)), origin="lower")
             ax_counter+=1
         if transformed_fps is not None:
             ax[idx_n,ax_counter].imshow(np.reshape(transformed_fps[index], (size, size)), origin="lower")
@@ -1619,7 +1858,33 @@ def predict_fluxes(true_fp, pred_fp, flux, units_transform = "default"):
             flux = flux*1e3 / molarmass
         else:
             flux = units_transform(flux)
+    
+
+
     true_concentration = true_fp*flux
+    true_flux = np.sum(true_concentration, axis = (1,2))
+    pred_concentration = pred_fp*flux
+    pred_flux = np.sum(pred_concentration, axis = (1,2))
+    
+    return true_flux, pred_flux
+
+
+def predict_fluxes_3D(true_fp, pred_fp, flux, units_transform = "default"):
+    ## convolute predicted footprints and fluxes, returns two np arrays, one with the true flux and one with the emulated flux, of shape (n_footprints,)
+    ## flux is an array, regridded and cut to the same resolution and size of the footprints
+    ## units_transform can be None (use fluxes directly), "default" (performs flux*1e3 / CH4molarmass) or another function (which should return an array of the same shape as the original flux)
+
+    assert len(np.shape(flux))==3 and len(np.shape(true_fp))==3 and len(np.shape(pred_fp))==3, "the fps and fluxes all have to be 3D"
+
+    if units_transform != None:
+        if units_transform == "default":
+            # for edgar
+            molarmass = 16.0425
+            flux = flux*1e3 / molarmass
+        else:
+            flux = units_transform(flux)
+    true_concentration = true_fp*flux
+    print(np.shape(true_flux), np.shape(flux), np.shape(true_concentration))
     true_flux = np.sum(true_concentration, axis = (1,2))
     pred_concentration = pred_fp*flux
     pred_flux = np.sum(pred_concentration, axis = (1,2))
