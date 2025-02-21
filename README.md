@@ -1,4 +1,5 @@
 # graphnet_LPDM_emulator
+Note that this readme is not fully up to date!
 
 ## To Do
 - [x] write readme section on model usage
