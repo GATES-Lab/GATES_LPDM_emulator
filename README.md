@@ -1,6 +1,13 @@
 # graphnet_LPDM_emulator
 Note that this readme is not fully up to date!
 
+## To Do - restructuring and updating
+- [ ] Update data loading functions:
+  - [ ] Load footprints function
+  - [ ] Data loader - update, comment, update documentation
+  - [ ] Add capability to cut and interpolate met directly from file, without needing to cut
+  - [ ] Input extracting - update, comment, udpate documentation
+
 ## To Do
 - [x] write readme section on model usage
 - [x] write readme section on predicting
