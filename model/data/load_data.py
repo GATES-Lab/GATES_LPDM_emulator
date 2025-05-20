@@ -29,6 +29,15 @@ def load_fps(fp_datadir):
             '/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201610.nc',
             '/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201612.nc']
         without_bad_files = list(set(fp_files) - set(bad_files))
+
+        if len(without_bad_files) == len(fp_files):
+            filenames = [x.split("/")[-1] for x in bad_files]
+            path = fp_files[0].replace(fp_files[0].split("/")[-1], "")
+            bad_files = [path+f for f in filenames]
+            without_bad_files = list(set(fp_files) - set(bad_files))
+
+
+
         if len(without_bad_files) < len(fp_files):
             print("at least one of the files was in the bad files list, opening with workaround")
             # error arises because fp file for Brazil Nov 2015 has non-monotonic timestamps, use workaround
@@ -62,7 +71,7 @@ def cut_and_save_met_data(date,
                  met_levels=[3,9,15,21,30,42,51], met_variables=["air_pressure", "air_temperature", "atmosphere_boundary_layer_thickness", "surface_air_pressure", "upward_air_velocity", "x_wind", "y_wind"], 
                  verbose=True, 
                  met_datadir=None, fp_datadir=None, 
-                 savemetpath=[], expand_met = {"lat":0, "lon":0}):
+                 savemetpath=[], expand_met = {"lat":[0,0], "lon":[0,0]}):
     """
     Cuts meteorology from default format (full lat-lon grid, regular time steps) to match footprint domain and timesteps, as well as to match levels and variables specified as inputs. Can be used for multiple timesteps back in the past, saving the meteorology in the same domain at t-x for each x in met_jump.
     Saves extracted met as .nc file to use in LoadSatelliteData object.
@@ -100,6 +109,15 @@ def cut_and_save_met_data(date,
     with dask.config.set(**{'array.slicing.split_large_chunks': True}):
         met = xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', parallel=True, chunks = {"level":1, "time":time_chunk})    
 
+    
+    if met.dropna(dim="latitude").dims["latitude"] == 0:
+        print("there seems to be a line of nans across the latitude dimension in the data - likely because of a merging error. Interpolating")
+        met = met.interpolate_na(dim="latitude", max_gap = 5)
+    
+    if met.dropna(dim="longitude").dims["longitude"] == 0:
+        print("there seems to be a line of nans across the longitude dimension in the data - likely because of a merging error. Interpolating")
+        met = met.interpolate_na(dim="longitude", max_gap = 5)
+
     assert "lat_coords" not in met.coords, "this meteorology seems to have already been cut. are you sure you are choosing the right file?"
 
     """
@@ -124,6 +142,7 @@ def cut_and_save_met_data(date,
 
     # just expanding met by interpolating even further away from the domain...
     print(expand_met)
+    """
     if expand_met["lat"] > 0 or expand_met["lon"] > 0:
         delta_lon = 0.352
         delta_lat = 0.234
@@ -131,6 +150,15 @@ def cut_and_save_met_data(date,
         lat_values = np.array(sorted(list(met.latitude.values) + [np.max(met.latitude.values)+delta_lat*i for i in range(expand_met["lat"])]+ [np.min(met.latitude.values)-delta_lat*i for i in range(expand_met["lat"])]))
 
         lon_values = np.array(sorted(list(met.longitude.values) + [np.max(met.longitude.values)+delta_lon*i for i in range(expand_met["lon"])]+ [np.min(met.longitude.values)-delta_lon*i for i in range(expand_met["lon"])]))
+    """
+    
+    if expand_met["lat"][0] > 0 or expand_met["lat"][1] > 0 or expand_met["lon"][0] > 0 or expand_met["lon"][1] > 0:
+        delta_lon = 0.352
+        delta_lat = 0.234
+
+        lat_values = np.array(sorted(list(met.latitude.values) + [np.max(met.latitude.values)+delta_lat*i for i in range(expand_met["lat"][1])]+ [np.min(met.latitude.values)-delta_lat*i for i in range(expand_met["lat"][0])]))
+
+        lon_values = np.array(sorted(list(met.longitude.values) + [np.max(met.longitude.values)+delta_lon*i for i in range(expand_met["lon"][1])]+ [np.min(met.longitude.values)-delta_lon*i for i in range(expand_met["lon"][0])]))
 
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             met = met.drop_duplicates(...)
@@ -233,10 +261,14 @@ class LoadSatelliteData:
         if fp_datadir==None:
             fp_datadir = "/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/"+self.domain+"/*"+region+"*"+self.domain+"_"+str(self.date)+"*.nc"
         else:
-            fp_datadir=fp_datadir+str(self.date)+"*.nc"
+            #fp_datadir=fp_datadir+str(self.date)+"*.nc"
+            fp_datadir = f"{fp_datadir}{self.domain}/*{region}*{self.domain}_{str(self.date)}*.nc"
         if verbose: print("Loading footprint data from " + fp_datadir) 
 
         self.fp_data_full = load_fps(fp_datadir)
+
+        ## add coarsening factor
+        
 
         ## reduce data frequency with regular sampling (freq parameter)
         self.freq = freq
@@ -439,6 +471,8 @@ class LoadSatelliteData:
 
         if hasattr(self, "topog"):
             self.topog = np.delete(self.topog, nan_idxs, axis=0)
+        if hasattr(self, "land_cover"):
+            self.land_cover = np.delete(self.land_cover, nan_idxs, axis=0)
 
     def get_binary_threshold(self, threshold=0.001, zero=0, one=1):
         # add binary footprint as attribute
@@ -757,6 +791,10 @@ def load_default_brazil_emissions(year=2016, month_to_use=6):
     emissions = emissions.sel(time=emissions.time[month_to_use-1])
     return emissions.flux.values
 
+def load_default_sahara_emissions(year=2016, month_to_use=6):
+    emissions = xr.open_dataset(f"/group/chemistry/acrg/LPDM/emissions/NORTHAFRICA/ch4_NORTHAFRICA_{year}.nc")
+    emissions = emissions.sel(time=emissions.time[month_to_use-1])
+    return emissions.flux.values
 
 def cut_emissions_data(flux, fp_full, size):
     # this assumes flux is a 2D np array of the same resolution and size as the footprints! it also assumes that the data is cut to a square size
@@ -1129,6 +1167,19 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
     data.met contains the meteorological data at the time of the measurement. the rest of the times are loaded below. 
     the met data is stored in a dictionary with format mets[H] = data array for that H (so that mets = {0: met at time=t, 6: met at time=t-6 etc})
     """
+    were_there_nans=False
+    """
+    
+    print("y_wind" in data.met.variables)
+    if "y_wind" in data.met.variables:
+        print("checking for nans")
+        if np.any(np.isnan(data.met.y_wind.values)):
+            data.met["y_wind"] = data.met.y_wind.interpolate_na(dim="lat", max_gap = 5)
+            data.met["y_wind"] = data.met.y_wind.interpolate_na(dim="lon", max_gap = 5)
+            #data = data.y_wind.interpolate_na(dim="lon", max_gap = 5)
+            were_there_nans = True
+    """
+    
     mets[0] = data.met
     valid_timestamps = np.copy(data.met.time.values)
     for j in jumps:
@@ -1153,9 +1204,9 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
                 try:
                     # select met
                     ## making sure that only the right indices are selected
-                    print(j, len(mets[j].time), len(mets[j].lat))
+                    #print(j, len(mets[j].time), len(mets[j].lat))
                     mets[j] = mets[j].sel(time=(pd.DatetimeIndex(data.fp_data_full.time.values) - pd.Timedelta(f"{j}H")))
-                    print(j, len(mets[j].time), len(mets[j].lat))
+                    #print(j, len(mets[j].time), len(mets[j].lat))
                 except KeyError:
                     print("in here")
                     # there was a problem with the time indeces - likely because the first datapoints are outside of the range
@@ -1168,7 +1219,27 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
                     print(f"there are some nans in the met for jump {j}")
                     mets[j] = mets[j].dropna(dim="time")
                     valid_timestamps = pd.DatetimeIndex(np.copy(mets[j].time.values))+pd.Timedelta(f"{j}H")
+                
+                if were_there_nans:
+                    print("there were nans?!")
+                    """
+                    print(mets[j].dims)
+                    print(mets[j].dims)
+                    #print(f"before xwind nans: {np.any(np.isnan(mets[j].x_wind.values))}, ywind nans:  {np.any(np.isnan(mets[j].y_wind.values))}")
+                    mets[j]["y_wind"] = mets[j].y_wind.interpolate_na(dim="lat", max_gap = 5)
+                    mets[j]["y_wind"] = mets[j].y_wind.interpolate_na(dim="lon", max_gap = 5)
+                    #print(f"after xwind nans: {np.any(np.isnan(mets[j].x_wind.values))}, ywind nans:  {np.any(np.isnan(mets[j].y_wind.values))}")
+                    print(f"dropping nans fully? {len(mets[j].time.values)}")
+                    #mets[j] = mets[j].dropna(dim="time", subset=["y_wind"])
+                    mets[j] = mets[j].sel(time=mets[j].time.values[np.where(~np.isnan(mets[j].y_wind.sel(levels=mets[j].levels.values[0], lat=mets[j].lat.values[0],lon=mets[j].lon.values[0]).values))[0]])
+                    """
 
+                    print(f"after {len(mets[j].time.values)}")
+
+
+        # drops and recalculates 
+        mets[j] = mets[j].drop_vars(["wind_angle", "wind_speed"])
+        
         if "wind_speed" not in list(mets[j].keys()):
             print(f"wind speed isnt present in {j}h data, adding now")
             mets[j]["wind_angle"]=np.arctan2(-mets[j].x_wind,-mets[j].y_wind)
@@ -1197,6 +1268,10 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
         data.fp_lats = np.delete(data.fp_lats, np.unique(time_idx_nan), axis=0)
         data.fp_lons = np.delete(data.fp_lons, np.unique(time_idx_nan), axis=0)
         data.topog = np.delete(data.topog, np.unique(time_idx_nan), axis=0)
+    
+        if hasattr(data, "land_cover"):
+            data.land_cover = np.delete(data.land_cover, time_idx_nan, axis=0)
+
         data.met = data.met.sel(time=valid_timestamps)
         if hasattr(data, "fp_binary"):
             data.fp_binary = np.delete(data.fp_binary, np.unique(time_idx_nan), axis=0)
@@ -1509,13 +1584,15 @@ def get_all_inputs_graphnet_satellite_v6(data, variables_past, jumps, variables_
 
         var_names.append({"var":"topog", "type": "not met"}) 
 
-
     latlons, idx_latlons = get_grid(data, latlon_fp)
 
     if transform:
         all_vars = np.reshape(all_vars, (np.shape(all_vars)[0]*np.shape(all_vars)[1], np.shape(all_vars)[2], np.shape(all_vars)[3]))
         all_vars = np.transpose(all_vars, [1,0,2])
     
+    print(f"there are {np.sum(np.isnan(all_vars))} nans in the inputs")
+    print(np.where(np.isnan(all_vars)))
+
     if return_idx:
         return latlons, idx_latlons, all_vars, var_names, data
     else:
@@ -1611,7 +1688,7 @@ def get_all_inputs_graphnet_satellite_v5(data, variables_past, jumps, variables_
                     print(f"there are some nans in the met for jump {j}")
                     mets[j] = mets[j].dropna(dim="time")
                     valid_timestamps = pd.DatetimeIndex(np.copy(mets[j].time.values))+pd.Timedelta(f"{j}H")
-
+        
         if "wind_speed" not in list(mets[j].keys()):
             print(f"wind speed isnt present in {j}h data, adding now")
             mets[j]["wind_angle"]=np.arctan2(-mets[j].x_wind,-mets[j].y_wind)
@@ -2564,6 +2641,8 @@ def get_grid(data, latlon_fp):
     """
     produce reference grid and node indeces
     """
+    print(f"getting grid for time {data.met.time.values[latlon_fp]}")
+    #print(f"making grid for footprint at time {data}")
     single_meshgrid = np.meshgrid(data.fp_lats[latlon_fp,:], data.fp_lons[latlon_fp,:])
     latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lats)[1]) for j in range(np.shape(data.fp_lats)[1])] 
 
