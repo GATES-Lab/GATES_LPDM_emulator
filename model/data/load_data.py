@@ -4,6 +4,7 @@ import pandas as pd
 import glob
 import dask
 import sys
+import os
 
 
 def load_fps(fp_datadir):
@@ -32,8 +33,11 @@ def load_fps(fp_datadir):
         # the bad_files contains full paths, first the full path is checked 
         print("there was an error opening the dataset. checking if any of the files are in the bad files list")
         fp_files = sorted(glob.glob(fp_datadir))
-        path = fp_datadir[0].replace(fp_files[0].split("/")[-1], "")
-        filenames = [x.split("/")[-1] for x in fp_files]
+        path = os.path.split(fp_datadir)[0] + "/"
+        filenames = [os.path.split(x)[1] for x in fp_files]
+        print(f"fp files: {fp_files}")
+        print(f"path: {path}")
+        print(f"filenames: {filenames}")
 
         bad_files = ["GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
             "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc", 
@@ -143,17 +147,6 @@ def cut_and_save_met_data(date,
 
     if verbose: print("Cutting met to size")     
 
-
-    """
-    if expand_met["lat"] > 0 or expand_met["lon"] > 0:
-        delta_lon = 0.352
-        delta_lat = 0.234
-
-        lat_values = np.array(sorted(list(met.latitude.values) + [np.max(met.latitude.values)+delta_lat*i for i in range(expand_met["lat"])]+ [np.min(met.latitude.values)-delta_lat*i for i in range(expand_met["lat"])]))
-
-        lon_values = np.array(sorted(list(met.longitude.values) + [np.max(met.longitude.values)+delta_lon*i for i in range(expand_met["lon"])]+ [np.min(met.longitude.values)-delta_lon*i for i in range(expand_met["lon"])]))
-    """
-    
     if expand_met["lat"][0] > 0 or expand_met["lat"][1] > 0 or expand_met["lon"][0] > 0 or expand_met["lon"][1] > 0:
         # just expanding met by interpolating even further away from the domain...
         print("expanding met even further away from the passed domain!")
