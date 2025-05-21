@@ -8,35 +8,52 @@ import sys
 
 def load_fps(fp_datadir):
     """
-    Load footprints from datadir, using workaround if problematic files are encountered
+    Load footprints from datadir, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
     note that the list of problematic files is currently updated manually!
+
+    Args:
+        - fp_datadir (str): string pointing to the directory with footprints to load, 
+        including special characters (eg "/path/to/footprints/*.nc", or "/path/to/footprints/*2020*.nc")
+        Note that fp_datadir is passed directly to glob, so it needs to specify filetype (i.e. finish with .nc)
+    
+    Returns:
+        - fp_data_full: xarray dataset with the footprints specified in the fp_datadir, opened correctly
+    
+    Potential Improvements:
+        - Add capability to ignore any files that couldn't be opened, and return only the successful files 
     """
     try:           
         time_chunk = 25
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            # attempt to load dataset of multiple files the standard way
             fp_data_full = xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk})
     except Exception as e:
-        # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one
-        print("checking bad files")
+        # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
+        # the bad_files contains full paths, first the full path is checked 
+        print("there was an error opening the dataset. checking if any of the files are in the bad files list")
         fp_files = sorted(glob.glob(fp_datadir))
-        bad_files = ["/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/SOUTHAMERICA/GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
-            "/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201409.nc", 
-            '/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201501.nc',
-            '/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201502.nc',
-            '/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201503.nc',
-            '/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201504.nc',
-            '/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201609.nc',
-            '/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201610.nc',
-            '/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/NORTHAFRICA/GOSAT-SAHARA-column_NORTHAFRICA_201612.nc']
-        without_bad_files = list(set(fp_files) - set(bad_files))
+        path = fp_datadir[0].replace(fp_files[0].split("/")[-1], "")
+        filenames = [x.split("/")[-1] for x in fp_files]
+
+        bad_files = ["GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
+            "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc", 
+            'GOSAT-SAHARA-column_NORTHAFRICA_201501.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201502.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201503.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201504.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201609.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201610.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201612.nc']
+        # remove any files from the list that were in the bad files list
+
+        
+        without_bad_files = list(set(filenames) - set(bad_files))
+        without_bad_files = [path+f for f in without_bad_files]
+        bad_files = [path+f for f in bad_files]
 
         if len(without_bad_files) == len(fp_files):
-            filenames = [x.split("/")[-1] for x in bad_files]
-            path = fp_files[0].replace(fp_files[0].split("/")[-1], "")
-            bad_files = [path+f for f in filenames]
-            without_bad_files = list(set(fp_files) - set(bad_files))
-
-
+            print("none of the passed files were in the bad files list")
+            print("check if there has been a problem, or maybe a new bad file needs to be added to the list!")
 
         if len(without_bad_files) < len(fp_files):
             print("at least one of the files was in the bad files list, opening with workaround")
@@ -45,17 +62,21 @@ def load_fps(fp_datadir):
             # also some Sahara 2015 files are missing mean_age_particles_ variable - drop and concat
             # Add clauses here to catch other known exceptions
             with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+                # load non-problematic arrays all together
                 most = xr.open_mfdataset(sorted(without_bad_files))
                 bad_arrays = []
                 for badfile in bad_files:
                     if badfile in fp_files:
+                        # load each bad file separately
                         f_bad = xr.open_mfdataset(badfile)
                         if "NORTHAFRICA_2015" in badfile:
                             try:
                                 f_bad = f_bad.drop(["mean_age_particles_n", "mean_age_particles_e", "mean_age_particles_w", "mean_age_particles_s"])        
                             except Exception as e:
+                                print("something went wrong trying to load the bad North Africa 2015 files")
                                 print(e)
                         bad_arrays.append(f_bad)
+                # concatenate all the good files with the bad ones along the time dimension
                 fp_data_full = xr.concat([most]+bad_arrays, dim="time")
         else:
             print("there was a problem", e)
@@ -120,28 +141,9 @@ def cut_and_save_met_data(date,
 
     assert "lat_coords" not in met.coords, "this meteorology seems to have already been cut. are you sure you are choosing the right file?"
 
-    """
-    checking if there is extramet (ie met outside of the fp_data_full domain) that can be appended.
-    this is only needed if all of these are true
-        a) The size to cut footprints is so big (>100 for Brazil) that many footprints are removed due to being partially out-of-domain
-        b) partially out-of-domain footprints are valid and needed
-        c) the met files have the same domain as the footprint files (which is default right now)
-    
-    TODO improve/replace this - could be avoided if met loaded is already of right size (ie bigger than fp domain)
-    """
-    dims = {"ExtraE":"longitude", "ExtraW":"longitude", "ExtraN":"latitude",  "ExtraS":"latitude"}
-    for extra in list(dims.keys()):
-        if len(glob.glob(met_datadir[:-10]+extra+"_"+date+"*"))>0:
-            extra_met = xr.open_mfdataset(sorted(glob.glob(met_datadir[:-10]+extra+"_"+date+"*")), combine='by_coords', parallel=True, chunks = {"level":1})
-
-            met = xr.concat([met, extra_met], dim=dims[extra])
-
-            if verbose: print(f"loaded extra meteorology for {extra}")
-
     if verbose: print("Cutting met to size")     
 
-    # just expanding met by interpolating even further away from the domain...
-    print(expand_met)
+
     """
     if expand_met["lat"] > 0 or expand_met["lon"] > 0:
         delta_lon = 0.352
@@ -153,6 +155,10 @@ def cut_and_save_met_data(date,
     """
     
     if expand_met["lat"][0] > 0 or expand_met["lat"][1] > 0 or expand_met["lon"][0] > 0 or expand_met["lon"][1] > 0:
+        # just expanding met by interpolating even further away from the domain...
+        print("expanding met even further away from the passed domain!")
+
+        # these values are hard-coded but dont need to be!
         delta_lon = 0.352
         delta_lat = 0.234
 
@@ -165,7 +171,7 @@ def cut_and_save_met_data(date,
 
         met = met.interp(latitude=sorted(lat_values), longitude=sorted(lon_values), method="nearest", kwargs={"fill_value": "extrapolate"})
 
-
+    # get the release index of each footprint, for the met domain
     met_release_idxs = get_release_idxs(fp_data_full, domain_lats = met.latitude.values, domain_lons = met.longitude.values)
 
 
@@ -984,9 +990,9 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
     cuts the meteorology to right shape and format, and either saves or returns as xarray
 
     Inputs:
-        - met: unprocessed meteorology file
+        - met: unprocessed meteorology file (ie fixed domain, regular timesteps)
         - fp: full footprint xr array
-        - metsize
+        - metsize: size of the square to crop the meteorology to, centered around each footprint's release idx
         - release_idxs (as obtained with met_release_idxs = get_release_idxs(self.fp_data_full, domain_lats = met.latitude.values, domain_lons = met.longitude.values) )
         - jump: zero or positive int. If jump==0, the meteorology will be interpolated to the times of the footprints. Otherwise, the met will be interpolated to t-jump, where t is the time of the footprint
         - relevant_levels and relevant_variables: lists of levels (as ints) and variables (as str) to keep from the unprocessed met data
@@ -994,11 +1000,13 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
         - savepath: str to save file to
         - add_wind_direction: bool, if True calculate wind_angle and wind_speed from the two horizontal wind vectors and add as variables
         - delete_nans: bool, if True delete timestamps where there were nans
+        - attrs_dict: dictionary of attributes to add to the file before saving/returning
     Returns:
-        - met_cut: xarray with cut and processed meteorology
+        - met_cut: xarray with cropped and processed meteorology (ie interpolated to the correct times, and cropped to a square of size metsize around the footprint release point)
     """
     assert jump>=0, "jump needs to be zero or positive!!"
 
+    # subset the right levels and variables, as specified in the inputs
     if relevant_levels != None:
         for lev in relevant_levels:
             if lev not in met.model_level_number.values: 
@@ -1019,27 +1027,36 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
 
 
     half = int(metsize/2)
+    # data_vars will contain each of the cropped variables, and then be made into an array
     data_vars = {}
 
     # interpolate the meteorology to the correct timestamps
     if jump==0:
         met = met.interp(time=fp.time.values)
     else:
-        #print("before", met.time.values)
         met = met.interp(time=(pd.DatetimeIndex(fp.time.values) - pd.Timedelta(f"{jump}H")))
-        #print("after", met.time.values)
 
     met = met.transpose("model_level_number", "latitude", "longitude", "time")
 
+    # for each variable: 1) load, 2) crop around the release point 3) save to array
+
+    # the returned array will have all datapoints cropped and centered around the release point, with abstract lat/lon coordinates [0,metsize], with the release point in the centre
+    # metlats and metlons will contain the actual latitudes and longitudes for each datapoint 
+    #   (so that for time i, the release coordinate is metlats[i, int(metsize/2)], metlons[i, int(metsize/2)]) 
     metlats = np.zeros(( len(met.time), metsize))
     metlons = np.zeros((len(met.time), metsize))
+
+    # the real latitude/longitude values only need to be stored once, metlatlon ensures this
     metlatlon = "Not Done"
     if verbose: print("creating dict for each variable")
     for varname in met.data_vars:
         if verbose: print("starting ", varname)
+        # 1) load the variable onto memory
         var = met[varname]
         var.load()
         var = var.transpose(..., "latitude", "longitude", "time")
+        # variables can be 4D (lat, lon, time, height) or 3D (surface variables, ie lat, lon, time)
+        # set up the empty array of the correct shape that will contain the cropped variable
         if len(np.shape(var)) == 4:
             empty_arr = np.zeros((len(relevant_levels),metsize, metsize, len(met.time)))
             if metlatlon == "Not Done":
@@ -1050,6 +1067,7 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
             print("something is wrong?")
             print(np.shape(var))
 
+        # 2) for each release index, crop around it (between idx-half and idx+half) and store in the empty array
         for rel_unique in np.unique(release_idxs, axis=0):
             idxs = np.where((release_idxs == rel_unique).all(axis=1))[0]
             #print(rel_unique)
@@ -1070,6 +1088,8 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
                     empty_arr[:,:, idxs] = m
                 except Exception as e: 
                     empty_arr[:, :, idxs] = np.nan 
+        
+        # 3) the filled array for a particular variable, of shape (time, metsize, metsize) is stored in the data_vars dictionary
         if len(np.shape(var)) == 4:
             data_vars[met[varname].name] = (["levels", "lat", "lon", "time"], empty_arr, met[varname].attrs)
             if metlatlon == "On It":
@@ -1079,7 +1099,8 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
         if verbose: print("done with ", varname)
     
     met.close()
-        
+    
+    # build the dataset from all the arrays
     coords = {"lat":np.arange(metsize), "lon":np.arange(metsize), "time":met.time.values, "levels":relevant_levels}
     data_vars["lat_coords"] = (["time", "lat"], metlats)
     data_vars["lon_coords"] = (["time", "lon"], metlons)
@@ -1087,6 +1108,7 @@ def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels
     met_cut = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs_dict)
     met_cut = met_cut.set_coords(("lat_coords", "lon_coords"))
 
+    # add additional wind variables
     if add_wind_direction:
         try:
             met_cut["wind_angle"]=np.arctan2(-met_cut.x_wind,-met_cut.y_wind)
