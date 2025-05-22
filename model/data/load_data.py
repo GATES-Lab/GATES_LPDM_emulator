@@ -35,9 +35,6 @@ def load_fps(fp_datadir):
         fp_files = sorted(glob.glob(fp_datadir))
         path = os.path.split(fp_datadir)[0] + "/"
         filenames = [os.path.split(x)[1] for x in fp_files]
-        print(f"fp files: {fp_files}")
-        print(f"path: {path}")
-        print(f"filenames: {filenames}")
 
         bad_files = ["GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
             "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc", 
@@ -976,6 +973,182 @@ def cut_satellite_data(fp_full, size, returnlatlons = False, fill_bads_with="all
     else:
         return fp_cut 
 
+
+
+def cut_satellite_met_v4(met, fp, metsize, jump=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict={}):
+    """
+    cuts the meteorology from fixed domain and regular timesteps to match the footprint dataset:
+        - in time: interpolated to the time of the footprints if jump=0, or to t-jump hours otherwise
+        - in space: cropped to a square of size metsize x metsize around the coordinates of the satellite measurement for each footprint 
+
+    Main Inputs:
+        - met: meteorology array
+        - fp: footprint array
+        - metsize (int): size of the square to crop the meteorology to
+        - jump (int, 0 or positive): If jump==0, the meteorology will be interpolated to the times of the footprints. Otherwise, the met will be interpolated to t-jump, where t is the time of the footprint
+        - relevant_levels and relevant_variables: lists of levels (as ints) and variables (as str) to keep. If None, all levels/variables are kept respectively
+    Other Inputs:
+        - pad_mode: if the area to be extracted (of size metsize x metsize) escapes the domain of the met file, the met file is extended. if pad_mode="nans", it's extended with nans (and can be deleted later), if pad_mode="edge", it's extended using the edges of the domain
+        - load (bool): load array into memory
+        - add_wind_direction (bool): if True calculate wind_angle and wind_speed from the two horizontal wind vectors and add as variables
+        - delete_nans: bool, if True delete timestamps where there were nans
+        - attrs_dict: dictionary of attributes to add to the file before saving/returning
+        - save (bool): save to file. requires a savepath to be passed
+        - savepath (str): full path to save file to
+
+    Returns:
+        - met_cut: xarray with cropped and interpolated meteorology (ie interpolated to the correct times, and cropped to a square of size metsize around the footprint release point)
+    """
+
+    # subset the right levels and variables, as specified in the inputs
+    if relevant_levels != None:
+        for lev in relevant_levels:
+            if lev not in met.model_level_number.values: 
+                print("level ", lev, "cannot be found in the met file")
+        if len(relevant_levels)==1:
+            print("this is not ready for selecting only one level!")
+        if verbose: print("selecting levels and loading met")
+    
+        met = met.sel(model_level_number=relevant_levels)
+    if relevant_variables != None:
+        if verbose: print("dropping irrelevant vars")
+        for v in relevant_variables:
+            if v not in met.data_vars:
+                print("variable ", v, " not found in met file")
+        vars_to_drop = list(set(list(met.data_vars))- set(relevant_variables))
+        met = met.drop_vars(vars_to_drop)
+    if verbose: print("loading data")
+
+    half = int(metsize/2)
+
+    fp_times = np.copy(fp.time.values)
+
+    # interpolate the meteorology to the correct timestamps
+    ###
+    # TO DO - add here capability to interpolate to every X minutes, then interpolate timestamps with mode="nearest"
+    ###
+    assert jump>=0, "jump needs to be zero or positive!!"
+    if jump==0:
+        met = met.interp(time=fp_times)
+    else:
+        fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{jump}h"))
+        met = met.interp(time=fp_times)
+
+    domain_lats = np.copy(met.latitude.values)
+    domain_lons = np.copy(met.longitude.values)
+
+    met_release_idxs = get_release_idxs(fp, domain_lats = domain_lats, domain_lons = domain_lons)
+    padding_needed = False
+
+    if np.min(met_release_idxs[:,0]) < half:
+        print(f"careful! the meteorology is smaller than the domain you are trying to extract along the latitude dimension. We need to pad at least {half - np.min(met_release_idxs[:,0])} idxs! padding with {pad_mode}")
+
+        delta_lat = domain_lats[1] - domain_lats[0]
+
+        to_pad = half - np.min(met_release_idxs[:,0])
+
+        if pad_mode == "nans":
+            met = met.pad(pad_width={"latitude":to_pad})
+        
+        if pad_mode == "edge":
+            met = met.pad(pad_width={"latitude":to_pad}, mode="edge")
+
+        padding_needed = True
+
+        # reassign coordinates to ensure that padded values have the right spacing
+        updated_lats = sorted([np.min(domain_lats)-(i+1)*delta_lat for i in range(to_pad)]) + list(domain_lats) + sorted([np.max(domain_lats)+(i+1)*delta_lat for i in range(to_pad)])
+        met = met.assign_coords({"latitude":updated_lats})
+    
+   
+
+    if np.min(met_release_idxs[:,1]) < half:
+        print(f"careful! the meteorology is smaller than the domain you are trying to extract along the longitude dimension. We need to pad at least {half - np.min(met_release_idxs[:,1])} idxs! padding with {pad_mode}")
+
+        delta_lon = domain_lats[1] - domain_lats[0]
+
+        to_pad = half - np.min(met_release_idxs[:,1])
+        if pad_mode == "nans":
+            met = met.pad(pad_width={"longitude":to_pad})
+        
+        if pad_mode == "edge":
+            met = met.pad(pad_width={"longitude":to_pad}, mode="edge")
+
+        padding_needed = True
+
+        # reassign coordinates to ensure that padded values have the right spacing
+        updated_lons = sorted([np.min(domain_lons)-(i+1)*delta_lon for i in range(to_pad)]) + list(domain_lons) + sorted([np.max(domain_lons)+(i+1)*delta_lon for i in range(to_pad)])
+        met = met.assign_coords({"longitude":updated_lons})
+
+
+    if padding_needed:
+        # recalculate the release indeces to account for the new padding that was just added
+        domain_lats = np.copy(met.latitude.values)
+        domain_lons = np.copy(met.longitude.values)
+        met_release_idxs = get_release_idxs(fp, domain_lats = domain_lats, domain_lons = domain_lons)
+    
+    
+    cropped_met_arrays = []
+
+    coords_array = np.arange(metsize)
+
+    # crop the data as a small array for each unique release index
+    for rel_unique in np.unique(met_release_idxs, axis=0):
+        # find the corresponding timestamps
+        idxs = np.where((met_release_idxs == rel_unique).all(axis=1))[0]
+
+        # crop the meteorology around the releasepoint
+        cutmet = met.sel(time=fp_times[idxs], latitude=domain_lats[rel_unique[0]-half:rel_unique[0]+half], longitude=domain_lons[rel_unique[1]-half:rel_unique[1]+half])
+
+        # copy the latitude/longitude values for this specific cropped square
+        lats = cutmet.latitude.values.copy()
+        lons = cutmet.longitude.values.copy()
+        
+        # replace the latitude/longitude coordinates with grid-like coords (0-metsize), and save the actual coordinates as variables
+        cutmet = cutmet.assign_coords({"latitude":coords_array, "longitude":coords_array}).rename({"latitude":"lat","longitude":"lon"}).assign({"lat_coords":(("lat"), lats), "lon_coords":(("lon"), lons)})
+
+        cropped_met_arrays.append(cutmet)
+    
+    # concatenate all of the cropped arrays
+    cropped_met = xr.concat(cropped_met_arrays, dim="time")
+    cropped_met = cropped_met.sortby("time")
+    # add any passed attributes
+    cropped_met.attrs = attrs_dict.update({"original_met_attrs":cropped_met.attrs})
+
+    
+    # load into memory, if required
+    if load:
+        print("loading array into memory. If you only want to lazy-load, pass load=False")
+        cropped_met.load()
+
+    # add additional wind variables
+    if add_wind_direction:
+        try:
+            cropped_met["wind_angle"]=np.arctan2(-cropped_met.x_wind,-cropped_met.y_wind)
+            cropped_met["wind_speed"]=np.sqrt(cropped_met.x_wind**2 + cropped_met.y_wind**2)
+        except Exception as e:
+            print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
+
+    # this needs implementing
+    # need to delete nans 
+    #   1) in time (e.g. when t-jump is outside of the meteorology file )
+    #   2) in space (if pad_mode="nans", identify and delete the whole timepoint? this could also be done later in the LoadData object
+            
+    if delete_nans:
+        raise NotImplementedError
+        """
+        nan_idxs = np.unique(np.where(np.isnan(met_cut.x_wind.values[0,0,0,:])))
+        met_cut = met_cut.sel(time=np.delete(met_cut.time.values, nan_idxs))
+        print(f"removed {len(nan_idxs)} invalid indeces")
+        """
+    if save:
+        assert savepath is not None, "pass a savepath to save the file to!"
+        assert savepath[-3:] == ".nc", "ensure you passed a full savepath, including filename and .nc"
+        print("saving met at", savepath)
+        cropped_met.to_netcdf(savepath)
+        print("met saved")
+
+    # cropped met will have some nans!!!
+    return cropped_met
 
 
 def cut_satellite_met_v3(met, fp, metsize, release_idxs, jump=0, relevant_levels=None, relevant_variables=None, save=False, savepath=None, verbose=False, add_wind_direction=True, delete_nans=False, attrs_dict={}):
