@@ -87,7 +87,390 @@ def load_fps(fp_datadir, verbose=False):
     fp_data_full= fp_data_full.sortby('time')
 
     return fp_data_full
+
+
+
+class LoadBaseSatelliteData:
+    """
+    Parent class for loading Satellite Data. Loads footprint, meteorological and topography data for a particular domain and time period. 
+
+    main inputs:
+        - year: can be an int (eg 2016) or a string, including combinations of years (eg "2016", "201[4-5]")
+        - month: str in format "01" for January etc, None if loading a whole year
+        - region: region identifyer, as a string. Default is Brazil. Current set-up has regions "BRAZIL", "SOUTHAMERICA", "SAHARA" and "INDIA"
+        (note - Brazil is a subset of South America!)
+        - domain: Domain related to the region, used for file search (due to existing filenaming conventions). Set-up regions ("BRAZIL", "SOUTHAMERICA", "SAHARA" and "INDIA") have a default domain, all others need domain passed
+    - 
+
+    other inputs
+        - freq: int, frequency of the data to load. freq=1 will load all the datapoints, freq=2 will load one in every two etc. Useful to reduce memory usage. Many datapoints are very close in time and space (and therefore very similar) so using freq particularly in low values (<10) does not affect much the quality of the dataset
+        - sampling_mode: if "regular", subsamples footprints regularly (e.g. one in every two, sequentially with freq=2). if random, subsamples N/freq footprints randomly (where N is the total number of footprints). default is "regular"
+        - freq_offset: if using sampling_mode="regular", offsets the start of the regular sampling, e.g. freq=2 and freq_offset=0 will sample even footprints, and freq_offset=1 will sample uneven footprints
+        - select_time_index: list or 1D np array of timestamps to be selected as datapoints. Applied after sampling with freq (or pass freq=1 to load all footprints)
+        - fp_datadir: str, directory for footprints. default directs to ACRG folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
+            - fill_outofdomain_with: str, out of "all_nans", "nans" and "zeros". Determines what to do if any part of the square cut around the footprint is outside of the domain. "all_nans" fills that whole footprint with nans, "nans" and "zeros" fill only the out of domain areas with nans and zeros respectively. If "all_nans" or "nans", that footprint will be eliminated from the dataset
+        - verbose: if True, prints out the steps throughout the data loading process
     
+    met_args:
+        see load_meteorology()
+    """
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}):
+        
+
+        #### check domains
+        self.region = region
+        if domain is None:
+            self.domain = self._get_domain(region)
+
+        self.year = year
+        self.date = self.year
+        self.verbose=verbose
+
+
+        if month != None:
+            self.month = month
+            self.date = str(self.year)+month
+
+        self.subsample_parameters = {"freq":freq, "sampling_mode":sampling_mode, "freq_offset":freq_offset}
+        
+        #### load footprint (fp) data     
+        if verbose: print("---- LOADING FOOTPRINTS")  
+        self._load_footprints(fp_datadir)
+
+        self.met_args = met_args
+        self.met_processed = False
+        
+
+        if load_everything:
+            self.met_file = self.load_meteorology(**met_args)
+            self.padding=None
+            self.topog_file, self.landcover_file = self.load_topog()
+
+        
+        if verbose: print("---- All done!")
+
+
+
+    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= []):
+        """
+        load the meteorology from the directory, select the met levels and variables if required
+
+        Inputs
+            - met_datadir (str): directory for meteorology. default directs to ACRG meteorology folder. If passing as arg, the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/name_of_your_choice_"
+            - met_levels (list): met levels to select
+            - met_variables (list) : met variables to select
+        """
+        if self.verbose: print("\n ---- LOADING MET")
+
+        # 1) load from file
+        self._get_meteorology_file(met_datadir)
+
+        if len(met_levels)>0:
+            try:
+                self.met_file = self.met_file.sel(levels=met_levels)
+            except KeyError:
+                print(f"there was an error selecting the met levels you passed. Check! \n You passed  {met_levels} but met loaded has {self.met_file.levels}. \n Loading all levels")
+        if len(met_variables)>0:
+            try:
+                self.met_file = self.met[met_variables]
+            except KeyError:
+                print(f"there was an error selecting the met variables you passed. Check! \n You passed  {met_variables} but met loaded has {list(self.met_file.keys())}. \n Loading all variables")
+
+        return self.met_file
+
+    def load_topog(self, topog_path="default", landcover_path="default"):
+        """
+        load the topgoraphy and landcover files, and interpolate to the same resolution and domain as the footprints in self.fp_data_full
+        args:
+         - topog_path and landcover_path: str paths to each file, or "default" for default file
+        
+        uses objet attributes: self.padding (contains if any amount of padding is needed to the footprint domain, and in which direction)
+        """
+        #### load topography
+        print("\n---- LOADING TOPOG")
+        if topog_path=="default":
+            topog_path="/group/chemistry/acrg/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+        print(f"trying to load topography from {topog_path}")
+        topog_file = xr.load_dataset(topog_path)
+
+        if landcover_path=="default":
+            landcover_path = "/group/chemistry/acrg/LPDM/topog_NAME/land_cover.nc"
+        landcover_file = xr.load_dataset(landcover_path)
+            
+
+        topog_file = self._interp_topog(topog_file, padding=self.padding)
+
+        landcover_file = self._interp_landcover(landcover_file, padding=self.padding)
+
+        return topog_file, landcover_file
+
+    def _get_meteorology_file(self, met_datadir):
+        if met_datadir==None:
+            met_datadir = "/group/chemistry/acrg/met_archive/UM/"+self.domain+"/"+self.domain+"_Met_"+str(self.date)+"*.nc"
+        else:
+            met_datadir = met_datadir+str(self.date)+"*.nc"
+        if self.verbose: print("Loading meteorology from " + met_datadir)
+
+        # each chunk should have around 1mill values,  - chunk per level and by time, rounded to the nearest hundred, 100MB-1GB
+        # could calcualte this dynamically 
+        time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            self.met_file = xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk})
+
+        #) rename, select levels and variables
+        if "model_level_number" in self.met_file.dims:
+            self.met_file = self.met_file.rename({"model_level_number": "levels", "latitude":"lat", "longitude":"lon"})
+
+        self.met_file = self.met_file.drop_duplicates(dim=["lat", "lon", "time"])
+
+    def _get_domain(self, region):
+        #### check domains
+        # TODO make domains dict importable
+        domains = {"BRAZIL":"SOUTHAMERICA", "SOUTHAMERICA":"SOUTHAMERICA", "SAHARA":"NORTHAFRICA", "INDIA":"SOUTHASIA"} 
+        try:
+            domain = domains[region]   
+        except: 
+            raise ValueError("No domain was passed, and the region you passed is not associated to any domain!")   
+        
+        return domain   
+
+    def _load_footprints(self, fp_datadir):
+        #### load footprint (fp) data from file
+        if fp_datadir is None:
+            fp_datadir = "/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/"+self.domain+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc"
+        else:
+            #fp_datadir=fp_datadir+str(self.date)+"*.nc"
+            fp_datadir = f"{fp_datadir}{self.domain}/*{self.region}*{self.domain}_{str(self.date)}*.nc"
+        if self.verbose: print("Loading footprint data from " + fp_datadir) 
+
+        self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose)  
+
+        self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
+
+        ## reduce data frequency with regular sampling 9eg keep only 1 in every 3 timesteps
+        # uses the sampling_mode and freq parameters
+        self._subsample_frequency(**self.subsample_parameters)
+
+        if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
+
+        #self.fp_data_full.load()
+    
+    def _subsample_frequency(self, freq=1, sampling_mode="regular",freq_offset=0):
+        # subsample the footprint data according to a particular sampling mode
+        self.original_fp_time_length = len(self.fp_data_full.time.values)
+        if freq>1 and sampling_mode=="regular":
+            print(f"reduced the number of datapoints by frequency {freq}")
+            self.fp_data_full = self.fp_data_full.sel(time=self.fp_data_full.time.values[freq_offset::freq])
+        
+        elif freq>1 and sampling_mode=="random":
+            print(f"reduced the number of datapoints by frequency {freq}, chosen at random")
+            self.fp_data_full = self.fp_data_full.sel(time=np.random.choice(self.fp_data_full.time.values, size=np.shape(self.fp_data_full.time.values[::freq]), replace=False))
+        else:
+            print("no sampling was done because you didnt pass a valid sampling mode, or freq=1")
+
+    def _interp_topog(self, topog_file, padding=None):
+        """
+        loads the topography, interpolates to fp res
+        # assumes the same resolution and domain as the footprints, unless padding is passed (as a dict of shape {"lat":(0,0), "lon":(0,0)})
+        """
+
+        lat_values = list(self.fp_data_full.lat.values)
+        lon_values = list(self.fp_data_full.lon.values)
+
+        if padding is not None and padding != {"lat":(0,0), "lon":(0,0)}:
+            delta_lon = lon_values[1]-lon_values[0]
+            delta_lat = lat_values[1]-lat_values[0]               
+            lat_values = np.array(sorted(lat_values + [np.max(lat_values)+delta_lat*i for i in range(5+padding["lat"][1])]+ [np.min(lat_values)-delta_lat*i for i in range(5+padding["lat"][0])]))
+            lon_values = np.array(sorted(lon_values + [np.max(lon_values)+delta_lon*i for i in range(5+padding["lon"][1])]+ [np.min(lon_values)-delta_lon*i for i in range(5+padding["lon"][0])]))       
+
+
+        topog_file = topog_file.interp(latitude=lat_values, longitude=lon_values).rename({"latitude":"lat", "longitude":"lon"})
+
+        return topog_file
+
+    def _interp_landcover(self, landcover_file, padding=None):
+        """
+        loads the landcover file, interpolates
+        # assumes the same resolution and domain as the footprints, unless padding is passed (as a dict of shape {"lat":(0,0), "lon":(0,0)})
+        """
+        lat_values = list(self.fp_data_full.lat.values)
+        lon_values = list(self.fp_data_full.lon.values)
+
+        if padding is not None and padding != {"lat":(0,0), "lon":(0,0)}:
+            delta_lon = lon_values[1]-lon_values[0]
+            delta_lat = lat_values[1]-lat_values[0]               
+            lat_values = np.array(sorted(lat_values + [np.max(lat_values)+delta_lat*i for i in range(5+padding["lat"][1])]+ [np.min(lat_values)-delta_lat*i for i in range(5+padding["lat"][0])]))
+            lon_values = np.array(sorted(lon_values + [np.max(lon_values)+delta_lon*i for i in range(5+padding["lon"][1])]+ [np.min(lon_values)-delta_lon*i for i in range(5+padding["lon"][0])]))   
+
+
+        landcover_file = landcover_file.assign_coords(lon=(((landcover_file.lon + 180) % 360) - 180))
+        landcover_file = landcover_file.interp(lat=lat_values, lon=lon_values, method="nearest")
+
+        landcover_file = landcover_file.transpose("lat", "lon","pseudo_level")
+
+        return landcover_file
+    
+
+
+class LoadSquareSatelliteData(LoadBaseSatelliteData):
+    """
+    Load footprint and meteorological data for a particular domain and time period, outputting all data cut to a square centered around the measurement point for each timestamp. 
+
+    Inherites the loading functions from the general LoadSatelliteData
+
+    main inputs:
+        - year: can be an int (eg 2016) or a string, including combinations of years (eg "2016", "201[4-5]")
+        - month: str in format "01" for January etc, None if loading a whole year
+        - region: region identifyer, as a string. Default is Brazil. Current set-up has regions "BRAZIL", "SOUTHAMERICA", "SAHARA" and "INDIA"
+        (note - Brazil is a subset of South America!)
+        - domain: Domain related to the region, used for file search (due to existing filenaming conventions). Set-up regions ("BRAZIL", "SOUTHAMERICA", "SAHARA" and "INDIA") have a default domain, all others need domain passed
+        - size: size for footprint to be cut to, as an int. Resolution of the footprint is maintained, cut to a sizexsize square around the release point. 
+    - 
+
+    other inputs
+        - freq: int, frequency of the data to load. freq=1 will load all the datapoints, freq=2 will load one in every two etc. Useful to reduce memory usage. Many datapoints are very close in time and space (and therefore very similar) so using freq particularly in low values (<10) does not affect much the quality of the dataset
+        - sampling_mode: if "regular", subsamples footprints regularly (e.g. one in every two, sequentially with freq=2). if random, subsamples N/freq footprints randomly (where N is the total number of footprints). default is "regular"
+        - freq_offset: if using sampling_mode="regular", offsets the start of the regular sampling, e.g. freq=2 and freq_offset=0 will sample even footprints, and freq_offset=1 will sample uneven footprints
+        - select_time_index: list or 1D np array of timestamps to be selected as datapoints. Applied after sampling with freq (or pass freq=1 to load all footprints)
+        - fp_datadir: str, directory for footprints. default directs to ACRG folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
+            - fill_outofdomain_with: str, out of "all_nans", "nans" and "zeros". Determines what to do if any part of the square cut around the footprint is outside of the domain. "all_nans" fills that whole footprint with nans, "nans" and "zeros" fill only the out of domain areas with nans and zeros respectively. If "all_nans" or "nans", that footprint will be eliminated from the dataset
+        - verbose: if True, prints out the steps throughout the data loading process
+    
+    met_args:
+        see load_meteorology()
+    """
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}):
+
+
+        #### check domains
+        self.region = region
+        if domain is None:
+            self.domain = self._get_domain(region)
+
+        self.size = size
+
+        self.fill_outofdomain_with = fill_outofdomain_with
+
+        self.year = year
+        self.date = self.year
+        self.verbose=verbose
+
+
+        if month != None:
+            self.month = month
+            self.date = str(self.year)+month
+
+        self.subsample_parameters = {"freq":freq, "sampling_mode":sampling_mode, "freq_offset":freq_offset}
+        
+        #### load footprint (fp) data    
+        if verbose: print("---- LOADING FOOTPRINTS") 
+        self._load_footprints(fp_datadir)
+        self._process_footprints(lazy_load)
+
+        self.met_args = met_args
+        self.met_processed = False
+
+        if load_everything:
+            self.met_file = self.load_meteorology(**met_args)
+            self.met = self._process_meteorology(lazy_load=lazy_load)
+            self.topog_file, self.landcover_file = self.load_topog()
+            self.topog = self._process_topog_and_landcover()
+
+
+
+        if check_for_nans:
+            self._remove_fp_nans()
+            self._remove_met_nans()
+            self._remove_topog_nans()
+        
+        if verbose: print("---- All done!")       
+
+    def _process_footprints(self, lazy_load):
+        """
+        cut data around release point
+        fp data returned is array of shape (time, size*size) with each footprint centered around its release point
+        """
+        if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding = cut_satellite_data_v2(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, verbose=self.verbose, return_everything=True, load=not lazy_load)
+
+    def _process_meteorology(self,rechunk=0,lazy_load=True):
+        if self.verbose: print("----- Cutting met")
+        self.met = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=self.fill_outofdomain_with, load=not lazy_load)
+
+        if rechunk>0:
+            self.met.chunk({"time":rechunk})
+        
+        self.met_processed = True
+        return self.met
+
+    
+    def _process_topog_and_landcover(self):
+        """
+        cut topography to the same domain covered by the cut footprints (ie a sizexsize square centered around measurement point)
+        inputs are the latitudes and longitudes that the topog was interpolated to (this is clunky)
+
+        uses object attributes self.topog_file, self.fp_data_full, self.size, self.fp_data
+        """
+        if self.verbose: print("----- Cutting topog")
+
+        topog_lats = list(self.topog_file.lat.values)
+        topog_lons = list(self.topog_file.lon.values)
+
+        topog_release_idxs = get_release_idxs(self.fp_data_full, domain_lats=topog_lats, domain_lons=topog_lons)
+
+        half = int(self.size/2)
+        full_topog=np.zeros_like(self.fp_data)
+        full_landcover=np.zeros_like(self.fp_data)
+        
+        full_topog=np.reshape(full_topog, (len(self.fp_data), self.size, self.size))
+        full_landcover=np.reshape(full_landcover, (len(self.fp_data), self.size, self.size))
+
+        n_disagg_landcover_types = 10
+        disaggregated_landcover = np.zeros((len(self.fp_data), self.size, self.size, n_disagg_landcover_types)) # sea mask + nine types of land cover
+
+        failed_idxs = []
+        for rel_unique in np.unique(topog_release_idxs, axis=0):
+            idxs = np.where((topog_release_idxs == rel_unique).all(axis=1))[0]  
+            try:
+                full_topog[idxs, :,:] = self.topog_file.surface_altitude.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half][np.newaxis, :]
+                full_landcover[idxs, :,:] = self.landcover_file.landcover_type.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half][np.newaxis, :]  
+
+                disaggregated_landcover[idxs, :,:,0] = self.landcover_file.land_binary_mask.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half][np.newaxis, :]   
+                disaggregated_landcover[idxs, :,:,1:] = self.landcover_file.landcover_fraction.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half,:][np.newaxis, :]   
+
+
+            except IndexError:
+                empty = np.empty_like(full_topog[idxs, :,:])
+                empty[:] = np.nan
+                full_topog[idxs, :,:] = empty
+                full_landcover[idxs, :,:] = empty
+                failed_idxs = failed_idxs + list(idxs)
+            
+        
+        # reverse sea mask so that 1 is sea and zero is land
+        disaggregated_landcover[:, :,:,0] = 1 - disaggregated_landcover[:, :,:,0] 
+        # remove the nans that in the original file show the sea mask
+        disaggregated_landcover[:, :,:,1:] = np.nan_to_num(disaggregated_landcover[:, :,:,1:], copy=False)
+    
+        coords = {"time":("time", self.fp_data_full.time.values), "lat":("lat", np.arange(self.size)), "lon":np.arange(self.size), "landcover_level":np.arange(n_disagg_landcover_types)}
+
+        self.topog = xr.Dataset(
+            data_vars = 
+            {"topog": (["time", "lat", "lon"], full_topog),
+            "landcover": (["time", "lat", "lon"], full_landcover),
+             "disaggregated_landcover": (["time", "lat", "lon", "landcover_level"], disaggregated_landcover) },
+             coords = coords
+             )
+        
+        if len(failed_idxs)>0:
+            if self.verbose: print(f"remove {len(failed_idxs)} failed idxs for topog")
+            self.remove_indeces(failed_idxs)
+
+        # returning as a netcdf dataset
+        return self.topog
+
+
+
 
 class LoadSatelliteDataNew:
     """
@@ -150,8 +533,8 @@ class LoadSatelliteDataNew:
             self.met = self.load_meteorology(**met_args, lazy_load=lazy_load)
             self.load_topog()
 
-        if check_for_nans:
 
+        if check_for_nans:
             self._remove_fp_nans()
             self._remove_met_nans()
         
@@ -159,7 +542,7 @@ class LoadSatelliteDataNew:
 
 
 
-    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], metsize=None, rechunk=0,lazy_load=True):
+    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], metsize=None, lazy_load=True, rechunk=0):
         """
         load the meteorology from the directory, select the met levels and variables if required, interpolates and crop to size.
 
@@ -183,7 +566,6 @@ class LoadSatelliteDataNew:
 
         # 1) load from file
         self._get_meteorology_file(met_datadir)
-
 
         if len(met_levels)>0:
             try:
@@ -312,7 +694,7 @@ class LoadSatelliteDataNew:
 
     def _interp_topog(self, topog_file, padding=None, return_latlons=False):
         """
-        loads the topography, interpolates
+        loads the topography, interpolates to fp res
         # assumes the same resolution and domain as the footprints, unless padding is passed (as a dict of shape {"lat":(0,0), "lon":(0,0)})
         """
 
@@ -744,7 +1126,7 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     delta_lon_fp = fp.lon.values[1]-fp.lon.values[0]
 
     if abs(delta_lat - delta_lat_fp) > 0.01 or abs(delta_lon - delta_lon_fp)>0.01:
-        print("the resolution is different! this doesnt work yet")
+        print("the resolution is different! this doesnt work yet?")
     
     #met = self.met.interp({"lat":self.domain_lats, "lon":self.domain_lons})
 
@@ -1899,97 +2281,16 @@ def get_grid(data, latlon_fp):
 
     return latlons, idx_latlons
 
-
+"""
 def grid_coordinates(side):
     xx, yy = np.meshgrid(np.array(list(range(side)), dtype=np.float32), np.array(list(range(side)), dtype=np.float32))
     z = np.empty((side**2, 2), np.float32)
     z[:, 1] = xx.reshape(side**2)
     z[:, 0] = yy.reshape(side**2)
     return z
-
-def align_datasets_with_xr(ds1, ds2):
-    """
-    removes any datapoints that are not common to both DataObject ds1 and xarray ds2. returns synced ds1 and ds2
-    """
-    assert type(ds2) == xr.Dataset, "use this function to align data object with an array dataset. Use align_datasets for two datasets"
-    try:
-        intersect, idxs1, idxs2 = np.intersect1d(ds1.met.time.values, ds2.time.values, return_indices=True)
-    except ValueError:
-        print("There are no overlapping timestamps between there two arrays!")
+"""
 
 
-    if len(intersect) == np.max((len(ds1.met.time.values), len(ds2.time.values))): # ds are already aligned, 
-            print("it seems both datasets are already synced!")
-            return ds1, ds2
-
-
-    ds1.aligned_nan_idx = list(set(list(range(len(ds1.fp_data_full.time)))) - set(idxs1))
-
-    ds1.fp_data_full = ds1.fp_data_full.sel(time=intersect)
-    ds1.met = ds1.met.sel(time=intersect)
-    ds1.fp_lats = ds1.fp_lats[idxs1,:]
-    ds1.fp_lons = ds1.fp_lons[idxs1,:]
-    ds1.fp_data = ds1.fp_data[idxs1,:]
-
-    if hasattr(ds1, "topog"):
-        ds1.topog = ds1.topog[idxs1,:]
-
-    ds2 = ds2.sel(time=intersect)
-
-    return ds1, ds2
-
-
-
-def align_datasets(ds1, ds2, inputs1=None, inputs2=None):
-    """
-    removes any datapoints that are not common to both ds1 and ds2. returns synced ds1 and ds2
-    """
-    try:
-        intersect, idxs1, idxs2 = np.intersect1d(ds1.met.time.values, ds2.met.time.values, return_indices=True)
-    except ValueError:
-        print("There are no overlapping timestamps between there two arrays!")
-
-
-    if len(intersect) == np.max((len(ds1.met.time.values), len(ds2.met.time.values))): # ds are already aligned, are inputs?
-        if inputs1 is not None and inputs2 is not None:
-            if len(intersect) == np.max((len(inputs1), len(inputs2))):
-                raise Exception("it seems both datasets and inputs are already synced!")
-            else:
-                assert hasattr(ds1, "aligned_nan_idx") and hasattr(ds2, "aligned_nan_idx"), "the two datasets are aligned but not the inputs. to align the inputs both datasets should have the aligned_nan_idx attribute, but they dont right now! something went wrong"
-
-                inputs1 = np.delete(inputs1, ds1.aligned_nan_idx, axis=0)
-                inputs2 = np.delete(inputs2, ds2.aligned_nan_idx, axis=0)
-                print("datasets were aligned, aligned inputs too")
-
-        else:
-            print("it seems both datasets are already synced!")
-            if inputs1 is not None:
-                return ds1, ds2, inputs1, inputs2
-            else:
-                return ds1, ds2
-
-    for dataset, indeces, inputs in zip([ds1, ds2], [idxs1, idxs2], [inputs1, inputs2]):
-
-        dataset.aligned_nan_idx = list(set(list(range(len(dataset.fp_data_full.time)))) - set(indeces))
-
-
-        dataset.fp_data_full = dataset.fp_data_full.sel(time=intersect)
-        dataset.met = dataset.met.sel(time=intersect)
-        dataset.fp_lats = dataset.fp_lats[indeces,:]
-        dataset.fp_lons = dataset.fp_lons[indeces,:]
-        dataset.fp_data = dataset.fp_data[indeces,:]
-
-        if hasattr(dataset, "topog"):
-            dataset.topog = dataset.topog[indeces,:]
-
-        
-        if inputs is not None:
-            inputs = inputs[indeces]
-
-    if inputs1 is not None:
-        return ds1, ds2, inputs1, inputs2
-    else:
-        return ds1, ds2
 
 
 
