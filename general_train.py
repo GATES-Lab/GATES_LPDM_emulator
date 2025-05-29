@@ -142,7 +142,7 @@ inputs, names = get_square_satellite_inputs(data, **input_variables)
 
 test_inputs = get_square_satellite_inputs(test_data, **input_variables)
 
-grid, _ = get_grid(data, 10)
+grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
 
 write_to_file("setting up model")
 print("setting up model")
