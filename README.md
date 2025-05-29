@@ -81,34 +81,25 @@ inputs, input_names = get_square_satellite_inputs(cropped_data, variables, stati
 The `FootprintsDataset` object sets up the inputs and outputs to be loaded to the DataLoader, and makes any needed transformations.
 The transformations I'm doing currently are:
 - outputs:
-  - boxcox - the footprint data is very sparse and exponential (most of the domain is full of zeros, there are a few high values near the measurement point, and they decay very quickly as you move further out). To bring all of the data to a similar range, I standardise then apply a boxcox transform to each of the locations independently using sklearn's `PowerTransformer(method='box-cox', standardize=True)`. Applying this to each node separately means that the range of values to be transformed is within the same order of magnitude, and the data transformed is all within the same range (0-2 with a couple outliers). This transformation is definitely helpful but could be improved! The sparsity problem is still there. `train_dataset.fp` contains the transformed data, and `train_dataset.fp_untransformed` the original footprint data. The boxcox transformer is stored at `train_dataset.boxcox`
+  - logv4: Takes log of output data where non-zero, and offsets by minimum value so its above.
+ `train_dataset.fp` contains the transformed data, and `train_dataset.fp_untransformed` the original footprint data
 - inputs
-  - `clever_transform_2` (not that clever!) -  applies a sklearn `preprocessing.StandardScaler()` to each variable and level, across all time jumps (eg all the x_wind data at level 3 is scaled together, so is at level 9 etc). The transformers are stored in a dictionary of format "{"variable_name":{level_1:transformer, level_2:transformer...},...}" stored at train_dataset.transformers. `clever_transform` does the same but across all levels rather than separately. The feature names need to be passed to `input_names` for this transform to work
+  - `clever_transform_3` -  applies a sklearn `preprocessing.StandardScaler()` to each variable and level, across all time_deltas (eg all the x_wind data at level 3 is scaled together, so is at level 9 etc). Applies min-max transform to landcover. The transformers are stored in a dictionary of format "{"variable_name":{level_1:transformer, level_2:transformer...},...}" stored at train_dataset.transformers. The feature names need to be passed to `input_names` for this transform to work
 
 The test dataset can be transformed using the trained transformers from the train dataset by passing a test_mode dictionary as shown below
 
 ```
-train_dataset = FootprintsDataset(inputs=inputs, fp=np.copy(data.fp_data), transform_output="boxcox", feature_dim=np.shape(inputs)[-1]-len(others)-topog, aux_dim=len(others)+topog, clever_transform_2=True, input_names=names)
-test_dataset = FootprintsDataset(inputs=test_inputs, fp=np.copy(test_data.fp_data), transform_output="boxcox", feature_dim=np.shape(inputs)[-1]-len(others)-topog, aux_dim=len(others)+topog, clever_transform_2=True, input_names=names, test_mode={"boxcox":train_dataset.boxcox, "clever_transformers":train_dataset.transformers})
+train_dataset = FootprintsDataset(inputs=inputs, fp=cropped_data.fp_data, input_names=input_names, input_transforms=["clever_transform_3"], output_transforms= ["logv4"])
+
+test_dataset = FootprintsDataset(inputs=inputs, fp=cropped_data.fp_data, input_names=input_names, input_names=names, test_mode=train_dataset.transform_parameters)
 
 train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
 train_loader = DataLoader(test_dataset, batch_size=5, shuffle=False)
 ```
 
-## Other data functions
-- You can align two LoadSatelliteData objects to have the same timestamps using `align_datasets(dataset1, dataset2)`. This is useful if you want to compare two sets of data, predictions etc but some datapoints have been removed in either dataset during loading, maybe due to freq, NaNs etc. 
-  
 
-## Model
-The GNN paradigm are Graph Networks, described by [Deepmind, 2018](https://arxiv.org/pdf/1806.01261.pdf). 
-![Deepmind paper - graph updates example](/readme_imgs/deepmind_updates.PNG?raw=true)
-
-### Model literature/code
-The model is based on the one described by [Deepmind,2022](https://arxiv.org/pdf/2212.12794.pdf) and particularly [Keisler, 2022](https://arxiv.org/pdf/2202.07575.pdf) and the code developed from the code [in the corresponding repo](https://github.com/openclimatefix/graph_weather). I have made some changes I will detail here at some point
-
-### Model architecture
-Here is an architecture diagram that could probably be a bit clearer
-![Architecture diagram](/readme_imgs/diagram.jpg?raw=true)
+## Model - continue developing here!
+Check model_description.md for more info!
 
 ### Constructing a model
 Create a model with the following:
