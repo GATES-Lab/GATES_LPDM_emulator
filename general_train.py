@@ -142,6 +142,7 @@ inputs, names = get_square_satellite_inputs(data, **input_variables)
 
 test_inputs = get_square_satellite_inputs(test_data, **input_variables)
 
+# the model gets built with respect to a "reference footprint", and all predictions are done on this grid. An improvement would be to explore a way to select the best reference footrpint, or to find a way to do this dynamically for each footprint
 grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
 
 write_to_file("setting up model")
