@@ -3,60 +3,39 @@ Note that this readme is not fully up to date!
 
 ## To Do - restructuring and updating
 - [ ] Update data loading functions:
-  - [ ] Load footprints function
+  - [x] Load footprints function
   - [ ] Data loader - update, comment, update documentation
-  - [ ] Add capability to cut and interpolate met directly from file, without needing to cut
-  - [ ] Input extracting - update, comment, udpate documentation
+  - [x] Add capability to cut and interpolate met directly from file, without needing to cut
+  - [x] Input extracting - update, comment, udpate documentation
+  - [ ] Add plotting function to data object?
+- [ ] Update training/testing scripts to work with new data loading functions
+- [ ] Small improvements to model code
+- [ ] Improvements to evaluation code
 
-## To Do
-- [x] write readme section on model usage
-- [x] write readme section on predicting
-- [x] check/update all function docstrings!!
-- [x] update example file with model loading, training and predicting
-- [x] add training file
-- [x] add example trained model
-- [ ] add predicting file
-- [ ] add info on evaluation metrics
-- [x] clean up data loading
-- [ ] clean up dataset creation
-- [ ] Add science summary and ref papers
-
-Nomenclature (needs tidying so it's less confusing but bear with me for now):
-The model has a grid (square) and a mesh (hexagonal). The nodes in the grid are grid nodes and the nodes in the mesh, mesh nodes. I use grid node, pixel and location interchangeably - they all refer to a specific coordinate with a lat/lon. The release point and the measurement point are also the same thing.
-
-The code works fine if used right but it's not robust and needs some cleaning up (there are some inconsistencies in formats, some parameters are redundant, chunks should be split into separate functions, some bits can definitely be parallelised and/or made more efficient)
 
 ## Loading data
-Use the `LoadSatelliteData` object to load data for a date period.
+#### `LoadBaseSatelliteData` loads data from the directories (provided or default). It does not crop or interpolate
 ``` 
-data = LoadSatelliteData(year=2016, region="BRAZIL", freq=2, metsize=50, size =50, topog="default", verbose=True, met_datadir="/group/chemistry/acrg/met_archive/UM/cut_SOUTHAMERICA_big/Met_cut_v2_50_")
+original_data = LoadBaseSatelliteData(year=2016, region="SAHARA", freq=40,  topog="default", verbose=True, load_everything=True)
 ```
+original_data has attributes original_data.fp_data_full , original_data.met_file, original_data.topog_file and original_data.landcover_file
 
-- All of the necessary data is in the ACRG folder (/group/chemistry/acrg/), the paths all default to this unless specifed
-- Only valid `region`s are BRAZIL, SAHARA, INDIA (ie there are default domains and some footprint and met data)
-- `year` can be an int (eg 2016) or a str (eg "201[4-5]"). There is a parameter `month` to load a specific month of data (so `year=2016, month="01"`). The month parameter isn't bulletproof, I have been using `year` directly, eg `year=201601` or `year="201601"` instead
-- footprints:
-  - The function takes footprint data and cuts it to a square of size *size* around the measurement point. The original footprint data is conserved in  `data.fp_data_full` and the cut footprint data is stored flattened in a np array of shape (time, size*size) in `data.fp_data`
-  - The latitudes and longitudes of the cut square for each footprint is stored in `data.fp_lats` and `data.fp_lons` (each of these has size (time, size))
-  - Size should be even 
-- Met:
-  - met_datadir should contain pre-cut meteorology (ie met that has already been cut to a square domain centered around the measurement point). You can pass any pre-cut met file as long as the size is bigger than metsize though best to past the exact if it exists (eg `Met_cut_v2_50_` will be properly resized for `metsize=50` and below, but not for bigger sizes.
-  - The met data is stored in `data.met`.
-  - See below to generate the cut meteorology files
-  - Currently `size` should be equal to  `metsize`
-- `freq` reduces the time frequency of the data before loading to reduce computational expense (ie `freq=3` will only load one in every three footprints and corresponding data).
-- The function removes any datapoints where there are Nans in the met or fp data, be it because of a data problem or because the footprint is partially out of the domain.
-- The topography for each footprint is stored at `data.topog` of size (time, size, size) 
+#### `LoadSquareSatelliteData` loads data, interpolating to the time of the footprints and cropping to a square of size size x size around the footprint's measurement point
+``` 
+cropped_data = LoadBaseSatelliteData(year=2016, region="SAHARA", freq=40,  size=200, topog="default", verbose=True, load_everything=True)
+```
+cropped_data has attributes cropped_data.fp_data (np array), cropped_data.met (Dataset interpolated in time and cropped in space), and cropped_data.topog (Dataset cropped in space, with variables topog and landcover).
 
-### Preparing met files
-See file `generate_sat_met.py` (and send to the cluster using `launch_cpu_job.sh`). Meteorology files are in `/group/chemistry/acrg/met_archive/UM/{domain}/{domain}_Met_`, at the same lat-lon resolution as the footprints and with hourly time resolution. Relevant pararameters:
-- Here `size` needs to be the desired cutting size
-- `met_levels` and `met_variables` define which levels and variables will be saved
-- By default the meteorology is linearly interpolated to the timestamp of each footprint
-- `met_jump` can be an int or a list. If a list, for each int `jump` in `met_jump`, the met is interpolated to `T - jump` where `T` is the timestamp of each footprint, and saved to the corresponding path in `savemetpath`. time "T" is added automatically
+Notes:
+- size should be even!
+- `freq` reduces the time frequency of the data before loading to reduce computational expense (ie `freq=3` will only load one in every three footprints and corresponding data)
+- sometimes the cropped area escapes the actual footprint domain.
+  - if delete_outofdomain=True, these footprints are deleted from the dataset
+  - if the footprints that escape the domain are kept, use fill_outofdomain_with to specify if the out-of-domain areas should be filled with "zeros" or "nans"
 
-## Environment
-See environment_short.yml, I think those are the main packages. environment.yml contains the raw output of saving the environment.
+## Environment - check this section! 
+
+See environment_short.yml
 This file does not contain torch and related packages - this is because you will need to install separately a CUDA-enabled version or not depending on where you are running the code. BluePebble has pytorch+cuda pre-installed, which you can load when you submit jobs to the queue (see the launch_train.sh file). To run notebooks or files on the login node, you will need torch and associated packages installed in a different environment, which I manually import when running notebooks with the following line. Alternatively you could have two parallel envs (graphnet to run on cluster, and graphnet+torch to run on login) but that might get more confusing if you need to install packages! 
 ```
 sys.path.insert(0, "/path/to/environment_with_torch/env_name/lib/python3.8/site-packages/")
@@ -64,30 +43,17 @@ import torch
 ```
 
 ## Setting up data
-### Preparing inputs
-
-Prepare the inputs using `get_all_inputs_graphnet_satellite_v4`. This function outputs:
-- `grid` - a list of lat-lon tuples for each of the nodes, extracted from a reference footprint. The model assumes all footprints to be on this same grid, and the mesh will be constructed over this particular grid too. You can define which footprint is the reference one with parameter `latlon_fp` which defaults to 0 (ie use the first footprint in the dataset as reference) and will likely not need to modify this for now
-- `idx_grid` - a list of (x,y) coordinate tuples for each node, where 0,0 is the measurement point
-- `inputs` - a numpy array with the inputs, of shape (time, nodes, features)
-- `names` - list of dictionaries of length `features` with info about each feature
-- `data` - returns data object itself, in case any updates needed to be made (eg there are nans in the past data). Don't think it's actually needed to be returned explicitly
-
-Parameters:
-- data object
-- `variables_past`: dict of variables to extract at each of the jumps passed. format is {"var name as it appears in data.met":[list of levels to extract]}. If a variable is 2D (ie it has no levels, like surface pressure) pass level 0.
-- jumps: hours back to load (by default the time of the footprint, `jump=0`, is added automatically)
-- variables_nopast: variables to be loaded only for jump=0, though I haven't used it in a while and could be deprecated?
-- topog: whereas to add topography as a variable
-- others: Other non-met variables that could be added to the inputs, eg lat/lon coords of each node, the euclidean distance... see below
-
+### Extracting inputs with `get_square_satellite_inputs()`
+Extract the inputs with shape (time, lat, lon, variable), for multiple atmospheric levels and times if passed. 
+The parameter `time_deltas` allows extracting and interpolating meteorology further back in time, for t-delta Hours where t is the footprint measurement time. e.g. `time_deltas=[6]` means that the meteorological variables will be returned at t, and t-6h.
 
 ```
-others =["lat_coords", "lon_coords", "distance_centre", "x_coords", "y_coords"]
-variables_past = {"x_wind":[3,30,51], "wind_speed":[3,30,51], "wind_angle":[3,30,51], "y_wind":[3,9,15,21,30,42,51], "atmosphere_boundary_layer_thickness":[0]}
+variables = {"x_wind":[3,15], "y_wind":[3], "surface_air_pressure":[]}
+static_variables=["lat_coords", "lon_coords", "x_coords", "y_coords", "topog", "landcover"]
+inputs, input_names = get_square_satellite_inputs(cropped_data, variables, static_variables=static_variables, time_deltas=[6], return_variable_names=True)
 
-grid, idx_grid, inputs, names, data = get_all_inputs_graphnet_satellite_v4(data, variables_past=variables_past, jumps=[6], variables_nopast={}, topog=True, others=others, return_idx=True, centered_coords=True)
 ```
+
 #### Variables
 - Meteorological (time-dependent)
   - air_pressure
@@ -106,10 +72,6 @@ grid, idx_grid, inputs, names, data = get_all_inputs_graphnet_satellite_v4(data,
   - distance_centre - Euclidean distance from the release point, calculated with x/y coords rather than actual distance - this is to speed up calculation, as the lat/lon frame of reference (and therefore distances) changes only slightly for each footprint
   - x_coords/y_coords - numerical indeces of each node in a x/y style, passing `centered_coords=True` returns 0,0 as the center (so negative x coordinates are west, negative y coordinates are south), otherwise 0,0 is the South-West corner and all x/y coords are positive, with the release point at int(size/2), int(size/2). For best practice and better inference across sizes pass centered_coords=True
   - binary_centre - zero for all nodes except the release point which is 1
-- Not met but time-dependent - these seem to badly affect training and should not be used until properly tested!
-  - normalised_time_of_day: sin and cos of the normalised time of the day in seconds (taking sin and cos to make it cyclical)
-  - normalised_time_of_year: sin and cos of the normalised day of the year (taking sin and cos to make it cyclical)
-  - relative_time: relative time of meteorology data with respect to release - eg 6 for met at t-6
   - 
 ### Preparing dataset - this has changed, need to update!
 The `FootprintsDataset` object sets up the inputs and outputs to be loaded to the DataLoader, and makes any needed transformations.
