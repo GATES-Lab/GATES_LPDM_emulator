@@ -1,5 +1,7 @@
 # graphnet_LPDM_emulator
-Note that this readme is not fully up to date!
+WIP!
+This repo implements the model described at [add link!] 
+
 
 ## To Do - restructuring and updating
 - [ ] Update data loading functions:
@@ -12,6 +14,14 @@ Note that this readme is not fully up to date!
 - [ ] Small improvements to model code
 - [ ] Improvements to evaluation code
 
+## Environment - check this section! 
+
+See environment_short.yml
+This file does not contain torch and related packages - this is because you will need to install separately a CUDA-enabled version or not depending on where you are running the code. BluePebble has pytorch+cuda pre-installed, which you can load when you submit jobs to the queue (see the launch_train.sh file). To run notebooks or files on the login node, you will need torch and associated packages installed in a different environment, which I manually import when running notebooks with the following line. Alternatively you could have two parallel envs (graphnet to run on cluster, and graphnet+torch to run on login) but that might get more confusing if you need to install packages! 
+```
+sys.path.insert(0, "/path/to/environment_with_torch/env_name/lib/python3.8/site-packages/")
+import torch
+```
 
 ## Loading data
 #### `LoadBaseSatelliteData` loads data from the directories (provided or default). It does not crop or interpolate
@@ -33,14 +43,7 @@ Notes:
   - if delete_outofdomain=True, these footprints are deleted from the dataset
   - if the footprints that escape the domain are kept, use fill_outofdomain_with to specify if the out-of-domain areas should be filled with "zeros" or "nans"
 
-## Environment - check this section! 
 
-See environment_short.yml
-This file does not contain torch and related packages - this is because you will need to install separately a CUDA-enabled version or not depending on where you are running the code. BluePebble has pytorch+cuda pre-installed, which you can load when you submit jobs to the queue (see the launch_train.sh file). To run notebooks or files on the login node, you will need torch and associated packages installed in a different environment, which I manually import when running notebooks with the following line. Alternatively you could have two parallel envs (graphnet to run on cluster, and graphnet+torch to run on login) but that might get more confusing if you need to install packages! 
-```
-sys.path.insert(0, "/path/to/environment_with_torch/env_name/lib/python3.8/site-packages/")
-import torch
-```
 
 ## Setting up data
 ### Extracting inputs with `get_square_satellite_inputs()`
@@ -65,8 +68,9 @@ inputs, input_names = get_square_satellite_inputs(cropped_data, variables, stati
   - y_wind
   - wind_angle
   - wind_speed
-- Not time dependent (all loaded under others parameter except topography) 
-  - topography
+- Static 
+  - topog
+  - landcover
   - sin_lat_coords/sin_lon_coords/cos_lat_coords/cos_lon_coords - sin and cos of coordinates. This is to encode cyclical variables when using a sphere (ie the whole world), but probably is not as useful when only using a reduced domain
   - lat_coords/lon_coords - coordinates at each node
   - distance_centre - Euclidean distance from the release point, calculated with x/y coords rather than actual distance - this is to speed up calculation, as the lat/lon frame of reference (and therefore distances) changes only slightly for each footprint
