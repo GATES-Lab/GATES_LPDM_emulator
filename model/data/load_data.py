@@ -108,13 +108,14 @@ class LoadBaseSatelliteData:
         - freq_offset: if using sampling_mode="regular", offsets the start of the regular sampling, e.g. freq=2 and freq_offset=0 will sample even footprints, and freq_offset=1 will sample uneven footprints
         - select_time_index: list or 1D np array of timestamps to be selected as datapoints. Applied after sampling with freq (or pass freq=1 to load all footprints)
         - fp_datadir: str, directory for footprints. default directs to ACRG folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
-            - fill_outofdomain_with: str, out of "all_nans", "nans" and "zeros". Determines what to do if any part of the square cut around the footprint is outside of the domain. "all_nans" fills that whole footprint with nans, "nans" and "zeros" fill only the out of domain areas with nans and zeros respectively. If "all_nans" or "nans", that footprint will be eliminated from the dataset
         - verbose: if True, prints out the steps throughout the data loading process
     
     met_args:
         see load_meteorology()
+    topog_args:
+        see load_topogs()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}):
         
 
         #### check domains
@@ -137,14 +138,13 @@ class LoadBaseSatelliteData:
         if verbose: print("---- LOADING FOOTPRINTS")  
         self._load_footprints(fp_datadir)
 
-        self.met_args = met_args
         self.met_processed = False
         
 
         if load_everything:
             self.met_file = self.load_meteorology(**met_args)
             self.padding=None
-            self.topog_file, self.landcover_file = self.load_topog()
+            self.topog_file, self.landcover_file = self.load_topog(**topog_args)
 
         
         if verbose: print("---- All done!")
@@ -316,7 +316,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     """
     Load footprint and meteorological data for a particular domain and time period, outputting all data cut to a square centered around the measurement point for each timestamp. 
 
-    Inherites the loading functions from the general LoadSatelliteData
+    Inherites the loading functions from the general LoadBaseSatelliteData
 
     main inputs:
         - year: can be an int (eg 2016) or a string, including combinations of years (eg "2016", "201[4-5]")
@@ -333,13 +333,18 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         - freq_offset: if using sampling_mode="regular", offsets the start of the regular sampling, e.g. freq=2 and freq_offset=0 will sample even footprints, and freq_offset=1 will sample uneven footprints
         - select_time_index: list or 1D np array of timestamps to be selected as datapoints. Applied after sampling with freq (or pass freq=1 to load all footprints)
         - fp_datadir: str, directory for footprints. default directs to ACRG folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
-            - fill_outofdomain_with: str, out of "all_nans", "nans" and "zeros". Determines what to do if any part of the square cut around the footprint is outside of the domain. "all_nans" fills that whole footprint with nans, "nans" and "zeros" fill only the out of domain areas with nans and zeros respectively. If "all_nans" or "nans", that footprint will be eliminated from the dataset
+        - fill_outofdomain_with: str, out of "all_nans", "nans" and "zeros". Determines what to do if any part of the square cut around the footprint is outside of the domain. "nans" and "zeros" fill only the out of domain areas with nans and zeros respectively. 
+        - delete_outofdomain: bool, if True delete all footprints (and associated datapoints) where the extracted area size x size escapes the domain
+
+
         - verbose: if True, prints out the steps throughout the data loading process
     
     met_args:
         see load_meteorology()
+    topog_args:
+        see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}):
 
 
         #### check domains
@@ -350,6 +355,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         self.size = size
 
         self.fill_outofdomain_with = fill_outofdomain_with
+        self.delete_outofdomain = delete_outofdomain
 
         self.year = year
         self.date = self.year
@@ -373,15 +379,13 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         if load_everything:
             self.met_file = self.load_meteorology(**met_args)
             self.met = self._process_meteorology(lazy_load=lazy_load)
-            self.topog_file, self.landcover_file = self.load_topog()
+            self.topog_file, self.landcover_file = self.load_topog(**topog_args)
             self.topog = self._process_topog_and_landcover()
 
-
-
         if check_for_nans:
+            print("\n Checking if there are any nans in the data")
             self._remove_fp_nans()
             self._remove_met_nans()
-            self._remove_topog_nans()
         
         if verbose: print("---- All done!")       
 
@@ -391,11 +395,19 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         fp data returned is array of shape (time, size*size) with each footprint centered around its release point
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding = cut_satellite_data_v2(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, verbose=self.verbose, return_everything=True, load=not lazy_load)
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data_v2(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
+
+        # if self.fill_outofdomain_with == "all_nans":
+            # remove here all indeces from self.idxs_out_of_domain! so we only keep the footprints that were fully inside the domain
 
     def _process_meteorology(self,rechunk=0,lazy_load=True):
         if self.verbose: print("----- Cutting met")
-        self.met = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=self.fill_outofdomain_with, load=not lazy_load)
+        self.metsize=self.size
+        if self.fill_outofdomain_with=="nans" or self.delete_outofdomain:
+            pad_mode = "nans"
+        if self.fill_outofdomain_with=="zeros":
+            pad_mode = "edge"
+        self.met = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load)
 
         if rechunk>0:
             self.met.chunk({"time":rechunk})
@@ -469,7 +481,64 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         # returning as a netcdf dataset
         return self.topog
 
+    def remove_indeces(self, nan_idxs):
+        """
+        removes any set of indeces passed as nan_idxs from all the objects in the dataset
+        """
+        self.fp_data_full = self.fp_data_full.sel(time=np.delete(self.fp_data_full.time.values, nan_idxs))
+        if hasattr(self, "fp_data"):
+            self.fp_lats = np.delete(self.fp_lats, nan_idxs, axis=0)
+            self.fp_lons = np.delete(self.fp_lons, nan_idxs, axis=0)
+            self.fp_data = np.delete(self.fp_data, nan_idxs, axis=0)
+            if self.verbose: print(f"current length: {len(self.release_idxs)}")
+            self.release_idxs = np.delete(self.release_idxs, nan_idxs, axis=0)
+            
+        if hasattr(self, "met"): 
+            self.met = self.met.sel(time=np.delete(self.met.time.values, nan_idxs))
+        if hasattr(self, "topog"):
+            self.topog = self.topog.sel(time=np.delete(self.topog.time.values, nan_idxs))
 
+        if self.verbose: print(f"Length after removing indeces: {self.fp_data_full.time.size}")
+
+    def _remove_fp_nans(self):
+        ## check if any of the fp entries are nans, and if so remove from met and others
+        if np.sum(np.isnan(self.fp_data_full.fp.values)) != 0:
+            nan_idxs = np.unique(np.where(np.isnan(self.fp_data_full.fp.values))[2])
+            print(f"There are {len(nan_idxs)} nans in the fp data. finding and deleting from met and fp (only on axis time)")
+            self.remove_indeces(nan_idxs)
+            self.fp_nan_idxs = nan_idxs
+        else:
+            self.fp_nan_idxs = []
+    
+    def _remove_met_nans(self):
+        # check if any of the met entries are nans, and if so remove from all objects
+        # this shouldnt be hardcoded !!
+        # needs a revision
+        if np.sum(np.isnan(self.met[[list(self.met.data_vars)[0]]].values)) != 0:
+            nan_idxs = np.unique(np.where(np.isnan(self.met[[list(self.met.data_vars)[0]]].values[0,0,0,:])))
+            print(f"There are {len(nan_idxs)} nans in the met data. finding and deleting from met and fp (only on axis time)")
+            
+            self.remove_indeces(nan_idxs)
+            self.met_nan_idxs = nan_idxs
+        else:
+            self.met_nan_idxs=[]
+
+class LoadDomainSatelliteData(LoadBaseSatelliteData):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}):
+        
+        ## INITIALISE THE BASE OBJECT, TO LOAD THE FOOTPRINTS
+        super().__init__(self, year, region, month=month, domain=domain, freq=freq, freq_offset=freq_offset, verbose=verbose, sampling_mode=sampling_mode, fp_datadir=fp_datadir, load_everything=False, met_args=met_args, topog_args=topog_args)
+
+
+    def _process_footprints(self):
+        raise NotImplementedError
+
+    def _process_met(self):
+        raise NotImplementedError
+
+    def _process_topog(self):
+        raise NotImplementedError
+    
 
 
 class LoadSatelliteDataNew:
@@ -677,7 +746,7 @@ class LoadSatelliteDataNew:
         # cut data around release point
         # fp data returned is array of shape (time, size*size) with each footprint centered around its release point
         if self.verbose: print("Cutting footprints to size") 
-        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding = cut_satellite_data_v2(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, verbose=self.verbose, return_everything=True, load=not lazy_load)
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, _ = cut_satellite_data_v2(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, verbose=self.verbose, return_everything=True, load=not lazy_load)
 
     def _subsample_frequency(self, freq=1, sampling_mode="regular",freq_offset=0):
         # subsample the footprint data according to a particular sampling mode
@@ -812,7 +881,8 @@ class LoadSatelliteDataNew:
         if self.verbose: print(f"current length: {len(self.release_idxs)}")
         self.release_idxs = np.delete(self.release_idxs, nan_idxs, axis=0)
         if self.verbose: print(f"Length after removing indeces: {len(self.release_idxs)}")
-        self.met = self.met.sel(time=np.delete(self.met.time.values, nan_idxs))
+        if hasattr(self, "met"):
+            self.met = self.met.sel(time=np.delete(self.met.time.values, nan_idxs))
         if hasattr(self, "topog"):
             self.topog = self.topog.sel(time=np.delete(self.topog.time.values, nan_idxs))
         """
@@ -829,7 +899,7 @@ class LoadSatelliteDataNew:
         ## check if any of the fp entries are nans, and if so remove from met and others
         if np.sum(np.isnan(self.fp_data_full.fp.values)) != 0:
             nan_idxs = np.unique(np.where(np.isnan(self.fp_data_full.fp.values))[2])
-            print(f"There are {len(nan_idxs)} nans in the fp data. finding and deleting from met and fp (only on axis time)")
+            print(f"There are {len(nan_idxs)} nans in the fp data. finding and deleting those timestamps from object attributes")
             self.remove_indeces(nan_idxs)
             self.fp_nan_idxs = nan_idxs
         else:
@@ -839,7 +909,7 @@ class LoadSatelliteDataNew:
         # check if any of the met entries are nans, and if so remove from all objects
         if np.sum(np.isnan(self.met.x_wind.values)) != 0:
             nan_idxs = np.unique(np.where(np.isnan(self.met.x_wind.values[0,0,0,:])))
-            print(f"There are {len(nan_idxs)} nans in the met data. finding and deleting from met and fp (only on axis time)")
+            print(f"There are {len(nan_idxs)} nans in the met data. finding and deleting those timestamps from object attributes")
             
             self.remove_indeces(nan_idxs)
             self.met_nan_idxs = nan_idxs
@@ -925,7 +995,7 @@ def cut_emissions_data(flux, fp_full, size):
     return flux_cut
 
 
-def cut_satellite_data_v2(fp_full, size, returnlatlons = False,fill_bads_with="all_nans",  load=True, return_as="netcdf", verbose=True, fill_latlons=True, return_everything=False):
+def cut_satellite_data_v2(fp_full, size, returnlatlons = False,fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True, fill_latlons=True, return_everything=False):
     """
     cuts footprint to square of size "size" around release point and returns as a netcdf with artificial lat-lon coordinates 0-size
 
@@ -943,13 +1013,15 @@ def cut_satellite_data_v2(fp_full, size, returnlatlons = False,fill_bads_with="a
 
     padding_needed = False
 
-    if fill_bads_with == "all_nans" or fill_bads_with == "nans":
+    if delete_outofdomain or fill_bads_with == "nans":
         constant_values = np.nan
     if fill_bads_with == "zeros":
         constant_values = 0
     
     domain_lats = np.copy(fp_full.lat.values)
     domain_lons = np.copy(fp_full.lon.values)
+
+    original_fp_domain = (fp_full.lat.values[0], fp_full.lat.values[-1], fp_full.lon.values[0], fp_full.lon.values[-1])
 
     # this dict stores how many footprints needed to be expanded in each direction
     # a footprint that needs padding in multiple directions is counted multiple times
@@ -964,7 +1036,15 @@ def cut_satellite_data_v2(fp_full, size, returnlatlons = False,fill_bads_with="a
     fp_needed_padding_direction["E"] = np.sum(east_padding)
     fp_needed_padding_direction["W"] = np.sum(west_padding)
     n_unique_padded_fps = np.sum(np.any([south_padding, north_padding, east_padding, west_padding], axis=0))
+    
+    padded_fps_idxs = np.where(np.any([south_padding, north_padding, east_padding, west_padding], axis=0))[0]
     padding = {"lat":(0,0), "lon":(0,0)}
+
+    if delete_outofdomain and len(padded_fps_idxs)>0:
+        if verbose: print(f"for {len(padded_fps_idxs)} footprints, a square of size x size escapes the footprint domain in directions {fp_needed_padding_direction}. dropping these! if you want to keep them anyway, pass delete_outofdomain=False")
+        fp_full = fp_full.drop_sel(time=fp_full.time[padded_fps_idxs])
+        fp_needed_padding_direction = {"N":0, "S":0, "E":0, "W":0}
+        release_idxs = get_release_idxs(fp_full)  
 
     ## TODO make padding its own function
     # 1) check if any footprints, when cut to size, will escape the domain
@@ -1054,7 +1134,7 @@ def cut_satellite_data_v2(fp_full, size, returnlatlons = False,fill_bads_with="a
         if return_everything:
             fp_lats = cropped_fp.lat_coords.values
             fp_lons = cropped_fp.lon_coords.values  
-            return fp_data, fp_lats, fp_lons, release_idxs, padding               
+            return fp_data, fp_lats, fp_lons, release_idxs, padding, fp_full.sel(lat=slice(original_fp_domain[0], original_fp_domain[1]), lon=slice(original_fp_domain[2], original_fp_domain[3]))               
         else:
             return fp_data            
  
@@ -1308,6 +1388,7 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
                 
 
             else:
+                # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
                 met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False)
                 met = met.swap_dims({"time":"fp_time"})
                 #met = met.reset_coords(["time"])
@@ -1319,9 +1400,10 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
 
             del met 
     
-
+    # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
     full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", "levels", "time_delta")
 
+    input_arrays = []
     
     ### SETTING UP VARIABLES WITH LEVELS
     # stack along the variable dimension, so that the new variable has shape (variable name, level, time_delta)
@@ -1338,6 +1420,12 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
                     indexes.append((v, lev, delta))
         
         stacked_levels_met = stacked_levels_met.sel(variable_name=indexes)
+
+        varnames_dict = [{"var_name":tup[0], "level":tup[1], "time_delta":tup[2], "type":"met"} for tup in stacked_levels_met.variable_name.values]
+        stacked_levels_met = stacked_levels_met.drop_vars({'time_delta', 'variable_name', 'levels','variable'}).assign_coords({"variable_name":varnames_dict})
+
+        input_arrays.append(stacked_levels_met)
+        
     else:
         stacked_levels_met = None
     
@@ -1345,6 +1433,11 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
     if len(surface_variables_needed)>0:
         if verbose: print(f"Setting up surface variables: {surface_variables_needed}")
         stacked_surface_met = full_met[surface_variables_needed].to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_surface_met")
+        varnames_dict = [{"var_name":tup[0], "time_delta":tup[1], "type":"surface_met"} for tup in stacked_surface_met.variable_name.values]
+        stacked_surface_met = stacked_surface_met.drop_vars({'time_delta', 'variable_name', 'variable'}).assign_coords({"variable_name":varnames_dict})
+
+        input_arrays.append(stacked_surface_met)
+
     else:
         stacked_surface_met = None
 
@@ -1376,7 +1469,17 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
 
         stacked_static_inputs = static_ds.to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_static_inputs")  
 
-    return stacked_levels_met, stacked_surface_met, stacked_static_inputs
+        varnames_dict = [{"var_name":tup[0], "type":"static"} for tup in stacked_static_inputs.variable_name.values]
+        stacked_static_inputs = stacked_static_inputs.drop_vars({'variable_name', 'variable'}).assign_coords({"variable_name":varnames_dict})
+
+        input_arrays.append(stacked_static_inputs)
+
+    else:
+        stacked_static_inputs=None
+
+    print("concatenate!")
+
+    return xr.concat(input_arrays, dim="variable_name")
 
 
 
