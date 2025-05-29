@@ -117,6 +117,7 @@ class LoadBaseSatelliteData:
     """
     def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}):
         
+        self.dataset_format = "base" 
 
         #### check domains
         self.region = region
@@ -346,7 +347,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     """
     def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}):
 
-
+        self.dataset_format = "square" 
         #### check domains
         self.region = region
         if domain is None:
@@ -529,6 +530,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         ## INITIALISE THE BASE OBJECT, TO LOAD THE FOOTPRINTS
         super().__init__(self, year, region, month=month, domain=domain, freq=freq, freq_offset=freq_offset, verbose=verbose, sampling_mode=sampling_mode, fp_datadir=fp_datadir, load_everything=False, met_args=met_args, topog_args=topog_args)
 
+        self.dataset_format = "domain"
 
     def _process_footprints(self):
         raise NotImplementedError
@@ -1343,12 +1345,26 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
 
 
 
-def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], static_variables=[], reference_fp=0, verbose=True):
+def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], static_variables=[], verbose=True, return_variable_names=False, return_asarray=False):
     """
-    LATEST VERSION - get inputs from LoadSatelliteData object and format as array of size (time, variables)
+    LATEST VERSION - get inputs from LoadSquareSatelliteData object and format as a DataArray of size (time, lat, lon, variables)
+
+    ToDo: add option for it to work with LoadDomainSatelliteData! 
+
+    Inputs:
+    - data: LoadSquareSatelliteData object
+    - met_variables: dict, of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list
+    - time_deltas: list, of t-H hours to extract the met variables. t=0 (ie the time of the satellite measurement) is extracted automatically. time_deltas=[6,12] extracts the data at t=0, t-6h and t-12h.
+    - static_variables: list of static variables to add, eg topog, landcover, lat_coords. You can see or increase the list of valid names get_static_variables_functions()
+    - return_variable_names: bool, if true also returns a list of dicts with the variable names
+    - return_asarray: bool, if true returns as an np array of shape (time, lat, lon, variables) and the variable_names
+
     """
-    assert hasattr(data, "met_processed"), "It doesn't seem this is a SatelliteData object"
+    assert hasattr(data, "dataset_format"), "It doesn't seem this is a SatelliteData object"
+    assert data.dataset_format == "square", "At the moment this only works for LoadSquareSatelliteData objects"
     assert data.met_processed == True, "Make sure that you have loaded and cut the meteorology in the SatelliteData object"
+
+    assert type(met_variables) is dict, "met_variables should be a dict of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list"
 
     if verbose: print("---Preparing met")
 
@@ -1403,7 +1419,15 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
     # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
     full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", "levels", "time_delta")
 
+    # if the time_delta is large, cut met might have interpolated to t-time_delta outside of the known met. check and if so remove indeces
+    if data.met.time.values[0] - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]:
+        badly_interpolated = data.met.time.values - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]
+        print(badly_interpolated)
+        full_met = full_met.drop_sel(fp_time=full_met.fp_time.values[badly_interpolated])
+
+
     input_arrays = []
+    varnames_dict = []
     
     ### SETTING UP VARIABLES WITH LEVELS
     # stack along the variable dimension, so that the new variable has shape (variable name, level, time_delta)
@@ -1421,8 +1445,10 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
         
         stacked_levels_met = stacked_levels_met.sel(variable_name=indexes)
 
-        varnames_dict = [{"var_name":tup[0], "level":tup[1], "time_delta":tup[2], "type":"met"} for tup in stacked_levels_met.variable_name.values]
-        stacked_levels_met = stacked_levels_met.drop_vars({'time_delta', 'variable_name', 'levels','variable'}).assign_coords({"variable_name":varnames_dict})
+        varnames_dict = varnames_dict + [{"var":tup[0], "level":tup[1], "time_delta":tup[2], "type":"met"} for tup in stacked_levels_met.variable_name.values]
+        
+
+        stacked_levels_met = stacked_levels_met.drop_vars({'time_delta', 'variable_name', 'levels','variable'}).assign_coords({"variable_name":stacked_levels_met.variable_name.values})
 
         input_arrays.append(stacked_levels_met)
         
@@ -1432,9 +1458,11 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
     ### SETTING UP VARIABLES WITH NO LEVELS
     if len(surface_variables_needed)>0:
         if verbose: print(f"Setting up surface variables: {surface_variables_needed}")
-        stacked_surface_met = full_met[surface_variables_needed].to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_surface_met")
-        varnames_dict = [{"var_name":tup[0], "time_delta":tup[1], "type":"surface_met"} for tup in stacked_surface_met.variable_name.values]
-        stacked_surface_met = stacked_surface_met.drop_vars({'time_delta', 'variable_name', 'variable'}).assign_coords({"variable_name":varnames_dict})
+        
+        # add empty variable levels so it aligns with the met dataset
+        stacked_surface_met = full_met[surface_variables_needed].assign_coords(levels=0).expand_dims("levels").transpose("fp_time", "lat", "lon", "levels", "time_delta").to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_surface_met")
+        varnames_dict = varnames_dict + [{"var":tup[0], "time_delta":tup[2], "type":"surface_met"} for tup in stacked_surface_met.variable_name.values]
+        stacked_surface_met = stacked_surface_met.drop_vars({'time_delta', 'variable_name', 'variable'}).assign_coords({"variable_name":stacked_surface_met.variable_name.values})
 
         input_arrays.append(stacked_surface_met)
 
@@ -1467,10 +1495,13 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
         if "lon_coords" not in static_variables:
             static_ds = static_ds.drop_vars(["lon_coords"])
 
-        stacked_static_inputs = static_ds.to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_static_inputs")  
+        # add empty variable levels and time_delta so it aligns with the met dataset
+        print("new format")
+        stacked_static_inputs = static_ds.assign_coords(levels=0, time_delta=0).expand_dims("levels").expand_dims("time_delta").transpose("fp_time", "lat", "lon", "levels", "time_delta").to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_static_inputs")  
 
-        varnames_dict = [{"var_name":tup[0], "type":"static"} for tup in stacked_static_inputs.variable_name.values]
-        stacked_static_inputs = stacked_static_inputs.drop_vars({'variable_name', 'variable'}).assign_coords({"variable_name":varnames_dict})
+        
+        varnames_dict = varnames_dict + [{"var":tup[0], "type":"static"} for tup in stacked_static_inputs.variable_name.values]
+        stacked_static_inputs = stacked_static_inputs.drop_vars({'variable_name', 'variable'}).assign_coords({"variable_name":stacked_static_inputs.variable_name.values})
 
         input_arrays.append(stacked_static_inputs)
 
@@ -1478,8 +1509,22 @@ def get_all_inputs_graphnet_satellite_v7(data, met_variables, time_deltas=[], st
         stacked_static_inputs=None
 
     print("concatenate!")
+    concatenated_inputs = xr.concat(input_arrays, dim="variable_name")
+    idx = pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"])
+    concatenated_inputs = concatenated_inputs.assign_coords(variable_name=pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"]))
 
-    return xr.concat(input_arrays, dim="variable_name")
+    if not return_asarray:
+        if return_variable_names:
+            return concatenated_inputs, varnames_dict
+        else:
+            return concatenated_inputs
+        
+    if return_asarray:
+        if return_variable_names:
+            return concatenated_inputs.values, varnames_dict
+        else:
+            return concatenated_inputs.values
+
 
 
 
