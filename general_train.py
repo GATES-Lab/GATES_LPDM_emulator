@@ -1,5 +1,11 @@
 import sys
 
+### i updated this from general train but actually should be using general_train_v4
+
+sys.path.insert(0,"/software/local/languages/miniforge3/envs/elena/lib/python3.12/site-packages/")
+
+sys.path.insert(0,"/user/work/ef17148/oldstuff/ef17148/.conda/envs/new_graphnet/lib/python3.12/site-packages")
+
 #import cartopy
 #import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
@@ -10,6 +16,8 @@ import numpy as np
 import torch
 import os
 import pickle
+import random
+
 
 sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
 sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
@@ -40,11 +48,10 @@ file_path = args.file_path
 
 print(file_name, file_path)
 
+#### 1 Set up
 
-
-torch.manual_seed(33)
-
-path="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/"
+## make this importable!
+path="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_NORTHAFRICA/"
 
 def write_to_file(message):
     f = open(f"{path}{model_name}/{model_name}_updates.txt", "a")
@@ -74,6 +81,7 @@ def load_file(file_name, file_path):
     
 
 # TODO make this an argument
+    
 
 parameters = load_file(file_name, file_path) 
 
@@ -82,10 +90,27 @@ model_name = parameters["model_name"]
 print(model_name)
 
 
+
+if "seed" in (parameters.keys()):
+    print(parameters["seed"])
+    np.random.seed(parameters["seed"])
+    torch.manual_seed(parameters["seed"])
+    torch.cuda.manual_seed(parameters["seed"])
+    random.seed(parameters["seed"])
+
+else:
+    print("34")
+    np.random.seed(34)
+    torch.manual_seed(34)
+    torch.cuda.manual_seed(34)
+    random.seed(34)
+
+
+
 # make files
-os.mkdir(f"/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/{model_name}")
-os.mkdir(f"/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/{model_name}/training_imgs")
-f = open(f"/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/{model_name}/{model_name}_updates.txt", "x")
+os.makedirs(f"{path}{model_name}", exist_ok=True)
+os.mkdir(f"{path}{model_name}/training_imgs")
+f = open(f"{path}{model_name}/{model_name}_updates.txt", "x")
 f.close()
 
 
@@ -93,6 +118,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"))
 #write_to_file("loading data")
 write_to_file("loading data")
+
+#### 2 Load Data
 
 
 train_load_data = copy.deepcopy(parameters["train_load_data"])
@@ -102,40 +129,50 @@ test_load_data.update(parameters["test_load_data"])
 print(train_load_data)
 print(test_load_data)
 
-data = LoadSatelliteData(**train_load_data)
-test_data = LoadSatelliteData(**test_load_data)
+data = LoadSquareSatelliteData(**train_load_data)
+test_data = LoadSquareSatelliteData(**test_load_data)
 
 write_to_file("setting up data")
 
-variables = parameters["variables"]
-met_variables = variables["met_variables"]
-others = variables["others"]
-topog=variables["topog"]
-jumps = variables["jumps"]
+# extract inputs
 
-grid, inputs, names, data = get_all_inputs_graphnet_satellite_v4(data, met_variables, jumps, {}, topog=topog, others=others, centered_coords=variables["centered_coords"])
+input_variables = parameters["variables"]
 
-_, test_inputs, _, test_data = get_all_inputs_graphnet_satellite_v4(test_data, met_variables, jumps, {}, topog=topog, others=others, centered_coords=variables["centered_coords"])
+inputs, names = get_square_satellite_inputs(data, **input_variables)
+
+test_inputs = get_square_satellite_inputs(test_data, **input_variables)
+
+grid, _ = get_grid(data, 10)
 
 write_to_file("setting up model")
 print("setting up model")
 
 test_batch_size=10
 
-
-train_dataset = FootprintsDatasetV2(inputs, data.fp_data, input_names=names, **parameters["dataloader_parameters"])
+# transform data - 
+train_dataset = FootprintsDatasetV3(inputs, data.fp_data, input_names=names, **parameters["dataloader_parameters"])
 
 print(train_dataset.transform_parameters)
 
-test_dataset = FootprintsDatasetV2(test_inputs, test_data.fp_data, input_names=names, test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
+test_dataset = FootprintsDatasetV3(test_inputs, test_data.fp_data, input_names=names, test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
 
 train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=10)
 
+size = data.size
+
+# all the necessary data is already in the loaders, so we can delete the objects
+del data, test_data
+
 lr = parameters["learning_rate"]
 print(lr)
+#### 3 Make model
 
-model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=np.shape(inputs)[-1]-len(others)-topog, aux_dim=len(others)+topog, **parameters["model_parameters"])
+# this is leftover from the previous model and actually shouldnt make a difference
+aux_dim = len(input_variables["others"]) 
+feature_dim=np.shape(inputs)[-1]-aux_dim
+
+model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim, **parameters["model_parameters"])
 
 criterion = eval(parameters["loss_functions"]["criterion"])
 
@@ -146,7 +183,7 @@ optimizer = optim.AdamW(model.parameters(), lr=lr)
 
 losses = {"train":[], "test":[], "NMAE_test":[], "MSE_test_transformed":[], "NMAE_test_transformed":[], "accuracy":[], "IoU":[]}
 
-
+#### 3 Dump info
 print("saving grids etc")
 
 # save transform parameters, grid and training settings
@@ -164,6 +201,7 @@ epoch_so_far = 0
 if torch.cuda.is_available():
     model.cuda()
 
+#### 4 Train loop
 for epoch in range(302):
     epoch=epoch+epoch_so_far
     running_loss = 0.0
@@ -219,10 +257,10 @@ for epoch in range(302):
         fps = test_dataset.fp.detach().numpy()
         fig, ax = plt.subplots(4,4, figsize=(10, 10))
         for axis, fn in enumerate([10,50,190,600]):
-            ax[0,axis].imshow(np.reshape(test_dataset.predictions[fn+n,:], (data.size,data.size)), origin="lower")
-            ax[1,axis].imshow(np.reshape(fps[fn+n,:], (data.size,data.size)), origin="lower") 
-            ax[2,axis].imshow(np.reshape(transformed_preds[fn+n,:], (data.size,data.size)), origin="lower")
-            ax[3,axis].imshow(np.reshape(og_fps[fn+n,:], (data.size,data.size)), origin="lower")   
+            ax[0,axis].imshow(np.reshape(test_dataset.predictions[fn+n,:], (size,size)), origin="lower")
+            ax[1,axis].imshow(np.reshape(fps[fn+n,:], (size,size)), origin="lower") 
+            ax[2,axis].imshow(np.reshape(transformed_preds[fn+n,:], (size,size)), origin="lower")
+            ax[3,axis].imshow(np.reshape(og_fps[fn+n,:], (size,size)), origin="lower")   
             ax[0,axis].set_title(f"prediction, \n sample {fn+n}")
             ax[1,axis].set_title(f"truth, \n sample {fn+n}")
             ax[2,axis].set_title(f"transformed prediction, \n sample {fn+n}")
