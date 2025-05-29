@@ -1,0 +1,54 @@
+{
+    "model_name" : "model_name_to_save_as",
+    "train_load_data" : {
+        "year":"201[4-5]",
+        "freq":3,
+        "region":"BRAZIL",
+        "size":50,
+        "verbose":true,
+    },
+
+    "test_load_data" : {
+        "year":"2016",
+        "freq":50
+    },
+
+    "reference_model": {
+        "model_name":"model_name_to_predict_from", 
+        "domain_size": 50
+    },
+
+    "variables" : {
+        "met_variables":{"x_wind":[3,9,15,21,30,42,51], "wind_speed":[3,30,51], "wind_angle":[3,30,51], "y_wind":[3,9,15,21,30,42,51], "upward_air_velocity":[3,9,15,21,30,42,51], "air_temperature":[3,9,15,21,30,42,51], "air_pressure":[3,9,15,21,30,42,51], "atmosphere_boundary_layer_thickness":[], "surface_air_pressure":[]},
+        "static_variables":["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "distance_centre", "x_coords", "y_coords", "topog],
+        "time_deltas":[6,12],
+    },
+
+    "dataloader_parameters":{
+        "input_transforms":["clever_transform_3"],
+        "output_transforms":["logv4"]  
+    },
+
+    "model_parameters":{
+        "num_blocks":4, 
+        "node_dim":64, 
+        "edge_dim":64, 
+        "hidden_layers_processor_node":2, 
+        "hidden_layers_processor_edge":2,  
+        "hidden_layers_decoder":1, 
+        "hidden_dim_processor_node":16, 
+        "hidden_dim_processor_edge":16, 
+        "hidden_dim_decoder":16, 
+        "resolution":4, 
+        "output_dim":1, 
+        "residuals":false, 
+        "attention":false
+    },
+
+    "learning_rate":5e-5,
+
+    "loss_functions" : {
+        "criterion": "MSE_assymetric(alpha=2)",
+        "criterion_test": "torch.nn.MSELoss()"
+    }    
+}
