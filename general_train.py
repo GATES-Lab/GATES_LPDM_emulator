@@ -1,9 +1,7 @@
 import sys
 
-### i updated this from general train but actually should be using general_train_v4
-
+# delete before use!!
 sys.path.insert(0,"/software/local/languages/miniforge3/envs/elena/lib/python3.12/site-packages/")
-
 sys.path.insert(0,"/user/work/ef17148/oldstuff/ef17148/.conda/envs/new_graphnet/lib/python3.12/site-packages")
 
 #import cartopy
@@ -37,6 +35,8 @@ import time
 from datetime import datetime
 import json
 import argparse
+
+import random
 
 parser = argparse.ArgumentParser(description="Load parameters")
 parser.add_argument("file_name", help="parameter file name")
@@ -81,14 +81,14 @@ def load_file(file_name, file_path):
     
 
 # TODO make this an argument
-    
 
 parameters = load_file(file_name, file_path) 
 
+print("PARAMETERS:")
+print(parameters)
 
 model_name = parameters["model_name"]
 print(model_name)
-
 
 
 if "seed" in (parameters.keys()):
@@ -173,6 +173,9 @@ print(lr)
 aux_dim = len(input_variables["others"]) 
 feature_dim=np.shape(inputs)[-1]-aux_dim
 
+image_plots = random.sample(list(range(len(test_inputs))), k=4)
+
+# Should probably update the name!!
 model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim, **parameters["model_parameters"])
 
 criterion = eval(parameters["loss_functions"]["criterion"])
@@ -181,8 +184,15 @@ criterion_test = eval(parameters["loss_functions"]["criterion_test"])
 
 optimizer = optim.AdamW(model.parameters(), lr=lr)
 
+flux_evaluation=["uniform", "checkerboard_10", "checkerboard_5"]
 
 losses = {"train":[], "test":[], "NMAE_test":[], "MSE_test_transformed":[], "NMAE_test_transformed":[], "accuracy":[], "IoU":[]}
+
+losses.update({f"flux_{f}":{"MAE":[], "R2":[]} for f in flux_evaluation})
+
+
+NMAE_function = NMAE
+
 
 #### 3 Dump info
 print("saving grids etc")
@@ -210,7 +220,7 @@ for epoch in range(302):
     start = time.time()
     for i, batch in enumerate(train_loader):
         # get the inputs; data is a list of [inputs, labels]
-        ins, labels = batch[0].to(device), batch[1].to(device)
+        ins, labels = batch[0].to(device), batch[1].to(device), batch[2].to(device)
         # zero the parameter gradients
         optimizer.zero_grad()
 
@@ -251,6 +261,13 @@ for epoch in range(302):
 
     write_to_file(f"{epoch + 1}, loss: {running_loss/(i+1)}, test loss: {test_error/(i_test+1)}, NMAE test: {NMAE(test_out,truths)}, NMAE test trasformed: {evaluation_metrics['NMAE']}, MSE test transformed: {evaluation_metrics['MSE']}, IoU {evaluation_metrics['IOU']}")
 
+    for flux_mode in flux_evaluation:
+        flux_metrics = test_dataset.evaluate_flux(mode=flux_mode)
+        losses[f"flux_{flux_mode}"]["MAE"].append(flux_metrics["MAE"])
+        losses[f"flux_{flux_mode}"]["R2"].append(flux_metrics["R2"])
+
+    write_to_file(f"{epoch + 1}, loss: {running_loss/(i+1)}, test loss: {test_error/(i_test+1)}, NMAE test: {NMAE_nans(test_out,truths)}, NMAE test trasformed: {evaluation_metrics['NMAE']}, MSE test transformed: {evaluation_metrics['MSE']}, IoU {evaluation_metrics['IOU']}, flux metrics (checkerboard 5): {flux_metrics}")
+    
     # every five epochs plot and save 
     if epoch % 5 == 0:
         n=0
@@ -285,7 +302,39 @@ for epoch in range(302):
                     'learning_rate':lr,
                     }, f"{path}{model_name}/{model_name}_{epoch}.pt")
 
+    if epoch == 350:
+        test_out = np.reshape(np.squeeze(test_out), (len(test_out), data.size,data.size))
+        data_vars = {'predictions':(['time', "lat", "lon"], test_out, 
+                                {'space': 'transformed', 'type':"prediction", 'emulated_with': model_name}),
+                    'trans_predictions':(['time', "lat", "lon"], transformed_preds, 
+                                {'space': 'original', 'type':"prediction",'emulated_with': model_name}),
+                    'fp':(['time', "lat", "lon"], np.reshape(fps, (len(test_dataset.fp), data.size,data.size)), 
+                                {'space': 'original', 'type':"truth"}),
+                    'trans_fp':(['time', "lat", "lon"], np.reshape(test_dataset.fp, (len(test_dataset.fp), data.size,data.size)), 
+                                {'space': 'transformed', 'type':"truth"})}
 
+        # define coordinates
+        coords = {'time': (['time'], test_data.met.time.values),
+                'lat': (['lat'], list(range(data.size))),
+                'lon': (['lon'],  list(range(data.size)))}
+
+        # define global attributes
+        attrs = {'creation_date':str(datetime.now()), "model":model_name}
+        
+
+        # create dataset
+        ds = xr.Dataset(data_vars=data_vars, 
+                        coords=coords, 
+                        attrs=attrs)
+        
+
+        ds.to_netcdf(f"{path}{model_name}/sample_predictions_training.nc")
+        
+    if epoch == 102:
+        ## replaced NMAE with NMAE_nans in the whole file!
+        if NMAE_nans(test_out,truths) == 1:
+            print("no learning is happening! early stopping")
+            break
 
 
 print("Finished Training")

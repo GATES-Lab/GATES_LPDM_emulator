@@ -326,6 +326,9 @@ def checkerboard(boardsize, squaresize=1):
 def mean_bias(truths, preds):
     return np.mean(truths-preds)
 
+def mean_bias_correct(truths, preds):
+    return np.mean(preds-truths)
+
 def nmae(y_true, predictions):
     y_true, predictions = np.array(y_true), np.array(predictions)
     return np.mean(np.abs(y_true - predictions))/np.mean(y_true)
@@ -357,9 +360,15 @@ def correlation_coeff(truth, pred, log=True):
         pred = np.log10(pred)
         truth = np.log10(truth)
 
-    pred_nonnan1 = pred[np.where(np.logical_and(~np.isinf(truth), ~np.isinf(pred)))]
-    truth_nonnan1 = truth[np.where(np.logical_and(~np.isinf(truth), ~np.isinf(pred)))]
-    rr1 = np.corrcoef(truth_nonnan1, pred_nonnan1)[0, 1]
+        pred_nonnan1 = pred[np.where(np.logical_and(~np.isinf(truth), ~np.isinf(pred)))]
+        truth_nonnan1 = truth[np.where(np.logical_and(~np.isinf(truth), ~np.isinf(pred)))]
+    
+    else:
+        pred_nonnan1 = pred[np.where(np.logical_and(truth>0, pred>0))]
+        truth_nonnan1 = truth[np.where(np.logical_and(truth>0, pred>0))]
+    
+    rr1 = np.corrcoef(truth_nonnan1, pred_nonnan1)[0, 1]        
+
     return rr1
 
 class ModelEv():
@@ -368,43 +377,46 @@ class ModelEv():
 
     Default is tuning bias correction on Jan-March, and correct the rest. Pass a regex string or a list of months to validation_set and test_set to change this
     """
-    def __init__(self, model_name, size=100, validation_set="0[1-3]", test_set="*", check_validation_overlap=True, path_to_files="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/"):
+    def __init__(self, model_name, size=100, validation_set="0[1-3]", test_set="*", val_year="2016", test_year="2016", check_validation_overlap=True, path_to_files="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/", predictions_file_name="predictions"):
         self.model_name=model_name
         self.size=size
 
         if "[" in model_name and "[[]" not in model_name:
             model_name = model_name.replace("[","%temp%").replace("]", "[]]").replace("%temp%", "[[]")
 
-        print(f"loading data from {path_to_files}{model_name}/predictions/preds_2016*.nc")
-        print(f"using validation data: {validation_set} and test data: {test_set}. Checking overlap between the two: {check_validation_overlap}")
+        print(f"loading data from {path_to_files}{model_name}/{predictions_file_name}/preds_{test_year}*.nc")
+        print(f"using validation data: {val_year}{validation_set} and test data: {test_year}{test_set}. Checking overlap between the two: {check_validation_overlap}")
         # load validation data
         if type(validation_set) is list:
             validation_files = []
             for date in validation_set:
-                validation_files = validation_files + glob.glob(f"{path_to_files}{model_name}/predictions/preds_2016{date}.nc")
+                validation_files = validation_files + glob.glob(f"{path_to_files}{model_name}/{predictions_file_name}/preds_{val_year}{date}.nc")
         elif type(validation_set) is str:
-            validation_files = glob.glob(f"{path_to_files}{model_name}/predictions/preds_2016{validation_set}.nc")
+            validation_files = glob.glob(f"{path_to_files}{model_name}/{predictions_file_name}/preds_{val_year}{validation_set}.nc")
         self.preds_validation = xr.open_mfdataset(validation_files)
+        self.preds_validation = self.preds_validation.drop_duplicates(dim="time")
         self.preds_validation.load()
 
-        self.preds_validation.trans_predictions.values = self.preds_validation.trans_predictions.where(self.preds_validation.trans_predictions<0.1, other=0)
-
+        #self.preds_validation.trans_predictions.values = self.preds_validation.trans_predictions.where(self.preds_validation.trans_predictions<0.1, other=0)
 
         # load test data
         if type(test_set) is list:
             test_files = []
             for date in test_set:
-                test_files = test_files + glob.glob(f"{path_to_files}{model_name}/predictions/preds_2016{date}.nc")
+                test_files = test_files + glob.glob(f"{path_to_files}{model_name}/{predictions_file_name}/preds_{test_year}{date}.nc")
         elif type(test_set) is str:
-            test_files = glob.glob(f"{path_to_files}{model_name}/predictions/preds_2016{test_set}.nc")
+            test_files = list(set(glob.glob(f"{path_to_files}{model_name}/{predictions_file_name}/preds_{test_year}{test_set}.nc"))-set(glob.glob(f"{path_to_files}{model_name}/{predictions_file_name}/preds_{test_year}{test_set}_*.nc")))
         self.preds_test = xr.open_mfdataset(test_files)
+        self.preds_test = self.preds_test.drop_duplicates(dim="time")
+
         if check_validation_overlap:
             # make sure that there is no overlap between the test and the validation sets
             self.preds_test = self.preds_test.sel(time=list(set(self.preds_test.time.values)-set(self.preds_validation.time.values)))
         
+        
         self.preds_test.load()
 
-        self.preds_test.trans_predictions.values = self.preds_test.trans_predictions.where(self.preds_test.trans_predictions<0.1, other=0)
+        #self.preds_test.trans_predictions.values = self.preds_test.trans_predictions.where(self.preds_test.trans_predictions<0.1, other=0)
 
         # if there are nans in the true values (happens for 200x200), replace with zeros
         for d in [self.preds_validation, self.preds_test]:
@@ -515,14 +527,15 @@ class ModelEv():
 
         self.segmentation_metrics = {"IoU":ious, "Dice":dices, "Acc":accuracies} 
 
-    def get_fluxes(self, fluxes="def"):
+    def get_fluxes(self, fluxes="def", flux_unit_transform=None):
         #print(type(fluxes))
         if type(fluxes) is str and fluxes=="def":
             fluxes = np.ones((self.size,self.size))
         observed_precip = np.copy(self.preds_test.fp.values)
         self.pred_fluxes = {}
+        print("USING NO UNITS TRANSFORM on the fluxes! this may have changed")
         for name in self.variations:
-            true_flux, pred_flux = predict_fluxes(observed_precip, self.variations[name], fluxes)
+            true_flux, pred_flux = predict_fluxes(observed_precip, self.variations[name], fluxes, units_transform= flux_unit_transform)
             self.pred_fluxes[name] = pred_flux
         self.true_flux=true_flux
         
@@ -582,7 +595,7 @@ class ModelEv():
         self.evaluate(verbose=verbose)
 
 
-def quantile_mapping_interp(truths, preds, to_correct, n_quantiles=100, mode="replace", thr=0, replacement_val=0, mult_factor=1, fp_noise=None):
+def quantile_mapping_interp(truths, preds, to_correct, n_quantiles=100, mode="replace", thr=0, replacement_val=0, mult_factor=1, fp_noise=None, val_size="same"):
     """
     apply quantile mapping to a test set "to_correct", based on a validation set "truths" and "preds"
     steps:
@@ -607,6 +620,19 @@ def quantile_mapping_interp(truths, preds, to_correct, n_quantiles=100, mode="re
     """
 
     truths = np.copy(truths)
+
+    if type(val_size) is not str:
+        current_size=np.shape(truths)[1]
+        if val_size < current_size:
+            half = int(current_size/2)
+            newsize_half = int(val_size/2)
+            
+            truths = truths[:,half-newsize_half:half+newsize_half,half-newsize_half:half+newsize_half]
+            preds = preds[:,half-newsize_half:half+newsize_half,half-newsize_half:half+newsize_half]
+        
+        elif val_size > current_size:
+            print("this wont work!!!")
+
     if fp_noise is not None:
         truths = np.where(truths<fp_noise, 0, truths)
 
