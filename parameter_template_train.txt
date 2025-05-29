@@ -43,7 +43,7 @@
     "learning_rate":5e-5,
 
     "loss_functions" : {
-        "criterion": "MSE_assymetric(alpha=2)",
+        "criterion": ""MSE_weighted_by_truth_nans(multiply_by_add, w=1000)",
         "criterion_test": "torch.nn.MSELoss()"
     }    
 }
