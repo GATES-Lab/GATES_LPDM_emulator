@@ -27,13 +27,13 @@ import torch
 ## Loading data
 #### `LoadBaseSatelliteData` loads data from the directories (provided or default). It does not crop or interpolate
 ``` 
-original_data = LoadBaseSatelliteData(year=2016, region="SAHARA", freq=40,  topog="default", verbose=True, load_everything=True)
+original_data = LoadBaseSatelliteData(year=2016, region="SAHARA", freq=40,  verbose=True, load_everything=True)
 ```
 original_data has attributes original_data.fp_data_full , original_data.met_file, original_data.topog_file and original_data.landcover_file
 
 #### `LoadSquareSatelliteData` loads data, interpolating to the time of the footprints and cropping to a square of size size x size around the footprint's measurement point
 ``` 
-cropped_data = LoadBaseSatelliteData(year=2016, region="SAHARA", freq=40,  size=200, topog="default", verbose=True, load_everything=True)
+cropped_data = LoadSquareSatelliteData(year=2016, region="SAHARA", freq=40,  size=200, verbose=True, load_everything=True)
 ```
 cropped_data has attributes cropped_data.fp_data (np array), cropped_data.met (Dataset interpolated in time and cropped in space), and cropped_data.topog (Dataset cropped in space, with variables topog and landcover).
 
