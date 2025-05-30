@@ -18,9 +18,52 @@ import einops
 import h3
 import numpy as np
 from torch_geometric.data import Data
+from torch_geometric.utils import to_dense_batch
 from torch_scatter import scatter_mean
 
 from model.layers.graph_net_block import MLP
+
+
+def concat_group_by(x: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+    # Step 1: Count the occurrences of each unique value in the index tensor.
+    index_count = torch.bincount(index)
+    
+    # Step 2: Calculate how many padding (zero-fill) elements are needed for each group.
+    fill_count = index_count.max() - index_count
+    
+    # Step 3: Create a tensor of zeros for padding. 
+    # Since we are padding along the 'nodes' dimension, we create zero padding for each feature and batch.
+    fill_zeros = torch.zeros(x.shape[0], x.shape[1], fill_count.sum(), device=x.device)
+    
+    # Step 4: Create a tensor of indices that corresponds to the padding (zero-fill) elements.
+    fill_index = torch.arange(0, fill_count.shape[0], device=x.device).repeat_interleave(fill_count)
+    
+    # Step 5: Concatenate the original `index` tensor with the `fill_index` tensor.
+    # This expands the `index` to account for the padded elements.
+    index_ = torch.cat([index, fill_index], dim=0)
+    
+    # Step 6: Concatenate the original `x` tensor with the `fill_zeros` tensor along the `nodes` dimension.
+    x_ = torch.cat([x, fill_zeros], dim=2)
+    
+    # Step 7: Sort the concatenated tensor based on the sorted `index_` to group the elements.
+    # Sorting happens across the `nodes` dimension.
+    sort_indices = torch.argsort(index_, stable=True)
+    x_ = x_[:, :, sort_indices]
+    
+    # Step 8: Reshape the tensor into the desired shape.
+    # The output shape will be [n_batch, n_features, number of groups, max group size].
+    x_ = x_.view(x.shape[0], x.shape[1], index_count.shape[0], index_count.max())
+
+    # Step 9: Flatten the `n_features` and `max_group_size` dimensions.
+    x_ = x_.permute(0, 2, 1, 3)  # Rearrange to [n_batch, number_of_groups, n_features, max_group_size].
+    x_ = x_.reshape(x_.shape[0], x_.shape[1], -1)  # Flatten n_features * max_group_size.
+    
+    # Step 10: Permute the tensor to get the final shape [n_batch, n_features * max_group_size, number_of_groups].
+    x_ = x_.permute(0, 2, 1)
+    
+    return x_
+
+
 
 class SatelliteDecoder(torch.nn.Module):
     """Decoder graph module"""
@@ -40,7 +83,7 @@ class SatelliteDecoder(torch.nn.Module):
         use_checkpointing: bool = False,
         dropout=0,
         n_neighbours=3,
-        final_activation=None, concat_neighbours=False
+        final_activation=None, concat_neighbours=False, idx_latlon=None, append_latlon=False, concat_neighbours_2=False
     ):
         """
         Decoder from latent graph to lat/lon graph
@@ -76,7 +119,15 @@ class SatelliteDecoder(torch.nn.Module):
         self.use_checkpointing = use_checkpointing
         self.num_latlons = len(lat_lons)
         self.concat_neighbours = concat_neighbours
+        self.concat_neighbours_2 = concat_neighbours_2
         self.n_neighbours = n_neighbours
+        self.append_latlon = append_latlon
+
+        if append_latlon:
+            assert idx_latlon is not None, "pass idx latlon!"
+            m = np.max(np.abs(idx_latlon))
+            self.normalised_idx_latlon = torch.tensor(np.array([(a[0]/m, a[1]/m) for a in idx_latlon]), dtype=torch.float32)
+
         #print("in satellite decoder")
         if h_grid is None:
             if whole_world:
@@ -139,7 +190,14 @@ class SatelliteDecoder(torch.nn.Module):
                         # this can only happen if using a reduced domain (whole_world = False), at the edges of this domain
                         n+=1
                         #continue    
-                                  
+                    except IndexError:
+                        print(linked_neighbours)
+                        print(idx, h3_point)
+                        print(lat_lon)
+                        print(h_points)
+                        print(knn_distances)
+                    
+                        exit()
             else:
                 # previous way models where trained with - only link top 3 physically close neighbours
                 # see except clause before
@@ -159,7 +217,8 @@ class SatelliteDecoder(torch.nn.Module):
 
         self.edge_index = torch.tensor([edge_sources, edge_targets], dtype=torch.long)
         self.h3_distances = np.array(self.h3_distances)
-        
+        self.norm_distances = torch.tensor(self.h3_distances/50, dtype=torch.float32) ### note that 50 here is because of resolutioN!!!!! 
+
         self.edge_weights = np.zeros_like(self.h3_distances)
 
         for n in np.unique(edge_targets):
@@ -171,19 +230,38 @@ class SatelliteDecoder(torch.nn.Module):
 
         if self.concat_neighbours:
             self.node_decoder = MLP(
-            self.n_neighbours*input_dim,
+            self.n_neighbours*(1+input_dim) + 2*self.append_latlon,
             output_dim,
             hidden_dim_decoder,
             hidden_layers_decoder,
             None,
             self.use_checkpointing, dropout=dropout, final_activation=final_activation
         )          # no normalising here?
-            
+
+        if self.concat_neighbours_2:
+            """
+            self.pre_decoder = MLP(
+            1+input_dim + 2*self.append_latlon,
+            output_dim,
+            hidden_dim_decoder,
+            hidden_layers_decoder,
+            None,
+            self.use_checkpointing, dropout=dropout, final_activation=final_activation
+            )          # no normalising here?"""
+            self.node_decoder = MLP(
+            self.n_neighbours*(1+input_dim),
+            output_dim,
+            hidden_dim_decoder,
+            hidden_layers_decoder,
+            None,
+            self.use_checkpointing, dropout=dropout, final_activation=final_activation
+            )          # no normalising here?
+                       
             print("MLP shape", 3*input_dim, hidden_dim_decoder)
 
         else:
             self.node_decoder = MLP(
-            input_dim,
+            input_dim + 2*self.append_latlon,
             output_dim,
             hidden_dim_decoder,
             hidden_layers_decoder,
@@ -209,6 +287,7 @@ class SatelliteDecoder(torch.nn.Module):
 
         self.edge_weights = self.edge_weights.to(start_features.device)
         self.edge_index = self.edge_index.to(start_features.device)
+        self.norm_distances = self.norm_distances.to(start_features.device)
 
         #print(processor_features.size(), processor_features.dtype, self.edge_index.size(), start_features.size())
         
@@ -217,22 +296,41 @@ class SatelliteDecoder(torch.nn.Module):
         processor_features = einops.rearrange(processor_features, "(b n) f -> b f n", b=batch_size)
         
         if self.concat_neighbours:
-            print("concatting neighbours")
+            #print("concatting neighbours")
             
-            print(processor_features.size(), self.edge_index)
+            #print(processor_features.size(), self.edge_index)
 
             ## loop is clunky! maybe einops has a solution
-            print(processor_features[:,:, self.edge_index[0,:]].size())
-            print(processor_features[:,:, self.edge_index[0,::self.n_neighbours]].size(), processor_features[:,:, self.edge_index[0,1::self.n_neighbours]].size())
+            #print(processor_features[:,:, self.edge_index[0,:]].size())
+            #print(processor_features[:,:, self.edge_index[0,::self.n_neighbours]].size(), processor_features[:,:, self.edge_index[0,1::self.n_neighbours]].size())
             # this could go wrong 
             scattered_processor_features = torch.cat([processor_features[..., self.edge_index[0,n::self.n_neighbours]] for n in range(self.n_neighbours)], dim=-2)
-            print(scattered_processor_features.size())
+            #print(scattered_processor_features.size())
 
             #scattered_processor_features = einops.rearrange(scattered_processor_features, "b f n -> (b n) f", b=batch_size)
             processor_features = scattered_processor_features
 
-            print(processor_features.size())
+            #print(processor_features.size())
+
+        elif self.concat_neighbours_2:
+           # print("concatting neighbours 2")
             
+
+            #print(processor_features.size(), self.edge_index.size(), processor_features[..., self.edge_index[0,:]].size(), self.norm_distances.size())
+            #print(processor_features[:,:, self.edge_index[0,:]].size())
+            #print(processor_features[:,:, self.edge_index[0,::self.n_neighbours]].size(), processor_features[:,:, self.edge_index[0,1::self.n_neighbours]].size())
+
+            #updated_nodes = self.pre_decoder(torch.cat([processor_features[..., self.edge_index[0,:]], self.edge_weights]))
+
+            catting = torch.cat([processor_features[..., self.edge_index[0,:]], einops.repeat(self.norm_distances, "l f -> n f l", n=batch_size)], dim=1)
+
+            #print(processor_features.size(), self.edge_index.size(), catting[0].size())
+
+            processor_features = concat_group_by(catting, self.edge_index[1,:].squeeze())
+
+
+            #print(processor_features.size(),processor_features.dtype )
+
         else:
             processor_features = torch.multiply(processor_features[:,:, self.edge_index[0,:]], torch.flatten(self.edge_weights))
             #print("doing scatter", processor_features.dtype, torch.from_numpy(self.edge_weights.astype(np.float32)).dtype, self.edge_weights.astype(float).dtype, self.edge_weights.dtype)
@@ -242,9 +340,22 @@ class SatelliteDecoder(torch.nn.Module):
             #for n in np.unique(self.edge_index[1,:]): 
             #    processor_features_by_node = np.where(self.edge_index[1,:]==n)
 
+        #print(np.shape(processor_features))
+
+        if self.append_latlon:
+            normalised_idx_latlon = einops.repeat(self.normalised_idx_latlon, "e f -> n f e", n=batch_size)
+            normalised_idx_latlon = normalised_idx_latlon.to(start_features.device)
+
+            processor_features = torch.cat([processor_features, normalised_idx_latlon], dim=1)
+
+        #print(np.shape(processor_features))
+
         processor_features = einops.rearrange(processor_features, "b f n -> (b n) f", b=batch_size)
         #print("after scatter", processor_features.size(), processor_features.dtype)
-
+        
+        #print(np.shape(processor_features))
+        
+    
 
         out = self.node_decoder(processor_features)  # Decode to output dim from hidden size
             #print("done it")
