@@ -119,7 +119,7 @@ class MLP(nn.Module):
         layers.append(nn.Linear(hidden_dim, out_dim))
         if final_activation is not None:
             print("adding ", final_activation)
-            activations = {"ReLU":nn.ReLU(), "Sigmoid":nn.Sigmoid()}
+            activations = {"ReLU":nn.ReLU(), "Sigmoid":nn.Sigmoid(), "LReLU":nn.LeakyReLU()}
             layers.append(activations[final_activation])
 
         if norm_type is not None:
