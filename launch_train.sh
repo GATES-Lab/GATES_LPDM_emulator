@@ -7,15 +7,21 @@
 #SBATCH --time=24:00:00
 #SBATCH --account=chem007981
 #SBATCH --exclude=bp1-gpu030,bp1-gpu035
+#### this is specific to the University of Bristol's BluePebble
+#### make sure you modify to remove/add any relevant modules
 
 # the two gpus above seem to have a different version of cuda! avoid
 
 echo "activate env"
 # activate your own environment here
-source activate /user/work/ef17148/oldstuff/ef17148/.conda/envs/graphnet
+conda init
+conda activate new_graphnet
 
-echo "lang/python/anaconda/3.8.8-2021.05-torch"
-module load lang/python/anaconda/3.8.8-2021.05-torch
+
+echo "loading modules"
+module load cuda/12.4.1
+module load cudnn/8.9.7.29-12
+module add languages/python/3.12.9.tensorflow-2.16.1
 
 
 echo "train"
