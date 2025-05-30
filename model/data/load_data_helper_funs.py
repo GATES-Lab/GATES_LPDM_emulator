@@ -71,9 +71,8 @@ def _static_var_x_coords(coordinate_ds):
     # create a mesh with [0,0] at the release point, in the x coordinate (longitude)
     grid_coords = np.meshgrid(np.arange(coordinate_ds.lon.size)-int(coordinate_ds.lon.size/2), np.arange(coordinate_ds.lat.size) -int(coordinate_ds.lat.size/2))
 
-    print(np.shape(grid_coords))
     coord = np.dstack([grid_coords[0]]*coordinate_ds.fp_time.size).transpose([2,0,1])
-    coordinate_ds = coordinate_ds.assign({"x_coords":(("fp_time", "lat", "lon"), coord)})
+    coordinate_ds = coordinate_ds.assign({"y_coords":(("fp_time", "lat", "lon"), coord)})
 
     return coordinate_ds 
 

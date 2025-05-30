@@ -1046,6 +1046,10 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
         badly_interpolated = data.met.time.values - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]
         full_met = full_met.drop_sel(fp_time=full_met.fp_time.values[badly_interpolated])
 
+        # this updates any indeces that couldnt be interpolated
+        # i think it updates data without needing to return it as a new object
+        data.remove_indeces(np.where(badly_interpolated)[0])
+
 
     input_arrays = []
     varnames_dict = []
@@ -1107,7 +1111,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 static_ds = static_variables_functions[var](data.topog, static_ds)
             elif var in list(static_variables_functions.keys()) and var not in ["lat_coords", "lon_coords"]:
                 static_ds = static_variables_functions[var](static_ds)
-            else:
+            elif var != "lat_coords" and var != "lon_coords":
                 print(f"variable {var} was not found in the list of known functions!")
 
         if "lat_coords" not in static_variables:
