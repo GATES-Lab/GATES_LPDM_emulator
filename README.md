@@ -181,5 +181,12 @@ Add the following to `training_settings_new_model_name.json`, to indicate which 
     }
 ```
 
-## Inference 
+## Inference and evaluation - WIP!
 After inference, the footprints might need bias correcting. For the inversion, they also need to be integrated into the original domain shape. Use the `integrate_fps.py` file to apply bias correction, and save the footprints in the original footprint domain
+
+
+## Inversion - TO DO! 
+
+
+
+
