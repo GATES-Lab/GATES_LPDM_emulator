@@ -5,6 +5,7 @@ import glob
 import dask
 import sys
 import os
+import copy
 #import warning
 
 from .load_data_helper_funs import *
@@ -28,8 +29,9 @@ def load_fps(fp_datadir, verbose=False):
     try:           
         time_chunk = 25
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            # attempt to load dataset of multiple files the standard wayf
-            fp_data_full = xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk})
+            # attempt to load dataset of multiple files the standard way
+            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}) as ds:
+                fp_data_full = ds.copy()
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
         # the bad_files contains full paths, first the full path is checked 
@@ -66,19 +68,21 @@ def load_fps(fp_datadir, verbose=False):
             # Add clauses here to catch other known exceptions
             with dask.config.set(**{'array.slicing.split_large_chunks': True}):
                 # load non-problematic arrays all together
-                most = xr.open_mfdataset(sorted(without_bad_files))
+                with xr.open_mfdataset(sorted(without_bad_files)) as ds:
+                    most = ds.copy()
                 bad_arrays = []
                 for badfile in bad_files:
                     if badfile in fp_files:
                         # load each bad file separately
-                        f_bad = xr.open_mfdataset(badfile)
-                        if "NORTHAFRICA_2015" in badfile:
-                            try:
-                                f_bad = f_bad.drop(["mean_age_particles_n", "mean_age_particles_e", "mean_age_particles_w", "mean_age_particles_s"])        
-                            except Exception as e:
-                                print("something went wrong trying to load the bad North Africa 2015 files")
-                                print(e)
-                        bad_arrays.append(f_bad)
+                        with xr.open_mfdataset(badfile) as f_bad:
+                            #f_bad = xr.open_mfdataset(badfile)
+                            if "NORTHAFRICA_2015" in badfile:
+                                try:
+                                    f_bad = f_bad.drop(["mean_age_particles_n", "mean_age_particles_e", "mean_age_particles_w", "mean_age_particles_s"])        
+                                except Exception as e:
+                                    print("something went wrong trying to load the bad North Africa 2015 files")
+                                    print(e)
+                            bad_arrays.append(f_bad)
                 # concatenate all the good files with the bad ones along the time dimension
                 fp_data_full = xr.concat([most]+bad_arrays, dim="time")
         else:
@@ -87,6 +91,7 @@ def load_fps(fp_datadir, verbose=False):
     fp_data_full= fp_data_full.sortby('time')
 
     return fp_data_full
+
 
 
 
@@ -123,6 +128,8 @@ class LoadBaseSatelliteData:
         self.region = region
         if domain is None:
             self.domain = self._get_domain(region)
+        else:
+            self.domain=domain
 
         self.year = year
         self.date = self.year
@@ -141,10 +148,10 @@ class LoadBaseSatelliteData:
 
         self.met_processed = False
         
+        self.padding=None
 
         if load_everything:
             self.met_file = self.load_meteorology(**met_args)
-            self.padding=None
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)
 
         
@@ -152,7 +159,7 @@ class LoadBaseSatelliteData:
 
 
 
-    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= []):
+    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True):
         """
         load the meteorology from the directory, select the met levels and variables if required
 
@@ -177,6 +184,10 @@ class LoadBaseSatelliteData:
             except KeyError:
                 print(f"there was an error selecting the met variables you passed. Check! \n You passed  {met_variables} but met loaded has {list(self.met_file.keys())}. \n Loading all variables")
 
+        if not lazy_load:
+            print("Loading met data into memory. If you only want to lazy-load, pass load=False")
+            self.met_file.load()
+
         return self.met_file
 
     def load_topog(self, topog_path="default", landcover_path="default"):
@@ -192,11 +203,13 @@ class LoadBaseSatelliteData:
         if topog_path=="default":
             topog_path="/group/chemistry/acrg/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
         print(f"trying to load topography from {topog_path}")
-        topog_file = xr.load_dataset(topog_path)
+        with xr.load_dataset(topog_path) as topog_dataset:
+            topog_file = topog_dataset.copy()
 
         if landcover_path=="default":
             landcover_path = "/group/chemistry/acrg/LPDM/topog_NAME/land_cover.nc"
-        landcover_file = xr.load_dataset(landcover_path)
+        with xr.load_dataset(landcover_path) as landcover_dataset:
+            landcover_file = landcover_dataset.copy()
             
 
         topog_file = self._interp_topog(topog_file, padding=self.padding)
@@ -205,7 +218,7 @@ class LoadBaseSatelliteData:
 
         return topog_file, landcover_file
 
-    def _get_meteorology_file(self, met_datadir):
+    def _get_meteorology_file(self, met_datadir, lazy_load=True):
         if met_datadir==None:
             met_datadir = "/group/chemistry/acrg/met_archive/UM/"+self.domain+"/"+self.domain+"_Met_"+str(self.date)+"*.nc"
         else:
@@ -216,13 +229,15 @@ class LoadBaseSatelliteData:
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            self.met_file = xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk})
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}) as met_file:
 
-        #) rename, select levels and variables
-        if "model_level_number" in self.met_file.dims:
-            self.met_file = self.met_file.rename({"model_level_number": "levels", "latitude":"lat", "longitude":"lon"})
+                #) rename, select levels and variables
+                if "model_level_number" in met_file.dims:
+                    met_file = met_file.rename({"model_level_number": "levels", "latitude":"lat", "longitude":"lon"})
 
-        self.met_file = self.met_file.drop_duplicates(dim=["lat", "lon", "time"])
+                met_file = met_file.drop_duplicates(dim=["lat", "lon", "time"])
+                self.met_file = met_file.copy()
+
 
     def _get_domain(self, region):
         #### check domains
@@ -240,8 +255,8 @@ class LoadBaseSatelliteData:
         if fp_datadir is None:
             fp_datadir = "/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/"+self.domain+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc"
         else:
-            #fp_datadir=fp_datadir+str(self.date)+"*.nc"
-            fp_datadir = f"{fp_datadir}{self.domain}/*{self.region}*{self.domain}_{str(self.date)}*.nc"
+            fp_datadir=fp_datadir+str(self.date)+"*.nc"
+            #fp_datadir = f"{fp_datadir}{self.domain}/*{self.region}*{self.domain}_{str(self.date)}*.nc"
         if self.verbose: print("Loading footprint data from " + fp_datadir) 
 
         self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose)  
@@ -267,7 +282,7 @@ class LoadBaseSatelliteData:
             print(f"reduced the number of datapoints by frequency {freq}, chosen at random")
             self.fp_data_full = self.fp_data_full.sel(time=np.random.choice(self.fp_data_full.time.values, size=np.shape(self.fp_data_full.time.values[::freq]), replace=False))
         else:
-            print("no sampling was done because you didnt pass a valid sampling mode, or freq=1")
+            if self.verbose: print("no sampling was done because you didnt pass a valid sampling mode, or freq=1")
 
     def _interp_topog(self, topog_file, padding=None):
         """
@@ -352,6 +367,8 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         self.region = region
         if domain is None:
             self.domain = self._get_domain(region)
+        else:
+            self.domain=domain
 
         self.size = size
 
@@ -378,8 +395,8 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         self.met_processed = False
 
         if load_everything:
-            self.met_file = self.load_meteorology(**met_args)
-            self.met = self._process_meteorology(lazy_load=lazy_load)
+            self.met_file = self.load_meteorology(**met_args,lazy_load=lazy_load)
+            self.met = self._process_meteorology(lazy_load=True)
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)
             self.topog = self._process_topog_and_landcover()
 
@@ -396,7 +413,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         fp data returned is array of shape (time, size*size) with each footprint centered around its release point
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data_v2(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
 
         # if self.fill_outofdomain_with == "all_nans":
             # remove here all indeces from self.idxs_out_of_domain! so we only keep the footprints that were fully inside the domain
@@ -525,12 +542,67 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met_nan_idxs=[]
 
 class LoadDomainSatelliteData(LoadBaseSatelliteData):
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, domain_to_cut=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, met_args={}, topog_args={}):
         
         ## INITIALISE THE BASE OBJECT, TO LOAD THE FOOTPRINTS
-        super().__init__(self, year, region, month=month, domain=domain, freq=freq, freq_offset=freq_offset, verbose=verbose, sampling_mode=sampling_mode, fp_datadir=fp_datadir, load_everything=False, met_args=met_args, topog_args=topog_args)
+        super().__init__(year, region, month=month, domain=domain, freq=freq, freq_offset=freq_offset, verbose=verbose, sampling_mode=sampling_mode, fp_datadir=fp_datadir, load_everything=True, met_args=met_args, topog_args=topog_args)
 
         self.dataset_format = "domain"
+
+        if verbose: print("-----CROPPING TO A FIXED DOMAIN")
+
+        # calculate the max possible domain, given by the footprint and the met files
+        lats = [np.max([self.fp_data_full.lat.values[0], self.met_file.lat.values[0]]), np.min([self.fp_data_full.lat.values[-1], self.met_file.lat.values[-1]])]
+        lons = [np.max([self.fp_data_full.lon.values[0], self.met_file.lon.values[0]]), np.min([self.fp_data_full.lon.values[-1], self.met_file.lon.values[-1]])]
+        max_allowed_domain = {"lat":lats, "lon":lons}
+        
+
+        if domain_to_cut is None:
+            if verbose: print("cutting everything to the minimum possible domain")
+            self.domain_to_cut = max_allowed_domain
+            print(self.domain_to_cut)
+        else:
+            self.domain_to_cut = self._check_domain_sizes(domain_to_cut, max_allowed_domain)
+        
+        # slice to that domain
+        self._slice_to_domain(self.domain_to_cut)
+
+
+
+    def _check_domain_sizes(self, domain_to_cut, max_allowed_domain):
+        # fill in lat or lon in case only one was passed
+        if not "lat" in domain_to_cut.keys():
+            domain_to_cut["lat"] = max_allowed_domain["lat"]
+        if not "lon" in domain_to_cut.keys():
+            domain_to_cut["lon"] = max_allowed_domain["lon"]
+        
+        self.domain_to_cut = copy.deepcopy(domain_to_cut)
+
+        self.domain_to_cut["lat"][0] = np.max([domain_to_cut["lat"][0], max_allowed_domain["lat"][0]])
+        
+        self.domain_to_cut["lat"][-1] = np.min([domain_to_cut["lat"][-1], max_allowed_domain["lat"][-1]])
+    
+        self.domain_to_cut["lon"][0] = np.max([domain_to_cut["lon"][0], max_allowed_domain["lon"][0]])
+        
+        self.domain_to_cut["lon"][-1] = np.min([domain_to_cut["lon"][-1], max_allowed_domain["lon"][-1]])
+
+        if self.domain_to_cut != domain_to_cut:
+            print(f"the domain you passed is bigger than the domain of the data in at least one direction. cropping to {self.domain_to_cut}")
+
+        return self.domain_to_cut
+
+    def _slice_to_domain(self, domain_to_cut):
+        ## slice all arrays to the passed domain
+        self.fp_data_full = self.fp_data_full.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
+
+        if hasattr(self, "met_file"):
+            self.met_file = self.met_file.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
+
+        if hasattr(self, "topog_file"):
+            self.topog_file = self.topog_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+
+        if hasattr(self, "landcover_file"):
+            self.landcover_file = self.landcover_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
 
     def _process_footprints(self):
         raise NotImplementedError
@@ -540,7 +612,125 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
 
     def _process_topog(self):
         raise NotImplementedError
+
+
+
+class LoadBaseSiteData(LoadBaseSatelliteData):
+    def __init__(self, year, site = "MHD", month=None, domain=None, freq=1, freq_offset=0, verbose = False, fp_datadir = None, lazy_load=True, met_args={}, topog_args={}):  
+        
+        #### check domains
+        self.site = site
+        if domain is None:
+            self.domain = self._get_domain(site)
+        else:
+            self.domain=domain
+
+        super(LoadBaseSiteData, self).__init__(year=year, month=month, region=site, domain=domain, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
+
+        del self.region
+
+        # sites have fixed release coordinates, so can just extract the release lat and lon from the first timestep
+        # self.release_coords = [site_lat, site_lon]
+        self.release_coords = [self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lat.values, self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lon.values]
+
+
+
+
+    def _get_release_idxs(self):
+        idx_release_lat = np.argmin(abs(self.fp_data_full.lat.values - self.release_coords[0]))
+        idx_release_lon = np.argmin(abs(self.fp_data_full.lon.values - self.release_coords[1]))
+        release_idxs = [idx_release_lat, idx_release_lon]
+        return release_idxs
+
+    def _get_domain(self, site):
+        #### check domains
+        # TODO make domains dict importable
+        domains = {"MHD":"EUROPE"} 
+        try:
+            domain = domains[site]   
+        except: 
+            raise ValueError("No domain was passed, and the region you passed is not associated to any domain!")   
+        
+        return domain   
+
+class LoadSiteData(LoadBaseSiteData):
+    def __init__(self, year, site = "MHD", month=None, size=None, domain_to_cut=None, domain=None, verbose = False, fp_datadir = None, lazy_load=True, met_args={}, topog_args={}):  
     
+        super(LoadSiteData, self).__init__(year=year, month=month, site=site, domain=domain, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose)
+        print("1")
+        max_allowed_domain = self._get_max_allowed_domain()
+
+        print("3")
+        if size is None and domain_to_cut is None:
+            if verbose: print("cutting everything to the largest possible domain")
+            self.domain_to_cut = max_allowed_domain
+            print("4")
+        elif size is not None and domain_to_cut is None:
+            if verbose: print("cutting to a square of size size x size centered on the site")
+            release_idxs = self._get_release_idxs()
+            half = int(size/2)
+            domain_lats = self.fp_data_full.lat.values
+            domain_lons = self.fp_data_full.lon.values
+            self.domain_to_cut = {"lat":[domain_lats[release_idxs[0]-half], domain_lats[release_idxs[0]+half-1]], "lon":[domain_lons[release_idxs[1]-half], domain_lons[release_idxs[1]+half-1]]}
+
+        elif size is None and domain_to_cut is not None:
+            assert type(domain_to_cut) is dict, "domain_to_cut should be a dict of format {'lat':[start_lat, end_lat], 'lon':[start_lon, end_lon]}"
+            if verbose: print(f"cutting everything to the domain passed {domain_to_cut}")
+            self.domain_to_cut = self._check_domain_sizes(domain_to_cut, max_allowed_domain)
+        elif size is not None and domain_to_cut is not None:
+            if verbose: print("you passed both size and domain to cut! following domain to cut and ignoring size")
+            self.domain_to_cut = self._check_domain_sizes(domain_to_cut, max_allowed_domain)
+
+        self._slice_to_domain(self.domain_to_cut)
+
+
+    def _check_domain_sizes(self, domain_to_cut, max_allowed_domain):
+        # check that the passed domain actually fits, correct otherwise
+
+        # fill in lat or lon in case only one was passed
+        if not "lat" in domain_to_cut.keys():
+            domain_to_cut["lat"] = max_allowed_domain["lat"]
+        if not "lon" in domain_to_cut.keys():
+            domain_to_cut["lon"] = max_allowed_domain["lon"]
+        
+        self.domain_to_cut = copy.deepcopy(domain_to_cut)
+
+        self.domain_to_cut["lat"][0] = np.max([domain_to_cut["lat"][0], max_allowed_domain["lat"][0]])
+        
+        self.domain_to_cut["lat"][-1] = np.min([domain_to_cut["lat"][-1], max_allowed_domain["lat"][-1]])
+    
+        self.domain_to_cut["lon"][0] = np.max([domain_to_cut["lon"][0], max_allowed_domain["lon"][0]])
+        
+        self.domain_to_cut["lon"][-1] = np.min([domain_to_cut["lon"][-1], max_allowed_domain["lon"][-1]])
+
+        if self.domain_to_cut != domain_to_cut:
+            print(f"the domain you passed is bigger than the domain of the data in at least one direction. cropping to {self.domain_to_cut}")
+
+        return self.domain_to_cut
+    
+    def _get_max_allowed_domain(self):
+        # calculate the max possible domain, given by the footprint and the met files
+        print("2")
+        lats = [np.max([self.fp_data_full.lat.values[0], self.met_file.lat.values[0]]), np.min([self.fp_data_full.lat.values[-1], self.met_file.lat.values[-1]])]
+        lons = [np.max([self.fp_data_full.lon.values[0], self.met_file.lon.values[0]]), np.min([self.fp_data_full.lon.values[-1], self.met_file.lon.values[-1]])]
+        max_allowed_domain = {"lat":lats, "lon":lons}
+        return max_allowed_domain 
+
+    def _slice_to_domain(self, domain_to_cut):
+        self.fp_data_full = self.fp_data_full.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+
+        if hasattr(self, "met_file"):
+            self.met_file = self.met_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+
+        if hasattr(self, "topog_file"):
+            self.topog_file = self.topog_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+
+        if hasattr(self, "landcover_file"):
+            self.landcover_file = self.landcover_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+
+    def _process_footprints(self):
+        lat_array = 1#np.
+
 
 
 def get_release_idxs(fp_full, domain_lats=None, domain_lons=None):
@@ -619,7 +809,7 @@ def cut_emissions_data(flux, fp_full, size):
     return flux_cut
 
 
-def cut_satellite_data_v2(fp_full, size, returnlatlons = False,fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True, fill_latlons=True, return_everything=False):
+def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True, fill_latlons=True, return_everything=False):
     """
     cuts footprint to square of size "size" around release point and returns as a netcdf with artificial lat-lon coordinates 0-size
 
@@ -743,7 +933,7 @@ def cut_satellite_data_v2(fp_full, size, returnlatlons = False,fill_bads_with="n
 
     # load into memory, if required
     if load:
-        print("loading array into memory. If you only want to lazy-load, pass load=False")
+        print("loading cropped footprint dataset into memory. If you only want to lazy-load, pass load=False")
         cropped_fp.load()    
 
     if return_as=="netcdf":
@@ -932,7 +1122,7 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     
     # load into memory, if required
     if load:
-        print("loading array into memory. If you only want to lazy-load, pass load=False")
+        print("loading cropped met dataset into memory. If you only want to lazy-load, pass load=False")
         cropped_met.load()
 
     # add additional wind variables
@@ -1023,7 +1213,6 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 #met = met.reset_coords(["time"])
                 met = met.drop_vars("time")
                 #met = met.rename({"fp_time":"time"})
-                
 
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
