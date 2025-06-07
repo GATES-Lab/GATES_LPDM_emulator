@@ -542,6 +542,13 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met_nan_idxs=[]
 
 class LoadDomainSatelliteData(LoadBaseSatelliteData):
+    """
+    Cuts the dataset to a common fixed domain. By default, cuts to the biggest domain that is shared by the footprints and the met
+
+    to specify the area to cut, pass domain_to_cut as a dict of format {"lat":[start_lat, end_lat], "lon":[start_lon, end_lon]} in degrees. If either lat or lon is missing, they will be the largest possible
+
+    all other inputs are the same
+    """
     def __init__(self, year, region = "BRAZIL", month=None, domain=None, domain_to_cut=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, met_args={}, topog_args={}):
         
         ## INITIALISE THE BASE OBJECT, TO LOAD THE FOOTPRINTS
@@ -566,6 +573,12 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         
         # slice to that domain
         self._slice_to_domain(self.domain_to_cut)
+
+        ## after cropping, need to arrange the datasets in the same way as the square ones!
+        self.met = process_domain_met(self.met_file, self.fp_data_full)
+        self.topog = self._process_topog_and_landcover()
+
+
 
 
 
@@ -607,11 +620,9 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
     def _process_footprints(self):
         raise NotImplementedError
 
-    def _process_met(self):
-        raise NotImplementedError
-
-    def _process_topog(self):
-        raise NotImplementedError
+    def _process_topog_and_landcover(self):
+        topog = xr.merge([self.topog_file.surface_altitude.rename("topog"), self.landcover_file.landcover_type.rename("landcover"), self.landcover_file.landcover_fraction.rename("disaggregated_landcover").rename({"pseudo_level":"landcover_level"})])
+        return topog
 
 
 
@@ -632,8 +643,6 @@ class LoadBaseSiteData(LoadBaseSatelliteData):
         # sites have fixed release coordinates, so can just extract the release lat and lon from the first timestep
         # self.release_coords = [site_lat, site_lon]
         self.release_coords = [self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lat.values, self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lon.values]
-
-
 
 
     def _get_release_idxs(self):
@@ -952,6 +961,51 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
         else:
             return fp_data            
  
+def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_variables=None, verbose=True, add_wind_direction=True):
+
+    met = select_met_levels(met, levels=relevant_levels)
+
+    met = select_met_variables(met, variables=relevant_variables)  
+
+    fp_times = np.copy(fp.time.values)
+
+    assert time_delta>=0, "time_delta needs to be zero or positive!!"
+
+    if time_delta==0:
+        met = met.interp(time=fp_times)
+        met = met.assign({"fp_time":(("time"), fp_times)})
+    else:
+
+        fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
+        met = met.interp(time=fp_times)
+
+        # store the original footprint times as a separate value
+        met = met.assign({"fp_time":(("time"),fp.time.values)})
+
+    met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
+
+    domain_lats = np.copy(met.lat.values)
+    domain_lons = np.copy(met.lon.values)
+
+    delta_lat = domain_lats[1]-domain_lats[0]
+    delta_lat_fp = fp.lat.values[1]-fp.lat.values[0]
+    delta_lon = domain_lons[1]-domain_lons[0]
+    delta_lon_fp = fp.lon.values[1]-fp.lon.values[0]
+
+    if abs(delta_lat - delta_lat_fp) > 0.01 or abs(delta_lon - delta_lon_fp)>0.01:
+        print("the resolution is different! this doesnt work yet?")    
+
+    if add_wind_direction and (relevant_variables is None or "wind_speed" in relevant_variables):
+        try:
+            met["wind_angle"]=np.arctan2(-met.x_wind,-met.y_wind)
+            met["wind_speed"]=np.sqrt(met.x_wind**2 + met.y_wind**2)
+        except Exception as e:
+            print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
+
+    return met
+
+
+
 def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None):
     """
     make into smaller functions!
