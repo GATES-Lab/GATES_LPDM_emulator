@@ -123,6 +123,7 @@ class LoadBaseSatelliteData:
     def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}):
         
         self.dataset_format = "base" 
+        self.data_type="satellite"
 
         #### check domains
         self.region = region
@@ -565,9 +566,9 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         
 
         if domain_to_cut is None:
-            if verbose: print("cutting everything to the minimum possible domain")
             self.domain_to_cut = max_allowed_domain
-            print(self.domain_to_cut)
+            rounded_dom = {key : [round(self.domain_to_cut[key][i], 3) for i in range(2)] for key in self.domain_to_cut}
+            if verbose: print(f"cutting everything to the minimum possible domain: {rounded_dom}" )
         else:
             self.domain_to_cut = self._check_domain_sizes(domain_to_cut, max_allowed_domain)
         
@@ -575,7 +576,9 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         self._slice_to_domain(self.domain_to_cut)
 
         ## after cropping, need to arrange the datasets in the same way as the square ones!
+        self._process_footprints()
         self.met = process_domain_met(self.met_file, self.fp_data_full)
+        self.met_processed=True
         self.topog = self._process_topog_and_landcover()
 
 
@@ -600,7 +603,8 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         self.domain_to_cut["lon"][-1] = np.min([domain_to_cut["lon"][-1], max_allowed_domain["lon"][-1]])
 
         if self.domain_to_cut != domain_to_cut:
-            print(f"the domain you passed is bigger than the domain of the data in at least one direction. cropping to {self.domain_to_cut}")
+            rounded_dom = {key : [round(self.domain_to_cut[key][i], 3) for i in range(2)] for key in self.domain_to_cut}
+            print(f"the domain you passed is bigger than the domain of the data in at least one direction. cropping to {rounded_dom}")
 
         return self.domain_to_cut
 
@@ -618,12 +622,35 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
             self.landcover_file = self.landcover_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
 
     def _process_footprints(self):
-        raise NotImplementedError
+        self.fp_data = self.fp_data_full.fp.transpose("time","lat", "lon").values
+        self.fp_data = np.reshape(self.fp_data, (self.fp_data_full.time.size, self.fp_data_full.lat.size*self.fp_data_full.lon.size))
+
+        self.fp_lats = self.fp_data_full.lat.values
+        self.fp_lats = self.fp_lats[np.newaxis, :]
+        self.fp_lons = self.fp_data_full.lon.values
+        self.fp_lons = self.fp_lons[np.newaxis, :]
+
 
     def _process_topog_and_landcover(self):
-        topog = xr.merge([self.topog_file.surface_altitude.rename("topog"), self.landcover_file.landcover_type.rename("landcover"), self.landcover_file.landcover_fraction.rename("disaggregated_landcover").rename({"pseudo_level":"landcover_level"})])
+        stacked_landcover = xr.concat([self.landcover_file.land_binary_mask.assign_coords(pseudo_level=0).rename("disaggregated_landcover"), self.landcover_file.landcover_fraction.rename("disaggregated_landcover")], dim="pseudo_level").rename({"pseudo_level":"landcover_level"})
+
+        topog = xr.merge([self.topog_file.surface_altitude.rename("topog"), self.landcover_file.landcover_type.rename("landcover"), stacked_landcover])
         return topog
 
+    def remove_indeces(self, nan_idxs):
+        """
+        removes any set of indeces passed as nan_idxs from all the objects in the dataset
+        """
+        if self.verbose: print(f"Length before removing indeces: {self.fp_data_full.time.size}")
+
+        self.fp_data_full = self.fp_data_full.sel(time=np.delete(self.fp_data_full.time.values, nan_idxs))
+        if hasattr(self, "fp_data"):
+            self.fp_data = np.delete(self.fp_data, nan_idxs, axis=0)
+            
+        if hasattr(self, "met"): 
+            self.met = self.met.sel(time=np.delete(self.met.time.values, nan_idxs))
+
+        if self.verbose: print(f"Length after removing indeces: {self.fp_data_full.time.size}")
 
 
 class LoadBaseSiteData(LoadBaseSatelliteData):
@@ -639,6 +666,7 @@ class LoadBaseSiteData(LoadBaseSatelliteData):
         super(LoadBaseSiteData, self).__init__(year=year, month=month, region=site, domain=domain, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
 
         del self.region
+        self.data_type="site"
 
         # sites have fixed release coordinates, so can just extract the release lat and lon from the first timestep
         # self.release_coords = [site_lat, site_lon]
@@ -1001,7 +1029,6 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
             met["wind_speed"]=np.sqrt(met.x_wind**2 + met.y_wind**2)
         except Exception as e:
             print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
-
     return met
 
 
@@ -1227,7 +1254,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
 
     """
     assert hasattr(data, "dataset_format"), "It doesn't seem this is a SatelliteData object"
-    assert data.dataset_format == "square", "At the moment this only works for LoadSquareSatelliteData objects"
+    #assert data.dataset_format == "square", "At the moment this only works for LoadSquareSatelliteData objects"
     assert data.met_processed == True, "Make sure that you have loaded and cut the meteorology in the SatelliteData object"
 
     assert type(met_variables) is dict, "met_variables should be a dict of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list"
@@ -1270,7 +1297,11 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
 
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
-                met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False)
+                if data.dataset_format == "square":
+                    met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False)
+                if data.dataset_format == "domain":
+                    met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed)
+
                 met = met.swap_dims({"time":"fp_time"})
                 #met = met.reset_coords(["time"])
                 met = met.drop_vars("time")
@@ -1345,12 +1376,26 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
         static_variables_functions = get_static_variables_functions()
 
         # broadcast lat_coords and lon_coords from shape (time, lat) and (time, lon) to shared shape(time, lat, lon). we will use these as a starting array to add all the static variables, and will remove them at the end if they were not passed in "static_variables"
-        (static_ds, ) = xr.broadcast(full_met[["lat_coords", "lon_coords"]])
+        if data.dataset_format=="square":
+            (static_ds, ) = xr.broadcast(full_met[["lat_coords", "lon_coords"]])
+            print(static_ds)
+        if data.dataset_format == "domain":
+            (static_ds, ) = xr.broadcast(full_met.assign({"lat_coords":(("lat"), full_met.lat.values), "lon_coords":(("lon"), full_met.lon.values)})[["lat_coords", "lon_coords", "fp_time"]])
+
+            static_ds = static_ds[["lat_coords", "lon_coords"]]
+
+            if "time" not in data.topog.coords:
+                data.topog = data.topog.broadcast_like(static_ds, exclude=["lat", "lon", "landcover_level"])
+                data.topog = data.topog.assign_coords({"lat":static_ds.lat.values, "lon":static_ds.lon.values}).rename({"fp_time":"time"})
+        
+            print(static_ds)
+
+
 
         for var in static_variables:
             # add each input as a variable in the static_ds
             if var in ["topog", "landcover", "landcover_disaggregated"]:
-                assert hasattr(data, "topog"), "Load topog on the data object with data.load_topog() before trying to extract this as an input!"
+                assert hasattr(data, "topog"), "Load topog on the data object before trying to extract this as an input!"
                 static_ds = static_variables_functions[var](data.topog, static_ds)
             elif var in list(static_variables_functions.keys()) and var not in ["lat_coords", "lon_coords"]:
                 static_ds = static_variables_functions[var](static_ds)
@@ -1409,11 +1454,20 @@ def get_grid(data, latlon_fp=0):
     print(f"getting grid for time {data.met.time.values[latlon_fp]}")
     #print(f"making grid for footprint at time {data}")
     single_meshgrid = np.meshgrid(data.fp_lats[latlon_fp,:], data.fp_lons[latlon_fp,:])
-    latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lats)[1]) for j in range(np.shape(data.fp_lats)[1])] 
+    latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
 
-    idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[latlon_fp,:]))), list(range(len(data.fp_lons[latlon_fp,:]))))
-    idx_meshgrid = np.array(idx_meshgrid)-int(data.size/2)
-    idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lats)[1]) for j in range(np.shape(data.fp_lats)[1])] 
+    if data.dataset_format == "square":
+        idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[latlon_fp,:]))), list(range(len(data.fp_lons[latlon_fp,:]))))
+        idx_meshgrid = np.array(idx_meshgrid)-int(data.size/2)
+        idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
+
+    elif data.dataset_format == "domain":
+        idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[latlon_fp,:]))), list(range(len(data.fp_lons[latlon_fp,:]))))
+
+        #idx_meshgrid = np.array(idx_meshgrid)-int(data.size/2)
+
+        idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])]    
+
 
     return latlons, idx_latlons
 
