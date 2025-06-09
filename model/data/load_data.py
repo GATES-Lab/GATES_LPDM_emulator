@@ -583,8 +583,6 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
 
 
 
-
-
     def _check_domain_sizes(self, domain_to_cut, max_allowed_domain):
         # fill in lat or lon in case only one was passed
         if not "lat" in domain_to_cut.keys():
@@ -653,9 +651,9 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         if self.verbose: print(f"Length after removing indeces: {self.fp_data_full.time.size}")
 
 
-class LoadBaseSiteData(LoadBaseSatelliteData):
-    def __init__(self, year, site = "MHD", month=None, domain=None, freq=1, freq_offset=0, verbose = False, fp_datadir = None, lazy_load=True, met_args={}, topog_args={}):  
-        
+class LoadDomainSiteData(LoadDomainSatelliteData):
+    def __init__(self, year, site = "MHD", month=None, size=None, freq=1, domain_to_cut=None, domain=None, verbose = False, fp_datadir = None, lazy_load=True, met_args={}, topog_args={}):  
+
         #### check domains
         self.site = site
         if domain is None:
@@ -663,7 +661,80 @@ class LoadBaseSiteData(LoadBaseSatelliteData):
         else:
             self.domain=domain
 
-        super(LoadBaseSiteData, self).__init__(year=year, month=month, region=site, domain=domain, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
+        super().__init__(year=year, month=month, region=site, domain=self.domain, fp_datadir=fp_datadir, freq=freq, met_args=met_args, topog_args=topog_args, verbose=verbose)
+
+        self.data_type="site"
+        self.site = site
+
+        # sites have fixed release coordinates, so can just extract the release lat and lon from the first timestep
+        # self.release_coords = [site_lat, site_lon]
+        self.release_coords = [self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lat.values, self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lon.values]
+
+
+    def _get_release_idxs(self):
+        idx_release_lat = np.argmin(abs(self.fp_data_full.lat.values - self.release_coords[0]))
+        idx_release_lon = np.argmin(abs(self.fp_data_full.lon.values - self.release_coords[1]))
+        release_idxs = [idx_release_lat, idx_release_lon]
+        return release_idxs
+    
+    def _get_domain(self, site):
+        #### check domains
+        # TODO make domains dict importable
+        domains = {"MHD":"EUROPE"} 
+        try:
+            domain = domains[site]   
+        except: 
+            raise ValueError("No domain was passed, and the region you passed is not associated to any domain!")   
+        
+        return domain   
+
+
+class LoadSquareSiteData(LoadSquareSatelliteData):
+    def __init__(self, year, site = "MHD", month=None, domain=None, freq=1, freq_offset=0, verbose = False, fp_datadir = None, lazy_load=True, met_args={}, topog_args={}):  
+        #### check domains
+        self.site = site
+        if domain is None:
+            self.domain = self._get_domain(site)
+        else:
+            self.domain=domain
+
+        super().__init__(year=year, month=month, region=site, freq=freq, domain=self.domain, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
+
+        self.data_type="site"
+
+        # sites have fixed release coordinates, so can just extract the release lat and lon from the first timestep
+        # self.release_coords = [site_lat, site_lon]
+        self.release_coords = [self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lat.values, self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lon.values]
+
+
+    def _get_release_idxs(self):
+        idx_release_lat = np.argmin(abs(self.fp_data_full.lat.values - self.release_coords[0]))
+        idx_release_lon = np.argmin(abs(self.fp_data_full.lon.values - self.release_coords[1]))
+        release_idxs = [idx_release_lat, idx_release_lon]
+        return release_idxs
+
+    def _get_domain(self, site):
+        #### check domains
+        # TODO make domains dict importable
+        domains = {"MHD":"EUROPE"} 
+        try:
+            domain = domains[site]   
+        except: 
+            raise ValueError("No domain was passed, and the region you passed is not associated to any domain!")   
+        
+        return domain   
+
+
+class LoadBaseSiteData(LoadBaseSatelliteData):
+    def __init__(self, year, site = "MHD", month=None, domain=None, freq=1, freq_offset=0, verbose = False, fp_datadir = None, lazy_load=True, met_args={}, topog_args={}):  
+        #### check domains
+        self.site = site
+        if domain is None:
+            self.domain = self._get_domain(site)
+        else:
+            self.domain=domain
+
+        super().__init__(year=year, month=month, region=site, domain=domain, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
 
         del self.region
         self.data_type="site"
@@ -690,18 +761,19 @@ class LoadBaseSiteData(LoadBaseSatelliteData):
         
         return domain   
 
+
+"""
 class LoadSiteData(LoadBaseSiteData):
     def __init__(self, year, site = "MHD", month=None, size=None, domain_to_cut=None, domain=None, verbose = False, fp_datadir = None, lazy_load=True, met_args={}, topog_args={}):  
     
-        super(LoadSiteData, self).__init__(year=year, month=month, site=site, domain=domain, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose)
-        print("1")
+        super().__init__(year=year, month=month, site=site, domain=domain, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose)
+
         max_allowed_domain = self._get_max_allowed_domain()
 
-        print("3")
         if size is None and domain_to_cut is None:
             if verbose: print("cutting everything to the largest possible domain")
             self.domain_to_cut = max_allowed_domain
-            print("4")
+
         elif size is not None and domain_to_cut is None:
             if verbose: print("cutting to a square of size size x size centered on the site")
             release_idxs = self._get_release_idxs()
@@ -764,9 +836,7 @@ class LoadSiteData(LoadBaseSiteData):
 
         if hasattr(self, "landcover_file"):
             self.landcover_file = self.landcover_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
-
-    def _process_footprints(self):
-        lat_array = 1#np.
+"""
 
 
 
@@ -1313,7 +1383,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             del met 
     
     # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
-    full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", "levels", "time_delta")
+    full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", ..., "time_delta")
 
     # if the time_delta is large, cut met might have interpolated to t-time_delta outside of the known met. check and if so remove indeces
     if data.met.time.values[0] - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]:

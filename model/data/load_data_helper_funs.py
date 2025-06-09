@@ -9,7 +9,7 @@ import os
     
 def select_met_levels(met, levels=None):
     # subset the right levels and variables, as specified in the inputs
-    if levels is not None and len(levels)>0:
+    if levels is not None and len(levels)>0 and "levels" in met.coords:
         for lev in levels:
             if lev not in met.levels.values: 
                 print("level ", lev, "cannot be found in the met file")
