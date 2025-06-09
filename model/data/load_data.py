@@ -132,7 +132,7 @@ class LoadBaseSatelliteData:
         if month != None:
             self.month = month
             self.date = str(self.year)+month
-
+        # Nawid - Used for subsampling
         self.subsample_parameters = {"freq":freq, "sampling_mode":sampling_mode, "freq_offset":freq_offset}
         
         #### load footprint (fp) data     
@@ -243,9 +243,9 @@ class LoadBaseSatelliteData:
             #fp_datadir=fp_datadir+str(self.date)+"*.nc"
             fp_datadir = f"{fp_datadir}{self.domain}/*{self.region}*{self.domain}_{str(self.date)}*.nc"
         if self.verbose: print("Loading footprint data from " + fp_datadir) 
-
+        # Nawid - loads the footpritns
         self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose)  
-
+        # Nawid - remove duplicates in time
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
 
         ## reduce data frequency with regular sampling 9eg keep only 1 in every 3 timesteps
@@ -404,6 +404,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     def _process_meteorology(self,rechunk=0,lazy_load=True):
         if self.verbose: print("----- Cutting met")
         self.metsize=self.size
+        # Nawid - choosing how to deal with out of domain values
         if self.fill_outofdomain_with=="nans" or self.delete_outofdomain:
             pad_mode = "nans"
         if self.fill_outofdomain_with=="zeros":
@@ -528,15 +529,66 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
     def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}):
         
         ## INITIALISE THE BASE OBJECT, TO LOAD THE FOOTPRINTS
-        super().__init__(self, year, region, month=month, domain=domain, freq=freq, freq_offset=freq_offset, verbose=verbose, sampling_mode=sampling_mode, fp_datadir=fp_datadir, load_everything=False, met_args=met_args, topog_args=topog_args)
+        # Corrected call to super().__init__
+        super().__init__(year, region, month=month, domain=domain, freq=freq, freq_offset=freq_offset, verbose=verbose, sampling_mode=sampling_mode, fp_datadir=fp_datadir, load_everything=load_everything, met_args=met_args, topog_args=topog_args)
+        #super().__init__(self, year, region, month=month, domain=domain, freq=freq, freq_offset=freq_offset, verbose=verbose, sampling_mode=sampling_mode, fp_datadir=fp_datadir, load_everything=False, met_args=met_args, topog_args=topog_args)
 
         self.dataset_format = "domain"
+        lazy_load=True
 
-    def _process_footprints(self):
-        raise NotImplementedError
+        self.size = 10
+        self.fill_outofdomain_with="nans"
+        self.delete_outofdomain = False
+        self._process_footprints(lazy_load)
 
-    def _process_met(self):
-        raise NotImplementedError
+        self.met_args = met_args
+        self.met_processed = False
+        
+        if load_everything:
+            self.met_file = self.load_meteorology(**met_args)
+            self.met = self._process_meteorology(lazy_load=lazy_load)
+            # Nawid - topog_file and landcover_file seems to be different size than the value met
+            self.topog_file, self.landcover_file = self.load_topog(**topog_args)
+        #import ipdb; ipdb.set_trace()
+
+    def _process_footprints(self, lazy_load):
+        """
+        cut data around release point
+        fp data returned is array of shape (time, size*size) with each footprint centered around its release point
+        """
+        if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data_v2(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
+
+
+    def _process_meteorology(self,rechunk=0,lazy_load=True):
+        if self.verbose: print("----- Cutting met")
+        
+        # Nawid - choosing how to deal with out of domain values
+        self.met = obtain_fixed_satellite_met(self.met_file, self.fp_data_full, time_delta=0, load=not lazy_load)
+
+        if rechunk>0:
+            self.met.chunk({"time":rechunk})
+        
+        self.met_processed = True
+        return self.met
+    
+    def remove_indeces(self, nan_idxs):
+        """
+        removes any set of indeces passed as nan_idxs from all the objects in the dataset
+        """
+        self.fp_data_full = self.fp_data_full.sel(time=np.delete(self.fp_data_full.time.values, nan_idxs))
+        if hasattr(self, "fp_data"):
+            self.fp_lats = np.delete(self.fp_lats, nan_idxs, axis=0)
+            self.fp_lons = np.delete(self.fp_lons, nan_idxs, axis=0)
+            self.fp_data = np.delete(self.fp_data, nan_idxs, axis=0)
+            if self.verbose: print(f"current length: {len(self.release_idxs)}")
+            self.release_idxs = np.delete(self.release_idxs, nan_idxs, axis=0)
+            
+        if hasattr(self, "met"): 
+            self.met = self.met.sel(time=np.delete(self.met.time.values, nan_idxs))
+        if hasattr(self, "topog"):
+            self.topog = self.topog.sel(time=np.delete(self.topog.time.values, nan_idxs))
+
 
     def _process_topog(self):
         raise NotImplementedError
@@ -633,6 +685,7 @@ def cut_satellite_data_v2(fp_full, size, returnlatlons = False,fill_bads_with="n
     ## returnlatlons - bool, if True return the cut footprints, and the lats, lons and release_idxs arrays. If false, return only the cut footprints
     """
     half = int(size/2)
+    # Nawid - get the release idxs
     release_idxs = get_release_idxs(fp_full)    
 
     padding_needed = False
@@ -644,7 +697,7 @@ def cut_satellite_data_v2(fp_full, size, returnlatlons = False,fill_bads_with="n
     
     domain_lats = np.copy(fp_full.lat.values)
     domain_lons = np.copy(fp_full.lon.values)
-
+    # Nawid - entire range of lat and lon values
     original_fp_domain = (fp_full.lat.values[0], fp_full.lat.values[-1], fp_full.lon.values[0], fp_full.lon.values[-1])
 
     # this dict stores how many footprints needed to be expanded in each direction
@@ -820,7 +873,7 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
 
     met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
 
-
+    # Nawid - get the values for the lats and the lons
     domain_lats = np.copy(met.lat.values)
     domain_lons = np.copy(met.lon.values)
 
@@ -833,7 +886,7 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         print("the resolution is different! this doesnt work yet?")
     
     #met = self.met.interp({"lat":self.domain_lats, "lon":self.domain_lons})
-
+    # Nawid - get the relase indices
     met_release_idxs = get_release_idxs(fp, domain_lats = domain_lats, domain_lons = domain_lons)
     padding = {"lat":[0,0], "lon":[0,0]}
 
@@ -899,7 +952,7 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         met_release_idxs = get_release_idxs(fp, domain_lats = domain_lats, domain_lons = domain_lons)
 
     cropped_met_arrays = []
-
+    # Nawid - going through the met size
     coords_array = np.arange(metsize)
     # crop the data as a small array for each unique release index
     for rel_unique in np.unique(met_release_idxs, axis=0):
@@ -908,7 +961,7 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         # crop the meteorology around the releasepoint
 
         #cutmet = met.sel(time=fp_times[idxs], lat=domain_lats[rel_unique[0]-half:rel_unique[0]+half], lon=domain_lons[rel_unique[1]-half:rel_unique[1]+half])
-
+        # Nawid - get the met for the spexific time
         cutmet = met.sel(time=fp_times[idxs])
         cutmet = cutmet.interp({"lat":domain_lats[rel_unique[0]-half:rel_unique[0]+half], "lon":domain_lons[rel_unique[1]-half:rel_unique[1]+half]}, method="nearest")
         # copy the latitude/longitude values for this specific cropped square
@@ -967,6 +1020,151 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
 
 
 
+def obtain_fixed_satellite_met(met, fp,time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None):
+    """
+    make into smaller functions!
+    
+    cuts the meteorology from fixed domain and regular timesteps to match the footprint dataset:
+        - in time: interpolated to the time of the footprints if time_delta=0, or to t-time_delta hours otherwise
+        - in space: cropped to a square of size metsize x metsize around the coordinates of the satellite measurement for each footprint 
+
+    Main Inputs:
+        - met: meteorology array
+        - fp: footprint array
+        - metsize (int): size of the square to crop the meteorology to
+        - time_delta (int, 0 or positive): If time_delta==0, the meteorology will be interpolated to the times of the footprints. Otherwise, the met will be interpolated to t-time_delta, where t is the time of the footprint
+        - relevant_levels and relevant_variables: lists of levels (as ints) and variables (as str) to keep. If None, all levels/variables are kept respectively
+    Other Inputs:
+        - pad_mode: if the area to be extracted (of size metsize x metsize) escapes the domain of the met file, the met file is extended. if pad_mode="nans", it's extended with nans (and can be deleted later), if pad_mode="edge", it's extended using the edges of the domain
+        - load (bool): load array into memory
+        - add_wind_direction (bool): if True calculate wind_angle and wind_speed from the two horizontal wind vectors and add as variables
+        - delete_nans: bool, if True delete timestamps where there were nans
+        - attrs_dict: dictionary of attributes to add to the file before saving/returning
+        - save (bool): save to file. requires a savepath to be passed
+        - savepath (str): full path to save file to
+
+    Returns:
+        - met_cut: xarray with cropped and interpolated meteorology (ie interpolated to the correct times, and cropped to a square of size metsize around the footprint release point)
+    """
+
+    # subset the right levels and variables, as specified in the inputs
+    met = select_met_levels(met, levels=relevant_levels)
+
+    met = select_met_variables(met, variables=relevant_variables)       
+    
+    fp_times = np.copy(fp.time.values)
+
+    # interpolate the meteorology to the correct timestamps
+    ###
+    # TO DO - add here capability to interpolate to every X minutes, then interpolate timestamps with mode="nearest"
+    ###
+    assert time_delta>=0, "time_delta needs to be zero or positive!!"
+
+
+    if time_delta==0:
+        met = met.interp(time=fp_times)
+        met = met.assign({"fp_time":(("time"), fp_times)})
+    else:
+
+        fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
+        met = met.interp(time=fp_times)
+
+        # store the original footprint times as a separate value
+        met = met.assign({"fp_time":(("time"),fp.time.values)})
+
+    met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
+
+    # Nawid - get the values for the lats and the lons
+    domain_lats = np.copy(met.lat.values)
+    domain_lons = np.copy(met.lon.values)
+
+    delta_lat = domain_lats[1]-domain_lats[0]
+    delta_lat_fp = fp.lat.values[1]-fp.lat.values[0]
+    delta_lon = domain_lons[1]-domain_lons[0]
+    delta_lon_fp = fp.lon.values[1]-fp.lon.values[0]
+
+    if abs(delta_lat - delta_lat_fp) > 0.01 or abs(delta_lon - delta_lon_fp)>0.01:
+        print("the resolution is different! this doesnt work yet?")
+    
+    #met = self.met.interp({"lat":self.domain_lats, "lon":self.domain_lons})
+    # Nawid - get the relase indices
+    met_release_idxs = get_release_idxs(fp, domain_lats = domain_lats, domain_lons = domain_lons)
+        
+    #if padding is np.any(np.array(met_needed_padding_direction.values))
+
+    cropped_met_arrays = []
+    # Nawid - going through the met size
+    # crop the data as a small array for each unique release index
+    for rel_unique in np.unique(met_release_idxs, axis=0):
+        # find the corresponding timestamps
+        idxs = np.where((met_release_idxs == rel_unique).all(axis=1))[0]
+        # crop the meteorology around the releasepoint
+
+        #cutmet = met.sel(time=fp_times[idxs], lat=domain_lats[rel_unique[0]-half:rel_unique[0]+half], lon=domain_lons[rel_unique[1]-half:rel_unique[1]+half])
+        # Nawid - get the met for the spexific time
+        cutmet = met.sel(time=fp_times[idxs])
+        '''
+        cutmet = cutmet.interp({"lat":domain_lats[rel_unique[0]-half:rel_unique[0]+half], "lon":domain_lons[rel_unique[1]-half:rel_unique[1]+half]}, method="nearest")
+        '''
+        # copy the latitude/longitude values for this specific cropped square
+        #lats = cutmet.lat.values.copy()
+        #lons = cutmet.lon.values.copy()
+        
+        # replace the latitude/longitude coordinates with grid-like coords (0-metsize), and save the actual coordinates as variables
+        #.rename({"latitude":"lat","longitude":"lon"})
+        #import ipdb; ipdb.set_trace()
+        
+        with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+            cutmet = cutmet.assign_coords({"lat": np.arange(cutmet.dims['lat']),"lon": np.arange(cutmet.dims['lon'])}).assign({"lat_coords": (("lat"), cutmet['lat'].values),"lon_coords": (("lon"), cutmet['lon'].values)})
+            #cutmet = cutmet.assign_coords({"lat":,np.arange(cutmet['lat'].values), "lon":np.arange(cutmet['lon'].values)})..assign({"lat_coords":(("lat"), domain_lats), "lon_coords":(("lon"), domain_lons)})
+            #cutmet = cutmet.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), domain_lats[rel_unique[0]-half:rel_unique[0]+half]), "lon_coords":(("lon"), domain_lons[rel_unique[1]-half:rel_unique[1]+half])})
+        
+        cropped_met_arrays.append(cutmet)
+    # concatenate all of the cropped arrays
+    cropped_met = xr.concat(cropped_met_arrays, dim="time")
+    cropped_met = cropped_met.sortby("time")
+    # add any passed attributes
+    if attrs_dict is not None:
+        cropped_met.attrs = attrs_dict.update({"original_met_attrs":cropped_met.attrs})
+    else:
+        cropped_met.attrs = {"original_met_attrs":cropped_met.attrs}
+    
+    # load into memory, if required
+    if load:
+        print("loading array into memory. If you only want to lazy-load, pass load=False")
+        cropped_met.load()
+
+    # add additional wind variables
+    if add_wind_direction and (relevant_variables is None or "wind_speed" in relevant_variables):
+        try:
+            cropped_met["wind_angle"]=np.arctan2(-cropped_met.x_wind,-cropped_met.y_wind)
+            cropped_met["wind_speed"]=np.sqrt(cropped_met.x_wind**2 + cropped_met.y_wind**2)
+        except Exception as e:
+            print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
+
+    # this needs implementing
+    # need to delete nans 
+    #   1) in time (e.g. when t-jump is outside of the meteorology file )
+    #   2) in space (if pad_mode="nans", identify and delete the whole timepoint? this could also be done later in the LoadData object
+            
+    if delete_nans:
+        raise NotImplementedError
+        """
+        nan_idxs = np.unique(np.where(np.isnan(met_cut.x_wind.values[0,0,0,:])))
+        met_cut = met_cut.sel(time=np.delete(met_cut.time.values, nan_idxs))
+        print(f"removed {len(nan_idxs)} invalid indeces")
+        """
+    if save:
+        assert savepath is not None, "pass a savepath to save the file to!"
+        assert savepath[-3:] == ".nc", "ensure you passed a full savepath, including filename and .nc"
+        print("saving met at", savepath)
+        cropped_met.to_netcdf(savepath)
+        print("met saved")
+
+    # cropped met will have some nans!!!
+    return cropped_met
+
+
 def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_variables=[], verbose=True, return_variable_names=False, return_asarray=False):
     """
     LATEST VERSION - get inputs from LoadSquareSatelliteData object and format as a DataArray of size (time, lat, lon, variables)
@@ -998,7 +1196,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     all_met_files={}
 
     # subset before saving to the dict
-
+    # Nawid - Get the required levels and variables
     min_levels_needed = list(set([levels[i] for levels in list(met_variables.values()) for i in range(len(levels))]))
                              
     met_variables_needed = list(met_variables.keys())
@@ -1014,6 +1212,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
         # filename here 
         for delta in time_deltas:
             if delta==0:
+                # Nawid - Get the met and the variables for the data
                 met = data.met
                 met = select_met_levels(met, levels=min_levels_needed)
                 met = select_met_variables(met, variables=met_variables_needed)
@@ -1039,15 +1238,18 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             del met 
     
     # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
+    # Nawid - I assume this is concatenating all the different datasets for the task
     full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", "levels", "time_delta")
 
     # if the time_delta is large, cut met might have interpolated to t-time_delta outside of the known met. check and if so remove indeces
     if data.met.time.values[0] - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]:
         badly_interpolated = data.met.time.values - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]
+        # Nawic - Remove the badly interpolated met data
         full_met = full_met.drop_sel(fp_time=full_met.fp_time.values[badly_interpolated])
 
         # this updates any indeces that couldnt be interpolated
         # i think it updates data without needing to return it as a new object
+        # Nawid- remove badly interpolated footprints
         data.remove_indeces(np.where(badly_interpolated)[0])
 
 
@@ -1058,6 +1260,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     # stack along the variable dimension, so that the new variable has shape (variable name, level, time_delta)
     if len(levels_variables_needed)>0:
         if verbose: print(f"Setting up variables with levels: {levels_variables_needed}")
+        # Nawid-  get the met data for particular levels 
         stacked_levels_met = full_met[levels_variables_needed].to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_levels_met")
 
 
@@ -1069,12 +1272,12 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                     indexes.append((v, lev, delta))
         
         stacked_levels_met = stacked_levels_met.sel(variable_name=indexes)
-
+        # Nawid - get the variable names
         varnames_dict = varnames_dict + [{"var":tup[0], "level":tup[1], "time_delta":tup[2], "type":"met"} for tup in stacked_levels_met.variable_name.values]
         
 
         stacked_levels_met = stacked_levels_met.drop_vars({'time_delta', 'variable_name', 'levels','variable'}).assign_coords({"variable_name":stacked_levels_met.variable_name.values})
-
+        # Nawid - get the input values for the data
         input_arrays.append(stacked_levels_met)
         
     else:
@@ -1136,13 +1339,201 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     concatenated_inputs = concatenated_inputs.assign_coords(variable_name=pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"]))
 
     #latlons, idx_latlons = get_grid(data, latlon_fp)
-
+    # Nawid - return data as xarray
     if not return_asarray:
         if return_variable_names:
             return concatenated_inputs, varnames_dict
         else:
             return concatenated_inputs
+    # Nawid - return data as a nmpy array
+    if return_asarray:
+        if return_variable_names:
+            return np.reshape(concatenated_inputs.values, (concatenated_inputs.fp_time.size, concatenated_inputs.lat.size*concatenated_inputs.lon.size, concatenated_inputs.variable_name.size)), varnames_dict
+        else:
+            return np.reshape(concatenated_inputs.values, (concatenated_inputs.fp_time.size, concatenated_inputs.lat.size*concatenated_inputs.lon.size, concatenated_inputs.variable_name.size))
+
+
+def get_fixed_satellite_inputs(data, met_variables, time_deltas=[], static_variables=[], verbose=True, return_variable_names=False, return_asarray=False):
+    """
+    LATEST VERSION - get inputs from LoadSquareSatelliteData object and format as a DataArray of size (time, lat, lon, variables)
+
+    ToDo: add option for it to work with LoadDomainSatelliteData! 
+
+    Inputs:
+    - data: LoadSquareSatelliteData object
+    - met_variables: dict, of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list
+    - time_deltas: list, of t-H hours to extract the met variables. t=0 (ie the time of the satellite measurement) is extracted automatically. time_deltas=[6,12] extracts the data at t=0, t-6h and t-12h.
+    - static_variables: list of static variables to add, eg topog, landcover, lat_coords. You can see or increase the list of valid names get_static_variables_functions()
+    - return_variable_names: bool, if true also returns a list of dicts with the variable names
+    - return_asarray: bool, if true returns as an np array of shape (time, lat, lon, variables) and the variable_names
+
+    """
+    assert hasattr(data, "dataset_format"), "It doesn't seem this is a SatelliteData object"
+    assert data.dataset_format == "domain", "At the moment this only works for LoadSquareSatelliteData objects"
+    assert data.met_processed == True, "Make sure that you have loaded and cut the meteorology in the SatelliteData object"
+
+    assert type(met_variables) is dict, "met_variables should be a dict of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list"
+
+    if verbose: print("---Preparing met")
+
+    if not (0 in time_deltas):
+        time_deltas.append(0) # append 0 to get present met too
+
+    time_deltas=list(sorted(set(time_deltas)))
+
+    all_met_files={}
+
+    # subset before saving to the dict
+    # Nawid - Get the required levels and variables
+    min_levels_needed = list(set([levels[i] for levels in list(met_variables.values()) for i in range(len(levels))]))
+                             
+    met_variables_needed = list(met_variables.keys())
+
+    surface_variables_needed = [var_name for var_name in met_variables if met_variables[var_name]==[]]
+
+    levels_variables_needed = [var_name for var_name in met_variables if len(met_variables[var_name])>0]
+
+    # check that the passed variables and levels are available in data.met (cut data object for 0)
+
+    if len(time_deltas)>1:
+        print(f"extracting met at t-H for H in: {time_deltas}")
+        # filename here 
+        for delta in time_deltas:
+            if delta==0:
+                # Nawid - Get the met and the variables for the data
+                met = data.met
+                met = select_met_levels(met, levels=min_levels_needed)
+                met = select_met_variables(met, variables=met_variables_needed)
+                # swap the dimensions so that each dataset, no matter the time delta, is aligned along the fp_time (the time of the measurement)
+                # so that met.time = met.fp_time - met.time_delta in hours
+                met = met.swap_dims({"time":"fp_time"})
+                #met = met.reset_coords(["time"])
+                met = met.drop_vars("time")
+                #met = met.rename({"fp_time":"time"})
+                
+            else:
+                # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
+                met = obtain_fixed_satellite_met(data.met_file, data.fp_data_full, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, load=False)
+                met = met.swap_dims({"time":"fp_time"})
+                #met = met.reset_coords(["time"])
+                met = met.drop_vars("time")
+                
+
+                
+            all_met_files[delta] = met.copy()
+
+            del met 
+    
+    # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
+    # Nawid - I assume this is concatenating all the different datasets for the task
+    full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", "levels", "time_delta")
+
+    # if the time_delta is large, cut met might have interpolated to t-time_delta outside of the known met. check and if so remove indeces
+    if data.met.time.values[0] - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]:
+        badly_interpolated = data.met.time.values - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]
+        # Nawic - Remove the badly interpolated met data
+        full_met = full_met.drop_sel(fp_time=full_met.fp_time.values[badly_interpolated])
+
+        # this updates any indeces that couldnt be interpolated
+        # i think it updates data without needing to return it as a new object
+        # Nawid- remove badly interpolated footprints
+        data.remove_indeces(np.where(badly_interpolated)[0])
+
+
+    input_arrays = []
+    varnames_dict = []
+    
+    ### SETTING UP VARIABLES WITH LEVELS
+    # stack along the variable dimension, so that the new variable has shape (variable name, level, time_delta)
+    if len(levels_variables_needed)>0:
+        if verbose: print(f"Setting up variables with levels: {levels_variables_needed}")
+        # Nawid-  get the met data for particular levels 
+        stacked_levels_met = full_met[levels_variables_needed].to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_levels_met")
+
+
+        # make sure we keep only the levels passed in met_variables
+        indexes = []
+        for v in list(set(levels_variables_needed)):
+            for delta in time_deltas:
+                for lev in met_variables[v]:
+                    indexes.append((v, lev, delta))
         
+        stacked_levels_met = stacked_levels_met.sel(variable_name=indexes)
+        # Nawid - get the variable names
+        varnames_dict = varnames_dict + [{"var":tup[0], "level":tup[1], "time_delta":tup[2], "type":"met"} for tup in stacked_levels_met.variable_name.values]
+        
+
+        stacked_levels_met = stacked_levels_met.drop_vars({'time_delta', 'variable_name', 'levels','variable'}).assign_coords({"variable_name":stacked_levels_met.variable_name.values})
+        # Nawid - get the input values for the data
+        input_arrays.append(stacked_levels_met)
+        
+    else:
+        stacked_levels_met = None
+    
+    ### SETTING UP VARIABLES WITH NO LEVELS
+    if len(surface_variables_needed)>0:
+        if verbose: print(f"Setting up surface variables: {surface_variables_needed}")
+        
+        # add empty variable levels so it aligns with the met dataset
+        stacked_surface_met = full_met[surface_variables_needed].assign_coords(levels=0).expand_dims("levels").transpose("fp_time", "lat", "lon", "levels", "time_delta").to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_surface_met")
+        varnames_dict = varnames_dict + [{"var":tup[0], "time_delta":tup[2], "type":"surface_met"} for tup in stacked_surface_met.variable_name.values]
+        stacked_surface_met = stacked_surface_met.drop_vars({'time_delta', 'variable_name', 'variable'}).assign_coords({"variable_name":stacked_surface_met.variable_name.values})
+
+        input_arrays.append(stacked_surface_met)
+
+    else:
+        stacked_surface_met = None
+
+    ### SETTING UP NON-MET VARIABLES
+    if len(static_variables)>0:
+        if verbose: print(f"Setting up static variables: {static_variables}")       
+
+        # dict of arguments and the functions that they return
+        static_variables_functions = get_static_variables_functions()
+
+        # broadcast lat_coords and lon_coords from shape (time, lat) and (time, lon) to shared shape(time, lat, lon). we will use these as a starting array to add all the static variables, and will remove them at the end if they were not passed in "static_variables"
+        import ipdb; ipdb.set_trace()
+        (static_ds, ) = xr.broadcast(full_met[["lat_coords", "lon_coords"]])
+        '''
+        for var in static_variables:
+            # add each input as a variable in the static_ds
+            if var in ["topog", "landcover", "landcover_disaggregated"]:
+                assert hasattr(data, "topog"), "Load topog on the data object with data.load_topog() before trying to extract this as an input!"
+                static_ds = static_variables_functions[var](data.topog, static_ds)
+            elif var in list(static_variables_functions.keys()) and var not in ["lat_coords", "lon_coords"]:
+                static_ds = static_variables_functions[var](static_ds)
+            elif var != "lat_coords" and var != "lon_coords":
+                print(f"variable {var} was not found in the list of known functions!")
+        '''
+        if "lat_coords" not in static_variables:
+            static_ds = static_ds.drop_vars(["lat_coords"])
+        if "lon_coords" not in static_variables:
+            static_ds = static_ds.drop_vars(["lon_coords"])
+
+        # add empty variable levels and time_delta so it aligns with the met dataset
+        stacked_static_inputs = static_ds.assign_coords(levels=0, time_delta=0).expand_dims("levels").expand_dims("time_delta").transpose("fp_time", "lat", "lon", "levels", "time_delta").to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_static_inputs")  
+
+        
+        varnames_dict = varnames_dict + [{"var":tup[0], "type":"static"} for tup in stacked_static_inputs.variable_name.values]
+        stacked_static_inputs = stacked_static_inputs.drop_vars({'variable_name', 'variable'}).assign_coords({"variable_name":stacked_static_inputs.variable_name.values})
+
+        input_arrays.append(stacked_static_inputs)
+
+    else:
+        stacked_static_inputs=None
+
+    concatenated_inputs = xr.concat(input_arrays, dim="variable_name")
+    idx = pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"])
+    concatenated_inputs = concatenated_inputs.assign_coords(variable_name=pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"]))
+
+    #latlons, idx_latlons = get_grid(data, latlon_fp)
+    # Nawid - return data as xarray
+    if not return_asarray:
+        if return_variable_names:
+            return concatenated_inputs, varnames_dict
+        else:
+            return concatenated_inputs
+    # Nawid - return data as a nmpy array
     if return_asarray:
         if return_variable_names:
             return np.reshape(concatenated_inputs.values, (concatenated_inputs.fp_time.size, concatenated_inputs.lat.size*concatenated_inputs.lon.size, concatenated_inputs.variable_name.size)), varnames_dict
