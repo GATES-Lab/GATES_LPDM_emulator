@@ -690,7 +690,7 @@ class LoadDomainSiteData(LoadDomainSatelliteData):
 
 
 class LoadSquareSiteData(LoadSquareSatelliteData):
-    def __init__(self, year, site = "MHD", month=None, domain=None, freq=1, freq_offset=0, verbose = False, fp_datadir = None, lazy_load=True, met_args={}, topog_args={}):  
+    def __init__(self, year, site = "MHD", month=None, domain=None, freq=1, size=10, freq_offset=0, verbose = False, fp_datadir = None, lazy_load=True, met_args={}, topog_args={}):  
         #### check domains
         self.site = site
         if domain is None:
@@ -698,7 +698,7 @@ class LoadSquareSiteData(LoadSquareSatelliteData):
         else:
             self.domain=domain
 
-        super().__init__(year=year, month=month, region=site, freq=freq, domain=self.domain, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
+        super().__init__(year=year, month=month, region=site, freq=freq, domain=self.domain, size=size, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
 
         self.data_type="site"
 
