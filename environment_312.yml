@@ -1,4 +1,4 @@
-name: new_graphnet_v2
+name: new_graphnet_v3
 channels:
   - anaconda
   - conda-forge
@@ -13,10 +13,11 @@ dependencies:
   - matplotlib=3.8.4
   - netcdf4=1.6.2
   - numpy=1.26.4
+  - mlk
   - pandas=2.2.2
   - python=3.12.2
   - scikit-learn=1.5.1
   - scipy=1.13.1
   - typing_extensions=4.12.2
   - xarray=2023.6.0
-prefix: /user/work/yl18410/conda/envs/new_graphnet_v2
+prefix: /user/work/yl18410/conda/envs/new_graphnet_v3
