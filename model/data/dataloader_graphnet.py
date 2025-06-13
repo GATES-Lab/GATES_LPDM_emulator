@@ -11,7 +11,7 @@ from sklearn.preprocessing import MinMaxScaler
 import copy
 
 
-class FootprintsDatasetV2(Dataset):
+class FootprintsDataset(Dataset):
     """
     Creates dataset to pass to the model, applying any transformations specified. 
     Parameters:
@@ -31,8 +31,8 @@ class FootprintsDatasetV2(Dataset):
     - test_mode: dict. If training, leave empty. If testing (ie applying existing parameters and/or already fitted models), pass a dictionary or the transform_parameters of another dataset
 
     Example:
-    training_ds = FootprintsDatasetV2(inputs, data.fp_data, input_transforms=["clever_transform"],output_transforms=["boxcox_all"], input_names=names)
-    testing_ds = FootprintsDatasetV2(test_inputs, test_data.fp_data, input_transforms=["clever_transform"],output_transforms=["boxcox_all"], input_names=names, test_mode=training_ds.transform_parameters))
+    training_ds = FootprintsDataset(inputs, data.fp_data, input_transforms=["clever_transform"],output_transforms=["boxcox_all"], input_names=names)
+    testing_ds = FootprintsDataset(test_inputs, test_data.fp_data, input_transforms=["clever_transform"],output_transforms=["boxcox_all"], input_names=names, test_mode=training_ds.transform_parameters))
 
     Functions:
     - inverse_transform(predictions): provides the footprints reconverted to the original space, inverting any previously applied transforms
@@ -55,6 +55,7 @@ class FootprintsDatasetV2(Dataset):
         print(transform_parameters)
         print(self.transform_parameters)
 
+        ## fulllandcover parameter is redundant with the new data loading funs!
         if full_land_cover:
             landcover_idxs = [n for n in range(len(self.input_names)) if "land_cover" in self.input_names[n]["var"]]
             self.landcover_features  = np.copy(inputs[:,:,landcover_idxs])
@@ -295,7 +296,7 @@ class FootprintsDatasetV2(Dataset):
     def __getitem__(self, item):
         return self.inputs[item,:,:], self.fp[item,:,:]  
 
-class FootprintsDatasetNANV3(FootprintsDatasetV2):
+class FootprintsDatasetNANV3(FootprintsDataset):
     """
     LATEST VERSION
     prepare the inputs and outputs as a dataset to pass to the model, returns a mask of nans
@@ -326,7 +327,7 @@ class FootprintsDatasetNANV3(FootprintsDatasetV2):
         return self.inputs[item,:,:], self.fp[item,:,:], self.original_fp[item,:,:], self.nanmask[item,:,:]
         
 
-class FootprintsDatasetV3(FootprintsDatasetV2):
+class FootprintsDatasetV3(FootprintsDataset):
     """
     LATEST VERSION
     prepare the inputs and outputs as a dataset to pass to the model

@@ -9,7 +9,7 @@ import os
     
 def select_met_levels(met, levels=None):
     # subset the right levels and variables, as specified in the inputs
-    if levels is not None:
+    if levels is not None and len(levels)>0 and "levels" in met.coords:
         for lev in levels:
             if lev not in met.levels.values: 
                 print("level ", lev, "cannot be found in the met file")
@@ -35,7 +35,15 @@ def select_met_variables(met, variables=None):
     return met
 
 def _static_var_topog(topog_ds, coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"topog":topog_ds.topog.rename({"time":"fp_time"})})
+    print(topog_ds.coords)
+    if "time" not in topog_ds.coords:
+        print(">!>!>!")
+        topog = topog_ds.topog.broadcast_like(coordinate_ds, exclude=["lat", "lon"])
+        print(topog)
+        coordinate_ds = coordinate_ds.assign({"topog":topog})
+        
+    else:
+        coordinate_ds = coordinate_ds.assign({"topog":topog_ds.topog.rename({"time":"fp_time"})})
 
     return coordinate_ds
 
