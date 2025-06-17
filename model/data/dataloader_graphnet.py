@@ -39,12 +39,22 @@ class FootprintsDataset(Dataset):
     - add_prototypes(prototypes) : unfinished! Takes prototypes of same shape as footprints, applies to them the same transform applied to the fps and appends them to the inputs array.
 
     """
-    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[], full_land_cover=False):
+    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[], size=None, full_land_cover=False):
         #super().__init__()
         self.inputs = np.copy(inputs)
         self.fp = np.copy(fp)
-        self.size = int(np.sqrt(np.shape(fp)[-1]))
-        print(self.size)
+        if size is None:
+            self.size = [int(np.sqrt(np.shape(fp)[-1])), int(np.sqrt(np.shape(fp)[-1]))]
+            print(f"assuming this is a square dataset of size {self.size[0]} x {self.size[1]}!")
+        elif type(size) is int:
+            assert size == int(np.sqrt(np.shape(fp)[-1])), f"you passed size as an int, which normally implies a square dataset of size {size} x {size}, but the data size doesnt match (data would have size {int(np.sqrt(np.shape(fp)[-1]))} x {int(np.sqrt(np.shape(fp)[-1]))}). are you sure the data is square and of the size you pass?"
+            self.size = [size, size]
+        elif len(size) == 2 and (type(size) is tuple or type(size) is list):
+            self.size = size
+            print(f"assuming a non-square domain of size {self.size}")
+        else:
+            raise ValueError("you passed a size parameter of an unknown format. pass size=None if the dataset is square, or a list/tuple")
+
         self.input_transforms= copy.deepcopy(input_transforms)
         self.output_transforms= copy.deepcopy(output_transforms)
         self.input_names = copy.deepcopy(input_names)
@@ -54,12 +64,6 @@ class FootprintsDataset(Dataset):
         
         print(transform_parameters)
         print(self.transform_parameters)
-
-        ## fulllandcover parameter is redundant with the new data loading funs!
-        if full_land_cover:
-            landcover_idxs = [n for n in range(len(self.input_names)) if "land_cover" in self.input_names[n]["var"]]
-            self.landcover_features  = np.copy(inputs[:,:,landcover_idxs])
-
 
 
         # note that _Transform is the base class and will raise a not_implemented error if used
@@ -204,9 +208,9 @@ class FootprintsDataset(Dataset):
             else:
                 flux = units_transform(flux)
 
-        true_concentration = np.reshape(np.nan_to_num(self.fp_untransformed), (len(self.fp_untransformed), self.size, self.size))*flux
+        true_concentration = np.reshape(np.nan_to_num(self.fp_untransformed), (len(self.fp_untransformed), self.size[0], self.size[1]))*flux
         self.true_flux = np.sum(true_concentration, axis = (1,2))
-        pred_concentration = np.reshape(self.transformed_predictions, (len(self.transformed_predictions), self.size, self.size))*flux
+        pred_concentration = np.reshape(self.transformed_predictions, (len(self.transformed_predictions), self.size[0], self.size[1]))*flux
         self.pred_flux = np.sum(pred_concentration, axis = (1,2))
         
         return self.true_flux, self.pred_flux
@@ -220,7 +224,7 @@ class FootprintsDataset(Dataset):
 
 
         if mode=="uniform":
-            flux = np.ones((self.size, self.size))
+            flux = np.ones((self.size[0], self.size[1]))
         elif mode=="checkerboard_10":
             flux = checkerboard(self.size, 10)
         elif mode=="checkerboard_5":
@@ -258,11 +262,11 @@ class FootprintsDataset(Dataset):
         if len(idx)==1:
             ax = ax[None,:]
         for idx_n, index in enumerate(idx):
-            ax[idx_n,0].imshow(np.reshape(self.fp_untransformed[index], (self.size, self.size)), origin="lower")
-            ax[idx_n,1].imshow(np.reshape(self.fp_numpy[index], (self.size, self.size)), origin="lower")
+            ax[idx_n,0].imshow(np.reshape(self.fp_untransformed[index], (self.size[0], self.size[1])), origin="lower")
+            ax[idx_n,1].imshow(np.reshape(self.fp_numpy[index], (self.size[0], self.size[1])), origin="lower")
             if plots==4:
-                ax[idx_n,2].imshow(np.reshape(self.transformed_predictions[index], (self.size, self.size)), origin="lower")
-                ax[idx_n,3].imshow(np.reshape(self.predictions[index], (self.size, self.size)), origin="lower")
+                ax[idx_n,2].imshow(np.reshape(self.transformed_predictions[index], (self.size[0], self.size[1])), origin="lower")
+                ax[idx_n,3].imshow(np.reshape(self.predictions[index], (self.size[0], self.size[1])), origin="lower")
 
             ax[idx_n,0].set_ylabel(f"fp at index {index}")
 
@@ -302,8 +306,8 @@ class FootprintsDatasetNANV3(FootprintsDataset):
     prepare the inputs and outputs as a dataset to pass to the model, returns a mask of nans
     """
 
-    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[],full_land_cover=False, returning="original_footprints"):
-        super().__init__(inputs, fp, input_transforms, output_transforms, transform_parameters, test_mode, input_names, full_land_cover=full_land_cover)
+    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[],full_land_cover=False, returning="original_footprints", size=None):
+        super().__init__(inputs, fp, input_transforms, output_transforms, transform_parameters, test_mode, input_names, size=size)
 
         if returning=="original_footprints":
             self.original_fp = torch.tensor(self.fp_untransformed, dtype=torch.float)
@@ -333,8 +337,8 @@ class FootprintsDatasetV3(FootprintsDataset):
     prepare the inputs and outputs as a dataset to pass to the model
     """
 
-    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[],full_land_cover=False, returning="original_footprints"):
-        super().__init__(inputs, fp, input_transforms, output_transforms, transform_parameters, test_mode, input_names, full_land_cover=full_land_cover)
+    def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[],full_land_cover=False, returning="original_footprints", size=None):
+        super().__init__(inputs, fp, input_transforms, output_transforms, transform_parameters, test_mode, input_names, full_land_cover=full_land_cover, size=size)
 
         if returning=="original_footprints":
             self.original_fp = torch.tensor(self.fp_untransformed, dtype=torch.float)
@@ -607,15 +611,16 @@ class _DistanceBoxcox(_Transform):
     """
     def __init__(self, parent, zero_shift=-5):
         self.parent = parent
-        print("!!")
+        
+        print("note that this WILL NOT work for non-square data!")
         print("init distance boxcox")
         self.parent.fp_untransformed = np.copy(self.parent.fp)
         self.zero_shift=zero_shift
 
         if self.parent.mode=="train":
-            centre = int(self.parent.size/2)
+            centre = int(self.parent.size[0]/2)
             # calculate distances between all cells and measurement cell
-            X, Y = np.meshgrid(np.arange(self.parent.size), np.arange(self.parent.size))
+            X, Y = np.meshgrid(np.arange(self.parent.size[0]), np.arange(self.parent.size[0]))
             self.distances = np.sqrt((centre - X)**2 + (centre - Y)**2)
             self.distances = self.distances.flatten()
             # calculate boxcox for all datapoints that are at the same distance from the release point
