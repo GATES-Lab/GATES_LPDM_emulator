@@ -80,8 +80,6 @@ def load_file(file_name, file_path):
         return None
     
 
-# TODO make this an argument
-
 parameters = load_file(file_name, file_path) 
 
 print("PARAMETERS:")
@@ -120,8 +118,6 @@ write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%
 write_to_file("loading data")
 
 #### 2 Load Data
-
-
 train_load_data = copy.deepcopy(parameters["train_load_data"])
 # load train parameters and upload with any changes to test data
 test_load_data = copy.deepcopy(parameters["train_load_data"])
@@ -160,7 +156,10 @@ test_dataset = FootprintsDatasetV3(test_inputs, test_data.fp_data, input_names=n
 train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=10)
 
-size = data.size
+if data.dataset_format == "square":
+    size = [data.size, data.size]
+if data.dataset_format == "domain":
+    size = data.domain_size
 
 # all the necessary data is already in the loaders, so we can delete the objects
 del data, test_data
@@ -275,10 +274,10 @@ for epoch in range(302):
         fps = test_dataset.fp.detach().numpy()
         fig, ax = plt.subplots(4,4, figsize=(10, 10))
         for axis, fn in enumerate([10,50,190,600]):
-            ax[0,axis].imshow(np.reshape(test_dataset.predictions[fn+n,:], (size,size)), origin="lower")
-            ax[1,axis].imshow(np.reshape(fps[fn+n,:], (size,size)), origin="lower") 
-            ax[2,axis].imshow(np.reshape(transformed_preds[fn+n,:], (size,size)), origin="lower")
-            ax[3,axis].imshow(np.reshape(og_fps[fn+n,:], (size,size)), origin="lower")   
+            ax[0,axis].imshow(np.reshape(test_dataset.predictions[fn+n,:], (size[0],size[1])), origin="lower")
+            ax[1,axis].imshow(np.reshape(fps[fn+n,:], (size[0],size[1])), origin="lower") 
+            ax[2,axis].imshow(np.reshape(transformed_preds[fn+n,:], (size[0],size[1])), origin="lower")
+            ax[3,axis].imshow(np.reshape(og_fps[fn+n,:], (size[0],size[1])), origin="lower")   
             ax[0,axis].set_title(f"prediction, \n sample {fn+n}")
             ax[1,axis].set_title(f"truth, \n sample {fn+n}")
             ax[2,axis].set_title(f"transformed prediction, \n sample {fn+n}")
@@ -303,20 +302,20 @@ for epoch in range(302):
                     }, f"{path}{model_name}/{model_name}_{epoch}.pt")
 
     if epoch == 350:
-        test_out = np.reshape(np.squeeze(test_out), (len(test_out), data.size,data.size))
+        test_out = np.reshape(np.squeeze(test_out), (len(test_out), size[0],size[1]))
         data_vars = {'predictions':(['time', "lat", "lon"], test_out, 
                                 {'space': 'transformed', 'type':"prediction", 'emulated_with': model_name}),
                     'trans_predictions':(['time', "lat", "lon"], transformed_preds, 
                                 {'space': 'original', 'type':"prediction",'emulated_with': model_name}),
-                    'fp':(['time', "lat", "lon"], np.reshape(fps, (len(test_dataset.fp), data.size,data.size)), 
+                    'fp':(['time', "lat", "lon"], np.reshape(fps, (len(test_dataset.fp),size[0],size[1])), 
                                 {'space': 'original', 'type':"truth"}),
-                    'trans_fp':(['time', "lat", "lon"], np.reshape(test_dataset.fp, (len(test_dataset.fp), data.size,data.size)), 
+                    'trans_fp':(['time', "lat", "lon"], np.reshape(test_dataset.fp, (len(test_dataset.fp), size[0],size[1])), 
                                 {'space': 'transformed', 'type':"truth"})}
 
         # define coordinates
         coords = {'time': (['time'], test_data.met.time.values),
-                'lat': (['lat'], list(range(data.size))),
-                'lon': (['lon'],  list(range(data.size)))}
+                'lat': (['lat'], list(range(size[0]))),
+                'lon': (['lon'],  list(range(size[1])))}
 
         # define global attributes
         attrs = {'creation_date':str(datetime.now()), "model":model_name}
