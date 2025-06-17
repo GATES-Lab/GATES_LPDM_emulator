@@ -150,7 +150,7 @@ class LoadBaseSatelliteData:
         self.met_processed = False
         
         self.padding=None
-
+        # Nawid - load the met and the topography
         if load_everything:
             self.met_file = self.load_meteorology(**met_args)
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)

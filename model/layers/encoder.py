@@ -211,6 +211,7 @@ class SatelliteEncoder(torch.nn.Module):
         self.h3_distances = []
         edge_sources = []
         edge_targets = []
+        
         for idx, h3_point in enumerate(self.h3_grid):
             lat_lon = lat_lons[idx]
             # this calculates haversine distance, which is distance on the surface of the earth
@@ -346,6 +347,8 @@ class SatelliteEncoder(torch.nn.Module):
         """
         #print("blubububu")
         #print("features", np.shape(features))
+        print('This is being used - encoder')
+        import ipdb; ipdb.set_trace()
         batch_size = features.shape[0]
         self.batch_size = batch_size
         #print(features.device)
@@ -356,7 +359,6 @@ class SatelliteEncoder(torch.nn.Module):
         if self.attention:
             self.attention_mask = self.attention_mask.to(features.device)
         #print(features.size(), torch.flatten(torch.from_numpy(self.edge_weights)).size())
-
 
         if self.initial_enc:
             features = einops.rearrange(features, "b n f -> (b n) f")
@@ -375,18 +377,18 @@ class SatelliteEncoder(torch.nn.Module):
         else:
             
             features = torch.multiply(features, torch.flatten(self.edge_weights))
-            #print("after weighting", np.shape(features))
-            #print(features.size(), self.graph.edge_index[1,:].size())
+            print("after weighting", np.shape(features))
+            print(features.size(), self.graph.edge_index[1,:].size())
             # scatter changes the shape from (b,f,latlonnodes) to (b,f,meshnodes), sorted by meshnode index 
-            #print(features.size(),features.dtype )
+            print(features.size(),features.dtype )
             features = scatter_mean(src=features, index=self.graph.edge_index[1,:])
-            #print(features.size(),features.dtype )
+            print(features.size(),features.dtype )
             #print("scatter in encoder", self.graph.edge_index[1,:])
             #print(features.size())
             #print("after scattering", np.shape(features))
 
         features = einops.rearrange(features, "b f n -> (b n) f")
-        #print(features.size(),features.dtype )
+        print(features.size(),features.dtype )
         out = self.node_encoder(features)  
         #out = einops.rearrange(out, "(b n) f -> b n f", b=self.batch_size)
         #print("after encoding", np.shape(out))
@@ -414,7 +416,7 @@ class SatelliteEncoder(torch.nn.Module):
         mesh_edge_idx = torch.cat([self.mesh_graph.edge_index+ i * torch.max(self.mesh_graph.edge_index) + i for i in range(batch_size) ], dim=1)
 
         #mesh_edge_idx = self.mesh_graph.edge_index
-
+#
         
 
         return (
