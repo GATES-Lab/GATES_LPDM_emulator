@@ -119,10 +119,6 @@ class FootprintsDataset(Dataset):
 
             self.fp = self.output_transforms[transform].transform(self.fp)
 
-        if full_land_cover:
-            # replace the transformed inputs with the original values
-            self.inputs[:,:,landcover_idxs] = self.landcover_features
-
 
         if type(self.inputs) != torch.Tensor:
             self.inputs = torch.tensor(self.inputs, dtype=torch.float)
@@ -338,7 +334,7 @@ class FootprintsDatasetV3(FootprintsDataset):
     """
 
     def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[],full_land_cover=False, returning="original_footprints", size=None):
-        super().__init__(inputs, fp, input_transforms, output_transforms, transform_parameters, test_mode, input_names, full_land_cover=full_land_cover, size=size)
+        super().__init__(inputs, fp, input_transforms, output_transforms, transform_parameters, test_mode, input_names, size=size)
 
         if returning=="original_footprints":
             self.original_fp = torch.tensor(self.fp_untransformed, dtype=torch.float)
