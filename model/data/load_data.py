@@ -150,11 +150,6 @@ class LoadBaseSatelliteData:
         self.met_processed = False
         
         self.padding=None
-<<<<<<< HEAD
-        # Nawid - load the met and the topography
-=======
-
->>>>>>> new_load_functions
         if load_everything:
             self.met_file = self.load_meteorology(**met_args)
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)
@@ -631,6 +626,8 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         self.fp_lats = self.fp_lats[np.newaxis, :]
         self.fp_lons = self.fp_data_full.lon.values
         self.fp_lons = self.fp_lons[np.newaxis, :]
+        
+        self.domain_size = [self.fp_data_full.lat.size, self.fp_data_full.lon.size]
 
 
     def _process_topog_and_landcover(self):

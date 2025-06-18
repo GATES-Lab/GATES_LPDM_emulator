@@ -347,8 +347,8 @@ class SatelliteEncoder(torch.nn.Module):
         """
         #print("blubububu")
         #print("features", np.shape(features))
-        print('This is being used - encoder')
-        import ipdb; ipdb.set_trace()
+        #print('This is being used - encoder')
+        #import ipdb; ipdb.set_trace()
         batch_size = features.shape[0]
         self.batch_size = batch_size
         #print(features.device)
@@ -377,18 +377,18 @@ class SatelliteEncoder(torch.nn.Module):
         else:
             
             features = torch.multiply(features, torch.flatten(self.edge_weights))
-            print("after weighting", np.shape(features))
-            print(features.size(), self.graph.edge_index[1,:].size())
+            #print("after weighting", np.shape(features))
+            #print(features.size(), self.graph.edge_index[1,:].size())
             # scatter changes the shape from (b,f,latlonnodes) to (b,f,meshnodes), sorted by meshnode index 
-            print(features.size(),features.dtype )
+            #print(features.size(),features.dtype )
             features = scatter_mean(src=features, index=self.graph.edge_index[1,:])
-            print(features.size(),features.dtype )
+            #print(features.size(),features.dtype )
             #print("scatter in encoder", self.graph.edge_index[1,:])
             #print(features.size())
             #print("after scattering", np.shape(features))
 
         features = einops.rearrange(features, "b f n -> (b n) f")
-        print(features.size(),features.dtype )
+        #print(features.size(),features.dtype )
         out = self.node_encoder(features)  
         #out = einops.rearrange(out, "(b n) f -> b n f", b=self.batch_size)
         #print("after encoding", np.shape(out))
