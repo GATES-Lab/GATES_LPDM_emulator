@@ -629,6 +629,8 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         
         self.domain_size = [self.fp_data_full.lat.size, self.fp_data_full.lon.size]
 
+        self.domain_size = [self.fp_data_full.lat.size, self.fp_data_full.lon.size]
+
 
     def _process_topog_and_landcover(self):
         stacked_landcover = xr.concat([self.landcover_file.land_binary_mask.assign_coords(pseudo_level=0).rename("disaggregated_landcover"), self.landcover_file.landcover_fraction.rename("disaggregated_landcover")], dim="pseudo_level").rename({"pseudo_level":"landcover_level"})
@@ -681,7 +683,7 @@ class LoadDomainSiteData(LoadDomainSatelliteData):
     def _get_domain(self, site):
         #### check domains
         # TODO make domains dict importable
-        domains = {"MHD":"EUROPE"} 
+        domains = {"MHD":"EUROPE", "GSN":"EASTASIA"} 
         try:
             domain = domains[site]   
         except: 
@@ -717,7 +719,7 @@ class LoadSquareSiteData(LoadSquareSatelliteData):
     def _get_domain(self, site):
         #### check domains
         # TODO make domains dict importable
-        domains = {"MHD":"EUROPE"} 
+        domains = {"MHD":"EUROPE", "GSN":"EASTASIA"} 
         try:
             domain = domains[site]   
         except: 
@@ -754,7 +756,7 @@ class LoadBaseSiteData(LoadBaseSatelliteData):
     def _get_domain(self, site):
         #### check domains
         # TODO make domains dict importable
-        domains = {"MHD":"EUROPE"} 
+        domains = {"MHD":"EUROPE", "GSN":"EASTASIA"} 
         try:
             domain = domains[site]   
         except: 
@@ -1524,16 +1526,21 @@ def get_grid(data, latlon_fp=0):
         
     print(f"getting grid for time {data.met.time.values[latlon_fp]}")
     #print(f"making grid for footprint at time {data}")
-    single_meshgrid = np.meshgrid(data.fp_lats[latlon_fp,:], data.fp_lons[latlon_fp,:])
-    latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
 
     if data.dataset_format == "square":
+        single_meshgrid = np.meshgrid(data.fp_lats[latlon_fp,:], data.fp_lons[latlon_fp,:])
+        latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
+
         idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[latlon_fp,:]))), list(range(len(data.fp_lons[latlon_fp,:]))))
         idx_meshgrid = np.array(idx_meshgrid)-int(data.size/2)
         idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
 
     elif data.dataset_format == "domain":
-        idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[latlon_fp,:]))), list(range(len(data.fp_lons[latlon_fp,:]))))
+        single_meshgrid = np.meshgrid(data.fp_lats[0], data.fp_lons[0])
+        latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
+
+        # should I find a way of making sure this idx meshgrid is consistent across different domain sizes?
+        idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[0]))), list(range(len(data.fp_lons[0]))))
 
         #idx_meshgrid = np.array(idx_meshgrid)-int(data.size/2)
 
