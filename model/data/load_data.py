@@ -626,8 +626,6 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         self.fp_lats = self.fp_lats[np.newaxis, :]
         self.fp_lons = self.fp_data_full.lon.values
         self.fp_lons = self.fp_lons[np.newaxis, :]
-        
-        self.domain_size = [self.fp_data_full.lat.size, self.fp_data_full.lon.size]
 
         self.domain_size = [self.fp_data_full.lat.size, self.fp_data_full.lon.size]
 

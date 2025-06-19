@@ -140,7 +140,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         """
         #print("run encoder")
         #print("getting encoder inputs")
-        print('This is being used')
+        #print('This is being used')
        #import ipdb; ipdb.set_trace()
         x, edge_idx, edge_attr = self.encoder(features)
         # here x has size (bxn, f) where the nodes are in order 0-max
