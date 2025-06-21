@@ -158,7 +158,9 @@ class MLP(nn.Module):
         if self.use_checkpointing:
             out = checkpoint(self.model, x, use_reentrant=False)
         else:
+            #print('before x',x)
             out = self.model(x)
+            #print('after x',x)
         return out
 
 

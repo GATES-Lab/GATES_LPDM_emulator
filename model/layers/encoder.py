@@ -375,13 +375,15 @@ class SatelliteEncoder(torch.nn.Module):
             #print(features.size(),features.dtype )
 
         else:
-            
+            #print('features',features)
             features = torch.multiply(features, torch.flatten(self.edge_weights))
             #print("after weighting", np.shape(features))
             #print(features.size(), self.graph.edge_index[1,:].size())
             # scatter changes the shape from (b,f,latlonnodes) to (b,f,meshnodes), sorted by meshnode index 
             #print(features.size(),features.dtype )
+            
             features = scatter_mean(src=features, index=self.graph.edge_index[1,:])
+            #print('scatter features',features)
             #print(features.size(),features.dtype )
             #print("scatter in encoder", self.graph.edge_index[1,:])
             #print(features.size())
@@ -389,7 +391,9 @@ class SatelliteEncoder(torch.nn.Module):
 
         features = einops.rearrange(features, "b f n -> (b n) f")
         #print(features.size(),features.dtype )
-        out = self.node_encoder(features)  
+        #print('before out',features)
+        out = self.node_encoder(features)
+        #print('after out',out)  
         #out = einops.rearrange(out, "(b n) f -> b n f", b=self.batch_size)
         #print("after encoding", np.shape(out))
 
