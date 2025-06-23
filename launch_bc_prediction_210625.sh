@@ -18,7 +18,8 @@ module load cuda/12.4.1
 module load cudnn/8.9.7.29-12
 
 source ~/initConda.sh
-conda activate /user/work/yl18410/miniconda3/envs/new_graphnet_v2
+#conda activate /user/work/yl18410/miniconda3/envs/new_graphnet_v2
+conda activate /user/work/yl18410/graphnet_bp_220324
 
 python Run/run_bc_prediction.py
 echo "boxcox trained"

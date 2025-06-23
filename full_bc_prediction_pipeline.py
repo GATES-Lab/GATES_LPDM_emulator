@@ -1,9 +1,10 @@
 import sys
 
+'''
 # delete before use!!
 sys.path.insert(0,"/software/local/languages/miniforge3/envs/elena/lib/python3.12/site-packages/")
 sys.path.insert(0,"/user/work/yl18410/miniconda3/envs/new_graphnet_v2/lib/python3.12/site-packages")
-
+'''
 #import cartopy
 #import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
@@ -87,6 +88,8 @@ def baseline_mol(desired_data,months,desired_year):
         #desired_year = 2016
         desired_month = month
         print('desired month',desired_month)
+        
+        coarse_cams  = cams.coarsen(lon=desired_data.coarsening_factor, lat=desired_data.coarsening_factor, boundary="pad").mean()
 
         # Find the index of the first occurrence
         indices = np.where((years == desired_year) & (months == int(desired_month)))[0]
@@ -98,17 +101,23 @@ def baseline_mol(desired_data,months,desired_year):
             selected_columns = filtered_data.iloc[:, [3, 4, 5, 6]].values
             baseline_list[indices] = selected_columns/1000 # Convert from parts per trillion to parts per million
 
-
-
             print(indices[0])
             # Multply the first value with all the other values of the array
             print(cams.vmr_n.shape)
             # CAMS field should be stationary over the period of a month
             #import ipdb; ipdb.set_trace()
+            
+            north_mol = np.sum(coarse_cams.vmr_n * desired_data.locs.particle_locations_n[:,:,indices], axis=(0,1))
+            south_mol = np.sum(coarse_cams.vmr_s * desired_data.locs.particle_locations_s[:,:,indices], axis=(0,1))
+            east_mol = np.sum(coarse_cams.vmr_e * desired_data.locs.particle_locations_e[:,:,indices], axis=(0,1))
+            west_mol = np.sum(coarse_cams.vmr_w * desired_data.locs.particle_locations_w[:,:,indices], axis=(0,1))
+            
+            '''
             north_mol = np.sum(cams.vmr_n * desired_data.fp_data_full.particle_locations_n[:,:,indices], axis=(0,1))
             south_mol = np.sum(cams.vmr_s * desired_data.fp_data_full.particle_locations_s[:,:,indices], axis=(0,1))
             east_mol = np.sum(cams.vmr_e * desired_data.fp_data_full.particle_locations_e[:,:,indices], axis=(0,1))
             west_mol = np.sum(cams.vmr_w * desired_data.fp_data_full.particle_locations_w[:,:,indices], axis=(0,1))
+            '''
             #import ipdb; ipdb.set_trace()
             north_list[indices] = north_mol
             south_list[indices] = south_mol
@@ -120,7 +129,6 @@ def baseline_mol(desired_data,months,desired_year):
         #cams = xr.open_dataset("/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
         # Making the assumption that the values in the month are not different, get the first value
         # Multiple the different values
-        cams
     
     return baseline_list, north_list, south_list, east_list, west_list
 
@@ -143,6 +151,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     #name_output_transforms = parameters["dataloader_parameters"]["output_transforms"][0].replace('"', '').replace('[', '').replace(']', '')
     name_train_data = str(parameters['train_load_data']['year'])
     name_lr = parameters['learning_rate']
+    name_coarsening = str(parameters["train_load_data"]["coarsening_factor"])
     #name_alpha = parameters['loss_weight']
     name_normalization = parameters['normalization']
     today = date.today()
@@ -169,7 +178,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     
     name_inference_epochs = parameters["epochs"]
     name_baselines = str(parameters['use_baselines'])
-    model_name = f"num_classes-{name_num_classes}-baselines-{name_baselines}-normalization-{name_normalization}-trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
+    model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_coarsening-{name_coarsening}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
 
     if _practice:
         model_name = 'practice_run'
@@ -220,10 +229,10 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     print(test_load_data)
 
     data = LoadDomainSatelliteData(**train_load_data)
+    
     test_data = LoadDomainSatelliteData(**test_load_data)
 
     
-
     train_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     # TODO: Nawid- get the train year and the test year from the trainload data 
     train_year = 2015
@@ -261,9 +270,9 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     input_variables = parameters["variables"]
 
     inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
-
+    
     test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=True)
-
+    
     use_baselines = parameters['use_baselines']
     if use_baselines:
         aux_index= 4

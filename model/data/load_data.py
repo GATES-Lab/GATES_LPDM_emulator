@@ -549,7 +549,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
 
     all other inputs are the same
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, domain_to_cut=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, domain_to_cut=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, met_args={}, topog_args={},coarsening_factor=1):
         
         ## INITIALISE THE BASE OBJECT, TO LOAD THE FOOTPRINTS
         super().__init__(year, region, month=month, domain=domain, freq=freq, freq_offset=freq_offset, verbose=verbose, sampling_mode=sampling_mode, fp_datadir=fp_datadir, load_everything=True, met_args=met_args, topog_args=topog_args)
@@ -557,6 +557,22 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         self.dataset_format = "domain"
 
         if verbose: print("-----CROPPING TO A FIXED DOMAIN")
+
+        '''
+        #.Nawid- Coarsening the values for the approach
+        resolution = 2
+        if resolution> 1:
+            self.fp_data_full = self.fp_data_full.sel(lat=self.fp_data_full.lat.values[::resolution], lon=self.fp_data_full.lon.values[::resolution])
+        '''
+        # Used to make it so that I can use the values
+        self.coarsening_factor = coarsening_factor
+        self.locs = self.fp_data_full[["particle_locations_n", "particle_locations_s",  "particle_locations_e",  "particle_locations_w"]].copy()
+
+        # the particle locations need to add up to one
+        # so we need to coarsen taking the sum, to maintain this! 
+        if self.coarsening_factor>1:
+            self.locs = self.locs.coarsen(lon=self.coarsening_factor, lat=self.coarsening_factor, boundary="pad").sum()
+
 
         # calculate the max possible domain, given by the footprint and the met files
         lats = [np.max([self.fp_data_full.lat.values[0], self.met_file.lat.values[0]]), np.min([self.fp_data_full.lat.values[-1], self.met_file.lat.values[-1]])]
@@ -604,7 +620,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
             print(f"the domain you passed is bigger than the domain of the data in at least one direction. cropping to {rounded_dom}")
 
         return self.domain_to_cut
-
+    '''
     def _slice_to_domain(self, domain_to_cut):
         ## slice all arrays to the passed domain
         self.fp_data_full = self.fp_data_full.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
@@ -617,6 +633,37 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
 
         if hasattr(self, "landcover_file"):
             self.landcover_file = self.landcover_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+    '''
+    def _slice_to_domain(self, domain_to_cut, downsample_factor=2):
+        # slice
+        lat_slice = slice(domain_to_cut["lat"][0] - 0.0001, domain_to_cut["lat"][1] + 0.0001)
+        lon_slice = slice(domain_to_cut["lon"][0] - 0.0001, domain_to_cut["lon"][1] + 0.0001)
+        self.fp_data_full = self.fp_data_full.sel(lat=lat_slice, lon=lon_slice)
+
+        if hasattr(self, "met_file"):
+            self.met_file = self.met_file.sel(lat=lat_slice, lon=lon_slice)
+        
+        if hasattr(self, "topog_file"):
+            self.topog_file = self.topog_file.sel(lat=lat_slice, lon=lon_slice)
+
+        if hasattr(self, "landcover_file"):
+            self.landcover_file = self.landcover_file.sel(lat=lat_slice, lon=lon_slice)
+
+        # downsample if factor > 1
+        if self.coarsening_factor > 1:
+            self.fp_data_full = self.fp_data_full.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            if hasattr(self, "met_file"):
+                self.met_file = self.met_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            
+            if hasattr(self, "topog_file"):
+                self.topog_file = self.topog_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            
+            if hasattr(self, "landcover_file"):
+                self.landcover_file_file = self.landcover_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+
+        #import ipdb; ipdb.set_trace()
+
+        #print('Hello')
 
     def _process_footprints(self):
         self.fp_data = self.fp_data_full.fp.transpose("time","lat", "lon").values
@@ -1065,9 +1112,14 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
     met = select_met_levels(met, levels=relevant_levels)
 
     met = select_met_variables(met, variables=relevant_variables)  
-
+    
     fp_times = np.copy(fp.time.values)
-
+    '''
+    # Nawid - added this part of the code to lead to coarsening of the data
+    resolution =2
+    if resolution>1:
+        met = met.sel(lat=met.lat.values[::resolution], lon=met.lon.values[::resolution])
+    '''
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
 
     if time_delta==0:
@@ -1090,7 +1142,7 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
     delta_lat_fp = fp.lat.values[1]-fp.lat.values[0]
     delta_lon = domain_lons[1]-domain_lons[0]
     delta_lon_fp = fp.lon.values[1]-fp.lon.values[0]
-
+    #import ipdb; ipdb.set_trace()
     if abs(delta_lat - delta_lat_fp) > 0.01 or abs(delta_lon - delta_lon_fp)>0.01:
         print("the resolution is different! this doesnt work yet?")    
 
@@ -1350,7 +1402,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     levels_variables_needed = [var_name for var_name in met_variables if len(met_variables[var_name])>0]
 
     # check that the passed variables and levels are available in data.met (cut data object for 0)
-
+    #import ipdb; ipdb.set_trace()
     if len(time_deltas)>1:
         print(f"extracting met at t-H for H in: {time_deltas}")
         # filename here 
@@ -1365,7 +1417,10 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 #met = met.reset_coords(["time"])
                 met = met.drop_vars("time")
                 #met = met.rename({"fp_time":"time"})
-
+                '''
+                import ipdb; ipdb.set_trace()
+                print('delta = 0')
+                '''
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
                 if data.dataset_format == "square":
@@ -1376,8 +1431,13 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 met = met.swap_dims({"time":"fp_time"})
                 #met = met.reset_coords(["time"])
                 met = met.drop_vars("time")
-                
 
+                # Nawid - Added code to make it so that i can coarsen the data
+                '''
+                resolution =2
+                if resolution > 1:
+                    met = met.sel(lat=met.lat.values[::resolution], lon=met.lon.values[::resolution])
+                '''
                 
             all_met_files[delta] = met.copy()
 

@@ -1,3 +1,4 @@
 graph_weather
 *.pkl
 *.npy
+*.out

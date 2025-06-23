@@ -77,6 +77,7 @@ hparams = {
         "freq":100,
         "region":"BRAZIL",
         "verbose":True,
+        "coarsening_factor":2,
         "met_args":{"met_levels":[3, 15,21]},
     },
 
@@ -86,9 +87,10 @@ hparams = {
     },
 
     "variables" : {
-        "met_variables":{"x_wind":[3,15], "y_wind":[3,15], "upward_air_velocity":[3,15], "atmosphere_boundary_layer_thickness":[], "surface_air_pressure":[]},
+        "met_variables":{"x_wind":[3,15], "y_wind":[3,15], "upward_air_velocity":[3,15],"atmosphere_boundary_layer_thickness":[], "surface_air_pressure":[]},
         "static_variables":["lat_coords", "lon_coords", "x_coords", "y_coords", "topog", "landcover"],
-        "time_deltas":[6,12]
+        "time_deltas":[6,12],
+        
     },
 
     "dataloader_parameters":{
@@ -106,7 +108,7 @@ hparams = {
         "hidden_dim_processor_edge":16, 
         "hidden_dim_decoder":16, 
         "resolution":4, 
-        "output_dim":1, 
+        "output_dim":8, 
         "residuals":False, 
         "attention":False
     },
