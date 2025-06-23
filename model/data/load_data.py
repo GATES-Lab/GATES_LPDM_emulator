@@ -964,7 +964,7 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
     padding = {"lat":(0,0), "lon":(0,0)}
 
     if delete_outofdomain and len(padded_fps_idxs)>0:
-        if verbose: print(f"for {len(padded_fps_idxs)} footprints, a square of size x size escapes the footprint domain in directions {fp_needed_padding_direction}. dropping these! if you want to keep them anyway, pass delete_outofdomain=False")
+        if verbose: print(f"for {len(padded_fps_idxs)} footprints, a square of size x size escapes the footprint domain in directions {fp_needed_padding_direction}. \n dropping these! if you want to keep them anyway, pass delete_outofdomain=False")
         fp_full = fp_full.drop_sel(time=fp_full.time[padded_fps_idxs])
         fp_needed_padding_direction = {"N":0, "S":0, "E":0, "W":0}
         release_idxs = get_release_idxs(fp_full)  
@@ -1352,7 +1352,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
 
     # check that the passed variables and levels are available in data.met (cut data object for 0)
 
-    if len(time_deltas)>1:
+    if len(time_deltas)>0:
         print(f"extracting met at t-H for H in: {time_deltas}")
         # filename here 
         for delta in time_deltas:
@@ -1383,6 +1383,8 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             all_met_files[delta] = met.copy()
 
             del met 
+
+    print(len(all_met_files))
     
     # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
     full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", ..., "time_delta")
@@ -1450,7 +1452,6 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
         # broadcast lat_coords and lon_coords from shape (time, lat) and (time, lon) to shared shape(time, lat, lon). we will use these as a starting array to add all the static variables, and will remove them at the end if they were not passed in "static_variables"
         if data.dataset_format=="square":
             (static_ds, ) = xr.broadcast(full_met[["lat_coords", "lon_coords"]])
-            print(static_ds)
         if data.dataset_format == "domain":
             (static_ds, ) = xr.broadcast(full_met.assign({"lat_coords":(("lat"), full_met.lat.values), "lon_coords":(("lon"), full_met.lon.values)})[["lat_coords", "lon_coords", "fp_time"]])
 
@@ -1460,7 +1461,6 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 data.topog = data.topog.broadcast_like(static_ds, exclude=["lat", "lon", "landcover_level"])
                 data.topog = data.topog.assign_coords({"lat":static_ds.lat.values, "lon":static_ds.lon.values}).rename({"fp_time":"time"})
         
-            print(static_ds)
 
 
 
