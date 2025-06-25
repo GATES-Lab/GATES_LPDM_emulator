@@ -360,7 +360,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={},coarsening_factor=1):
 
         self.dataset_format = "square" 
         #### check domains
@@ -369,7 +369,8 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.domain = self._get_domain(region)
         else:
             self.domain=domain
-
+        self.coarsening_factor = coarsening_factor
+        
         self.size = size
 
         self.fill_outofdomain_with = fill_outofdomain_with
@@ -389,6 +390,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         #### load footprint (fp) data    
         if verbose: print("---- LOADING FOOTPRINTS") 
         self._load_footprints(fp_datadir)
+        self.locs = self.fp_data_full[["particle_locations_n", "particle_locations_s",  "particle_locations_e",  "particle_locations_w"]].copy()
         self._process_footprints(lazy_load)
 
         self.met_args = met_args
@@ -398,8 +400,9 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met_file = self.load_meteorology(**met_args,lazy_load=lazy_load)
             self.met = self._process_meteorology(lazy_load=True)
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)
+            '''
             self.topog = self._process_topog_and_landcover()
-
+            '''
         if check_for_nans:
             print("\n Checking if there are any nans in the data")
             self._remove_fp_nans()
@@ -413,7 +416,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         fp data returned is array of shape (time, size*size) with each footprint centered around its release point
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load,coarsening_factor = self.coarsening_factor) 
 
         # if self.fill_outofdomain_with == "all_nans":
             # remove here all indeces from self.idxs_out_of_domain! so we only keep the footprints that were fully inside the domain
@@ -965,7 +968,7 @@ def cut_emissions_data(flux, fp_full, size):
     return flux_cut
 
 
-def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True, fill_latlons=True, return_everything=False):
+def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True, fill_latlons=True, return_everything=False,coarsening_factor =1):
     """
     cuts footprint to square of size "size" around release point and returns as a netcdf with artificial lat-lon coordinates 0-size
 
@@ -1077,10 +1080,33 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
         # copy the latitude/longitude values for this specific cropped square
         lats = cutfp.lat.values.copy()
         lons = cutfp.lon.values.copy()
+
+        if coarsening_factor > 1:
+            cutfp = cutfp.coarsen(lat=coarsening_factor, lon=coarsening_factor, boundary="trim").mean()
+        # Note: this will change the size of the footprint from size x size to (size/downsample_factor) x (size/downsample_factor)
+        coords_array = np.arange(cutfp.sizes["lat"])  # update artificial coordinates
         #print(cutfp.fp)
         # store them as variables to use as inputs and assign artificial coordinates
-        cutfp = cutfp.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), lats), "lon_coords":(("lon"), lons)})
+        # Coarsen lat/lon coordinate values to match the coarsened grid shape
 
+
+        # PART ADDED FROM CHAT GPT
+        # These should be the original lat/lon coordinate arrays from before coarsening
+        lats_coarse = lats[:cutfp.sizes["lat"] * coarsening_factor].reshape(-1, coarsening_factor).mean(axis=1)
+        lons_coarse = lons[:cutfp.sizes["lon"] * coarsening_factor].reshape(-1, coarsening_factor).mean(axis=1)
+
+        # Artificial grid coordinate indexing
+        coords_array = np.arange(cutfp.sizes["lat"])
+
+        # Assign artificial grid coordinates and coarsened spatial coordinates
+        cutfp = cutfp.assign_coords({"lat": coords_array, "lon": coords_array})
+        cutfp = cutfp.assign({
+            "lat_coords": (("lat"), lats_coarse),
+            "lon_coords": (("lon"), lons_coarse)
+})      
+        '''
+        cutfp = cutfp.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), lats), "lon_coords":(("lon"), lons)})
+        '''
         cropped_arrays.append(cutfp)
 
     # concatenate all of the cropped arrays
@@ -1097,9 +1123,14 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
             return cropped_fp, release_idxs, padding
         else:
             return cropped_fp
+        
     if return_as=="array":
         fp_data = cropped_fp.fp.transpose("time","lat", "lon").values
+        '''
         fp_data = np.reshape(fp_data, (len(cropped_fp.time), size**2))
+        '''
+        new_size = cropped_fp.sizes["lat"]
+        fp_data = np.reshape(fp_data, (len(cropped_fp.time), new_size**2))
 
         if return_everything:
             fp_lats = cropped_fp.lat_coords.values
@@ -1214,8 +1245,42 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         met = met.assign({"fp_time":(("time"),fp.time.values)})
 
     met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
+    # Orignal valeus of domain lat
+    domain_lats = np.copy(met.lat.values)
+    domain_lons = np.copy(met.lon.values)
 
 
+    # Get spatial resolution of met and fp
+    delta_lat = np.abs(domain_lats[1] - domain_lats[0])
+    delta_lat_fp = np.abs(fp.lat.values[1] - fp.lat.values[0])
+    delta_lon = np.abs(domain_lons[1] - domain_lons[0])
+    delta_lon_fp = np.abs(fp.lon.values[1] - fp.lon.values[0])
+    # ADDED FROM CHATGPT
+    # If resolution mismatch is significant, downsample met
+    tol = 1e-4  # tolerance for float comparison
+    if abs(delta_lat - delta_lat_fp) > tol or abs(delta_lon - delta_lon_fp) > tol:
+        print(f"[INFO] Detected resolution mismatch:")
+        print(f"       met Δlat: {delta_lat:.4f}, Δlon: {delta_lon:.4f}")
+        print(f"       fp  Δlat: {delta_lat_fp:.4f}, Δlon: {delta_lon_fp:.4f}")
+        print("[INFO] Downsampling met to match fp spatial resolution...")
+
+        lat_ratio = int(round(delta_lat_fp / delta_lat))
+        lon_ratio = int(round(delta_lon_fp / delta_lon))
+
+        assert lat_ratio >= 1 and lon_ratio >= 1, "Downsampling ratio must be ≥1"
+
+        met = met.coarsen(lat=lat_ratio, lon=lon_ratio, boundary="trim").mean()
+
+        # Recompute updated lat/lon arrays after downsampling
+        domain_lats = np.copy(met.lat.values)
+        domain_lons = np.copy(met.lon.values)
+
+        delta_lat = domain_lats[1] - domain_lats[0]
+        delta_lon = domain_lons[1] - domain_lons[0]
+
+        print(f"[INFO] Downsampled met resolution: Δlat = {delta_lat:.4f}, Δlon = {delta_lon:.4f}")
+    
+    '''
     domain_lats = np.copy(met.lat.values)
     domain_lons = np.copy(met.lon.values)
 
@@ -1228,7 +1293,7 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         print("the resolution is different! this doesnt work yet?")
     
     #met = self.met.interp({"lat":self.domain_lats, "lon":self.domain_lons})
-
+    '''
     met_release_idxs = get_release_idxs(fp, domain_lats = domain_lats, domain_lons = domain_lons)
     padding = {"lat":[0,0], "lon":[0,0]}
 
