@@ -570,9 +570,10 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
 
         # the particle locations need to add up to one
         # so we need to coarsen taking the sum, to maintain this! 
+        '''
         if self.coarsening_factor>1:
             self.locs = self.locs.coarsen(lon=self.coarsening_factor, lat=self.coarsening_factor, boundary="pad").sum()
-
+        '''
 
         # calculate the max possible domain, given by the footprint and the met files
         lats = [np.max([self.fp_data_full.lat.values[0], self.met_file.lat.values[0]]), np.min([self.fp_data_full.lat.values[-1], self.met_file.lat.values[-1]])]
@@ -659,7 +660,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
                 self.topog_file = self.topog_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
             
             if hasattr(self, "landcover_file"):
-                self.landcover_file_file = self.landcover_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+                self.landcover_file = self.landcover_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
 
         #import ipdb; ipdb.set_trace()
 
