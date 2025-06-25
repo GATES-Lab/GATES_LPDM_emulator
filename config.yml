@@ -1,0 +1,7 @@
+hpc:
+  isambard_ai:
+    base_data_path: "/projects/b5s/data"
+  bp:
+    base_data_path: "/group/chemistry/acrg"
+  oracle:
+    base_data_path: "/to/be/added"

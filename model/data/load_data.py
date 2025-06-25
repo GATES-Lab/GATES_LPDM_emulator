@@ -7,8 +7,10 @@ import sys
 import os
 import copy
 #import warning
+import yaml
 
 from .load_data_helper_funs import *
+
 
 def load_fps(fp_datadir, verbose=False):
     """
@@ -114,16 +116,18 @@ class LoadBaseSatelliteData:
         - select_time_index: list or 1D np array of timestamps to be selected as datapoints. Applied after sampling with freq (or pass freq=1 to load all footprints)
         - fp_datadir: str, directory for footprints. default directs to ACRG folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
         - verbose: if True, prints out the steps throughout the data loading process
+        - hpc: computation location, "isambard_ai", "bp"
     
     met_args:
         see load_meteorology()
     topog_args:
         see load_topogs()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, hpc="bp", met_args={}, topog_args={}):
         
         self.dataset_format = "base" 
         self.data_type="satellite"
+        self.hpc = hpc
 
         #### check domains
         self.region = region
@@ -135,7 +139,17 @@ class LoadBaseSatelliteData:
         self.year = year
         self.date = self.year
         self.verbose=verbose
+        
 
+        # Load config
+        with open("config.yml", "r") as f:
+            config = yaml.safe_load(f)
+
+        hpc_config = config["hpc"].get(self.hpc)
+        if hpc_config is None:
+            raise ValueError(f"Unknown HPC target: {self.hpc}")
+        data_root = hpc_config["base_data_path"]
+        self.data_root = data_root
 
         if month != None:
             self.month = month
@@ -202,13 +216,13 @@ class LoadBaseSatelliteData:
         #### load topography
         print("\n---- LOADING TOPOG")
         if topog_path=="default":
-            topog_path="/group/chemistry/acrg/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+            topog_path= self.data_root+"/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
         print(f"trying to load topography from {topog_path}")
         with xr.load_dataset(topog_path) as topog_dataset:
             topog_file = topog_dataset.copy()
 
         if landcover_path=="default":
-            landcover_path = "/group/chemistry/acrg/LPDM/topog_NAME/land_cover.nc"
+            landcover_path = self.data_root+"/LPDM/topog_NAME/land_cover.nc"
         with xr.load_dataset(landcover_path) as landcover_dataset:
             landcover_file = landcover_dataset.copy()
             
@@ -221,7 +235,7 @@ class LoadBaseSatelliteData:
 
     def _get_meteorology_file(self, met_datadir, lazy_load=True):
         if met_datadir==None:
-            met_datadir = "/group/chemistry/acrg/met_archive/UM/"+self.domain+"/"+self.domain+"_Met_"+str(self.date)+"*.nc"
+            met_datadir = self.data_root+"/met_archive/UM/"+self.domain+"/"+self.domain+"_Met_"+str(self.date)+"*.nc"
         else:
             met_datadir = met_datadir+str(self.date)+"*.nc"
         if self.verbose: print("Loading meteorology from " + met_datadir)
@@ -254,7 +268,7 @@ class LoadBaseSatelliteData:
     def _load_footprints(self, fp_datadir):
         #### load footprint (fp) data from file
         if fp_datadir is None:
-            fp_datadir = "/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/"+self.domain+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc"
+            fp_datadir = self.data_root+"/LPDM/fp_NAME_pre20210701/"+self.domain+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc" 
         else:
             fp_datadir=fp_datadir+str(self.date)+"*.nc"
             #fp_datadir = f"{fp_datadir}{self.domain}/*{self.region}*{self.domain}_{str(self.date)}*.nc"
