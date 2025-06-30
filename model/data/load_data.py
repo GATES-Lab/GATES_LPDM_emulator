@@ -1421,16 +1421,12 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     input_arrays = []
     varnames_dict = []
 
-    print(full_met)
-    return full_met
     
     ### SETTING UP VARIABLES WITH LEVELS
     # stack along the variable dimension, so that the new variable has shape (variable name, level, time_delta)
     if len(levels_variables_needed)>0:
         if verbose: print(f"Setting up variables with levels: {levels_variables_needed}")
         stacked_levels_met = full_met[levels_variables_needed].to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_levels_met")
-
-        print("1")
 
         # make sure we keep only the levels passed in met_variables
         indexes = []
@@ -1439,7 +1435,6 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 for lev in met_variables[v]:
                     indexes.append((v, lev, delta))
         
-        print("2", indexes)
         stacked_levels_met = stacked_levels_met.sel(variable_name=indexes)
 
         varnames_dict = varnames_dict + [{"var":tup[0], "level":tup[1], "time_delta":tup[2], "type":"met"} for tup in stacked_levels_met.variable_name.values]
