@@ -552,11 +552,15 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     
     
     if "size" in (parameters["train_load_data"].keys()):
+        print('Using square domain')
         data = LoadSquareSatelliteData(**train_load_data)
         test_data = LoadSquareSatelliteData(**test_load_data)
+        
     else:    
+        print('Using fixed domain')
         data = LoadDomainSatelliteData(**train_load_data)
         test_data = LoadDomainSatelliteData(**test_load_data)
+        
     
 
     
@@ -592,7 +596,6 @@ def train_bc_prediction_pipeline(_hparams,_practice):
         test_baseline_list = (test_baseline_list-baseline_mean_values)/baseline_std_values
     
     grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
-    import ipdb; ipdb.set_trace()
 
     input_variables = parameters["variables"]
 
