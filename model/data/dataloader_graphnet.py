@@ -214,8 +214,10 @@ class FootprintsDataset(Dataset):
 
     def evaluate_flux(self, mode="uniform"):
         def checkerboard(boardsize, squaresize=1):
-            boardsize= (boardsize,boardsize)
-            squaresize=(squaresize, squaresize)
+            if type(boardsize) is int:
+                boardsize= (boardsize,boardsize)
+            if type(squaresize) is int:
+                squaresize=(squaresize, squaresize)
             return np.fromfunction(lambda i, j: (i//squaresize[0])%2 != (j//squaresize[1])%2, boardsize).astype(int)
 
 

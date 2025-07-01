@@ -428,7 +428,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             pad_mode = "nans"
         if self.fill_outofdomain_with=="zeros":
             pad_mode = "edge"
-        self.met = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load)
+        self.met = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True)
 
         if rechunk>0:
             self.met.chunk({"time":rechunk})
@@ -633,6 +633,18 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
     def _slice_to_domain(self, domain_to_cut):
         ## slice all arrays to the passed domain
         self.fp_data_full = self.fp_data_full.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
+
+        # removing footprints that arent within the slice domain
+        lat_min, lat_max = self.fp_data_full.lat.min().item(), self.fp_data_full.lat.max().item()
+        lon_min, lon_max = self.fp_data_full.lon.min().item(), self.fp_data_full.lon.max().item()
+        valid_times = (
+        (self.fp_data_full.release_lat.values >= lat_min) & (self.fp_data_full.release_lat.values <= lat_max) &
+        (self.fp_data_full.release_lon.values >= lon_min) & (self.fp_data_full.release_lon.values <= lon_max))
+        
+        self.fp_data_full = self.fp_data_full.sel(time=self.fp_data_full.time[valid_times])
+
+        if self.verbose and np.sum(valid_times)<len(valid_times): print(f"keeping only the {np.sum(valid_times)} footprints where the release point is within the defined domain")
+
 
         if hasattr(self, "met_file"):
             self.met_file = self.met_file.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
@@ -1019,7 +1031,7 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
     padding = {"lat":(0,0), "lon":(0,0)}
 
     if delete_outofdomain and len(padded_fps_idxs)>0:
-        if verbose: print(f"for {len(padded_fps_idxs)} footprints, a square of size x size escapes the footprint domain in directions {fp_needed_padding_direction}. dropping these! if you want to keep them anyway, pass delete_outofdomain=False")
+        if verbose: print(f"for {len(padded_fps_idxs)} footprints, a square of size x size escapes the footprint domain in directions {fp_needed_padding_direction}. \n dropping these! if you want to keep them anyway, pass delete_outofdomain=False")
         fp_full = fp_full.drop_sel(time=fp_full.time[padded_fps_idxs])
         fp_needed_padding_direction = {"N":0, "S":0, "E":0, "W":0}
         release_idxs = get_release_idxs(fp_full)  
@@ -1170,7 +1182,7 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
         # store the original footprint times as a separate value
         met = met.assign({"fp_time":(("time"),fp.time.values)})
 
-    met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
+    
 
     domain_lats = np.copy(met.lat.values)
     domain_lons = np.copy(met.lon.values)
@@ -1189,6 +1201,9 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
             met["wind_speed"]=np.sqrt(met.x_wind**2 + met.y_wind**2)
         except Exception as e:
             print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
+    
+    met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
+
     return met
 
 
@@ -1439,10 +1454,13 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         cropped_met.load()
 
     # add additional wind variables
-    if add_wind_direction and (relevant_variables is None or "wind_speed" in relevant_variables):
+    if add_wind_direction:# and (relevant_variables is None or "wind_speed" in relevant_variables or "wind_angle" in relevant_variables):
         try:
-            cropped_met["wind_angle"]=np.arctan2(-cropped_met.x_wind,-cropped_met.y_wind)
-            cropped_met["wind_speed"]=np.sqrt(cropped_met.x_wind**2 + cropped_met.y_wind**2)
+            if relevant_variables is None or "wind_angle" in relevant_variables:
+                cropped_met["wind_angle"]=np.arctan2(-cropped_met.x_wind,-cropped_met.y_wind)
+            if relevant_variables is None or "wind_speed" in relevant_variables:
+                cropped_met["wind_speed"]=np.sqrt(cropped_met.x_wind**2 + cropped_met.y_wind**2)
+            print("calculated wind angle and/or speed from x_wind and y_wind")
         except Exception as e:
             print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
 
@@ -1511,8 +1529,8 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     levels_variables_needed = [var_name for var_name in met_variables if len(met_variables[var_name])>0]
 
     # check that the passed variables and levels are available in data.met (cut data object for 0)
-    #import ipdb; ipdb.set_trace()
-    if len(time_deltas)>1:
+
+    if len(time_deltas)>0:
         print(f"extracting met at t-H for H in: {time_deltas}")
         # filename here 
         for delta in time_deltas:
@@ -1533,9 +1551,11 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
                 if data.dataset_format == "square":
-                    met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False)
+                    print(met_variables_needed)
+                    met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False, add_wind_direction=True)
+                    print("met", met)
                 if data.dataset_format == "domain":
-                    met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed)
+                    met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, add_wind_direction=True)
 
                 met = met.swap_dims({"time":"fp_time"})
                 #met = met.reset_coords(["time"])
@@ -1551,6 +1571,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             all_met_files[delta] = met.copy()
 
             del met 
+
     
     # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
     full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", ..., "time_delta")
@@ -1567,6 +1588,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
 
     input_arrays = []
     varnames_dict = []
+
     
     ### SETTING UP VARIABLES WITH LEVELS
     # stack along the variable dimension, so that the new variable has shape (variable name, level, time_delta)
@@ -1617,7 +1639,6 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
         # broadcast lat_coords and lon_coords from shape (time, lat) and (time, lon) to shared shape(time, lat, lon). we will use these as a starting array to add all the static variables, and will remove them at the end if they were not passed in "static_variables"
         if data.dataset_format=="square":
             (static_ds, ) = xr.broadcast(full_met[["lat_coords", "lon_coords"]])
-            print(static_ds)
         if data.dataset_format == "domain":
             (static_ds, ) = xr.broadcast(full_met.assign({"lat_coords":(("lat"), full_met.lat.values), "lon_coords":(("lon"), full_met.lon.values)})[["lat_coords", "lon_coords", "fp_time"]])
 
@@ -1627,7 +1648,6 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 data.topog = data.topog.broadcast_like(static_ds, exclude=["lat", "lon", "landcover_level"])
                 data.topog = data.topog.assign_coords({"lat":static_ds.lat.values, "lon":static_ds.lon.values}).rename({"fp_time":"time"})
         
-            print(static_ds)
 
 
 
@@ -1636,11 +1656,14 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             if var in ["topog", "landcover", "landcover_disaggregated"]:
                 assert hasattr(data, "topog"), "Load topog on the data object before trying to extract this as an input!"
                 static_ds = static_variables_functions[var](data.topog, static_ds)
+            elif "domain" in var:
+                static_ds = static_variables_functions[var](data.fp_data_full, static_ds)
             elif var in list(static_variables_functions.keys()) and var not in ["lat_coords", "lon_coords"]:
                 static_ds = static_variables_functions[var](static_ds)
             elif var != "lat_coords" and var != "lon_coords":
                 print(f"variable {var} was not found in the list of known functions!")
 
+        
         if "lat_coords" not in static_variables:
             static_ds = static_ds.drop_vars(["lat_coords"])
         if "lon_coords" not in static_variables:

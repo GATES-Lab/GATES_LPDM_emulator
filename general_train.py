@@ -51,7 +51,7 @@ print(file_name, file_path)
 #### 1 Set up
 
 ## make this importable!
-path="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_NORTHAFRICA/"
+path="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_newversion/"
 
 def write_to_file(message):
     f = open(f"{path}{model_name}/{model_name}_updates.txt", "a")
@@ -125,8 +125,8 @@ test_load_data.update(parameters["test_load_data"])
 print(train_load_data)
 print(test_load_data)
 
-data = LoadSquareSatelliteData(**train_load_data)
-test_data = LoadSquareSatelliteData(**test_load_data)
+data = LoadSquareSatelliteData(**train_load_data, load_everything=True)
+test_data = LoadSquareSatelliteData(**test_load_data,load_everything=True)
 
 write_to_file("setting up data")
 
@@ -162,6 +162,10 @@ if data.dataset_format == "domain":
     size = data.domain_size
 
 # all the necessary data is already in the loaders, so we can delete the objects
+
+image_plots = random.sample(list(range(len(test_inputs))), k=4)
+image_dates = np.datetime_as_string(test_data.fp_data_full.time.values[image_plots])
+
 del data, test_data
 
 lr = parameters["learning_rate"]
@@ -169,10 +173,11 @@ print(lr)
 #### 3 Make model
 
 # this is leftover from the previous model and actually shouldnt make a difference
-aux_dim = len(input_variables["others"]) 
-feature_dim=np.shape(inputs)[-1]-aux_dim
+#aux_dim = len(input_variables["others"]) 
+feature_dim=np.shape(inputs)[-1]
+aux_dim = 0
 
-image_plots = random.sample(list(range(len(test_inputs))), k=4)
+
 
 # Should probably update the name!!
 model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim, **parameters["model_parameters"])
@@ -219,13 +224,13 @@ for epoch in range(302):
     start = time.time()
     for i, batch in enumerate(train_loader):
         # get the inputs; data is a list of [inputs, labels]
-        ins, labels = batch[0].to(device), batch[1].to(device), batch[2].to(device)
+        ins, labels, true_fp = batch[0].to(device), batch[1].to(device), batch[2].to(device)
         # zero the parameter gradients
         optimizer.zero_grad()
 
         # forward + backward + optimize
         outputs = model(ins)
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels, true_fp)
         loss.backward()
         optimizer.step()
         loss = criterion_test(outputs, labels)
@@ -273,15 +278,15 @@ for epoch in range(302):
         og_fps = test_dataset.fp_untransformed
         fps = test_dataset.fp.detach().numpy()
         fig, ax = plt.subplots(4,4, figsize=(10, 10))
-        for axis, fn in enumerate([10,50,190,600]):
+        for axis, fn in enumerate(image_plots):
             ax[0,axis].imshow(np.reshape(test_dataset.predictions[fn+n,:], (size[0],size[1])), origin="lower")
             ax[1,axis].imshow(np.reshape(fps[fn+n,:], (size[0],size[1])), origin="lower") 
             ax[2,axis].imshow(np.reshape(transformed_preds[fn+n,:], (size[0],size[1])), origin="lower")
             ax[3,axis].imshow(np.reshape(og_fps[fn+n,:], (size[0],size[1])), origin="lower")   
-            ax[0,axis].set_title(f"prediction, \n sample {fn+n}")
-            ax[1,axis].set_title(f"truth, \n sample {fn+n}")
-            ax[2,axis].set_title(f"transformed prediction, \n sample {fn+n}")
-            ax[3,axis].set_title(f"original truth, \n sample {fn+n}")
+            ax[0,axis].set_title(f"prediction, \n sample {fn}")
+            ax[1,axis].set_title(f"truth, \n sample {fn} \n ({str(image_dates[axis][:-10])})")
+            ax[2,axis].set_title(f"transformed prediction, \n sample {fn}")
+            ax[3,axis].set_title(f"original truth, \n sample {fn}")
             for a in range(4):
                 ax[a,axis].xaxis.set_ticks([])
                 ax[a,axis].yaxis.set_ticks([])
