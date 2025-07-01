@@ -375,8 +375,10 @@ class SatelliteEncoder(torch.nn.Module):
             #print(features.size(),features.dtype )
 
         else:
-            #print('features',features)
+            #print('features',features.shape)
+            #print('edge weights',self.edge_weights.shape)
             features = torch.multiply(features, torch.flatten(self.edge_weights))
+
             #print("after weighting", np.shape(features))
             #print(features.size(), self.graph.edge_index[1,:].size())
             # scatter changes the shape from (b,f,latlonnodes) to (b,f,meshnodes), sorted by meshnode index 

@@ -360,7 +360,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={},coarsening_factor=1):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=True, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={},coarsening_factor=1):
 
         self.dataset_format = "square" 
         #### check domains
@@ -535,12 +535,17 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         # check if any of the met entries are nans, and if so remove from all objects
         # this shouldnt be hardcoded !!
         # needs a revision
+        '''
+        if np.sum(np.isnan(self.met[list(self.met.data_vars)[0]].values)) != 0:
+            nan_idxs = np.unique(np.where(np.isnan(self.met[list(self.met.data_vars)[0]].values[0,0,0,:])))
+            print(f"There are {len(nan_idxs)} nans in the met data. finding and deleting from met and fp (only on axis time)")
+        ''' 
         if np.sum(np.isnan(self.met[[list(self.met.data_vars)[0]]].values)) != 0:
             nan_idxs = np.unique(np.where(np.isnan(self.met[[list(self.met.data_vars)[0]]].values[0,0,0,:])))
             print(f"There are {len(nan_idxs)} nans in the met data. finding and deleting from met and fp (only on axis time)")
             
             self.remove_indeces(nan_idxs)
-            self.met_nan_idxs = nan_idxs
+            self.met_nan_idxs = nan_idxs       
         else:
             self.met_nan_idxs=[]
 
@@ -1245,6 +1250,24 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         met = met.assign({"fp_time":(("time"),fp.time.values)})
 
     met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
+
+
+
+
+    domain_lats = np.copy(met.lat.values)
+    domain_lons = np.copy(met.lon.values)
+
+    delta_lat = domain_lats[1]-domain_lats[0]
+    delta_lat_fp = fp.lat.values[1]-fp.lat.values[0]
+    delta_lon = domain_lons[1]-domain_lons[0]
+    delta_lon_fp = fp.lon.values[1]-fp.lon.values[0]
+
+    if abs(delta_lat - delta_lat_fp) > 0.01 or abs(delta_lon - delta_lon_fp)>0.01:
+        print("the resolution is different! this doesnt work yet?")
+    
+    #met = self.met.interp({"lat":self.domain_lats, "lon":self.domain_lons})
+
+    '''
     # Orignal valeus of domain lat
     domain_lats = np.copy(met.lat.values)
     domain_lons = np.copy(met.lon.values)
@@ -1279,6 +1302,7 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         delta_lon = domain_lons[1] - domain_lons[0]
 
         print(f"[INFO] Downsampled met resolution: Δlat = {delta_lat:.4f}, Δlon = {delta_lon:.4f}")
+    '''
     
     '''
     domain_lats = np.copy(met.lat.values)
@@ -1371,14 +1395,33 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
 
         cutmet = met.sel(time=fp_times[idxs])
         cutmet = cutmet.interp({"lat":domain_lats[rel_unique[0]-half:rel_unique[0]+half], "lon":domain_lons[rel_unique[1]-half:rel_unique[1]+half]}, method="nearest")
-        # copy the latitude/longitude values for this specific cropped square
-        #lats = cutmet.lat.values.copy()
-        #lons = cutmet.lon.values.copy()
         
+        
+        
+        # copy the latitude/longitude values for this specific cropped square
+        lats = cutmet.lat.values.copy()
+        lons = cutmet.lon.values.copy()
+        coarsening_factor = 2 
+        if coarsening_factor > 1:
+            cutmet = cutmet.coarsen(lat=coarsening_factor, lon=coarsening_factor, boundary="trim").mean()
+        # Note: this will change the size of the footprint from size x size to (size/downsample_factor) x (size/downsample_factor)
+        coords_array = np.arange(cutmet.sizes["lat"])  # update artificial coordinates
+        # PART ADDED FROM CHAT GPT
+        # These should be the original lat/lon coordinate arrays from before coarsening
+        lats_coarse = lats[:cutmet.sizes["lat"] * coarsening_factor].reshape(-1, coarsening_factor).mean(axis=1)
+        lons_coarse = lons[:cutmet.sizes["lon"] * coarsening_factor].reshape(-1, coarsening_factor).mean(axis=1)
+
+        # Artificial grid coordinate indexing
+        coords_array = np.arange(cutmet.sizes["lat"])
+
+
         # replace the latitude/longitude coordinates with grid-like coords (0-metsize), and save the actual coordinates as variables
         #.rename({"latitude":"lat","longitude":"lon"})
         with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+            '''
             cutmet = cutmet.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), domain_lats[rel_unique[0]-half:rel_unique[0]+half]), "lon_coords":(("lon"), domain_lons[rel_unique[1]-half:rel_unique[1]+half])})
+            '''
+            cutmet = cutmet.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), domain_lats[rel_unique[0]-half:rel_unique[0]+half:coarsening_factor]), "lon_coords":(("lon"), domain_lons[rel_unique[1]-half:rel_unique[1]+half:coarsening_factor])})
 
         cropped_met_arrays.append(cutmet)
     # concatenate all of the cropped arrays
@@ -1530,7 +1573,6 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     if len(levels_variables_needed)>0:
         if verbose: print(f"Setting up variables with levels: {levels_variables_needed}")
         stacked_levels_met = full_met[levels_variables_needed].to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_levels_met")
-
 
         # make sure we keep only the levels passed in met_variables
         indexes = []

@@ -78,7 +78,6 @@ hparams = {
         "region":"BRAZIL",
         "verbose":True,
         "coarsening_factor":2,
-        "met_args":{"met_levels":[3, 15,21]},
     },
 
     "test_load_data" : {
@@ -88,7 +87,7 @@ hparams = {
 
     "variables" : {
         "met_variables":{"x_wind":[3,15], "y_wind":[3,15], "upward_air_velocity":[3,15],"atmosphere_boundary_layer_thickness":[], "surface_air_pressure":[]},
-        "static_variables":["lat_coords", "lon_coords", "x_coords", "y_coords", "topog", "landcover"],
+        "static_variables":["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "x_coords", "y_coords", "topog"],
         "time_deltas":[6,12],
         
     },
@@ -136,6 +135,7 @@ sim_hparams['seed'] = 31
 # Second experiment
 sim_hparams_2 = copy.deepcopy(sim_hparams)
 sim_hparams_2['normalization'] = 'all'
+sim_hparams_2['train_load_data']['coarsening_factor'] = 4
 sim_hparams_2["model_name"] = "trainyear-2014_trainfreq-3_baselineyears-2014-2011_normalization-all_size-50-epochs-150_baselines_True_lr-5e-05_seed-31_date-Jan-17-2025"
 
 

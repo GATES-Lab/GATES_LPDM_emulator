@@ -11,17 +11,16 @@ hparams = {
         "region":"BRAZIL",
         "coarsening_factor":1,
         "verbose":True,
-        "met_args":{"met_levels":[3, 15,21]},
     },
 
     "test_load_data" : {
         "year":"2016",
-        "freq":50
+        "freq":10
     },
 
     "variables" : {
-        "met_variables":{"x_wind":[3,15], "y_wind":[3,15], "upward_air_velocity":[3,15], "atmosphere_boundary_layer_thickness":[], "surface_air_pressure":[]},
-        "static_variables":["lat_coords", "lon_coords", "x_coords", "y_coords", "topog", "landcover"],
+        "met_variables":{"x_wind":[3,9,15,21,30,42,51], "wind_speed":[3,30,51], "wind_angle":[3,30,51], "y_wind":[3,9,15,21,30,42,51], "upward_air_velocity":[3,9,15,21,30,42,51], "air_temperature":[3,9,15,21,30,42,51], "air_pressure":[3,9,15,21,30,42,51], "atmosphere_boundary_layer_thickness":[], "surface_air_pressure":[]},
+        "static_variables":["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "x_coords", "y_coords", "topog"],
         "time_deltas":[6,12]
     },
 
