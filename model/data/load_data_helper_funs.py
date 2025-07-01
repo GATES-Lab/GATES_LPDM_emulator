@@ -108,6 +108,7 @@ def _static_var_y_coords(coordinate_ds):
     return coordinate_ds 
 
 def _domain_distance_release(fp_data, coordinate_ds):
+    # calculates the haversine distance from each grid point to the release point for each fp
     lat_vals = np.radians(fp_data.lat.values)  # shape (n_lat,)
     lon_vals = np.radians(fp_data.lon.values)  # shape (n_lon,)
     release_lat = np.radians(fp_data.release_lat.values)  # shape (n_time,)
@@ -129,7 +130,7 @@ def _domain_distance_release(fp_data, coordinate_ds):
     return coordinate_ds
 
 def _domain_binary_release(fp_data, coordinate_ds):
-    #raise NotImplementedError
+    # provides a grid the size of the domain filled with zeros, except 1 at the release point
 
     lat_vals = fp_data.lat.values  # shape (n_lat,)
     lon_vals = fp_data.lon.values  # shape (n_lon,)
