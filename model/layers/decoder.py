@@ -651,8 +651,9 @@ class SatelliteDecoderClassifier(torch.nn.Module):
             processor_features = torch.cat([processor_features, normalised_idx_latlon], dim=1)
 
         #print(np.shape(processor_features))
-
+        #print('processor features',processor_features.shape)
         processor_features = einops.rearrange(processor_features, "b f n -> (b n) f", b=batch_size)
+        #print('processor features',processor_features.shape)
         #print("after scatter", processor_features.size(), processor_features.dtype)
         
         #print(np.shape(processor_features))
@@ -660,12 +661,14 @@ class SatelliteDecoderClassifier(torch.nn.Module):
     
 
         out = self.node_decoder(processor_features)  # Decode to output dim from hidden size
+        #print('out',out.shape)
             #print("done it")
         #print('before rearranging shape',out.shape)
         '''
         out = einops.rearrange(out, "(b n) f -> b n f", b=batch_size)
         '''
         out = einops.rearrange(out, "(b n) f -> b (n f)", b=batch_size)
+        #print('final out',out.shape)
         #print('after rearranging shape',out.shape)
         out = self.linear_class(out)
         return out

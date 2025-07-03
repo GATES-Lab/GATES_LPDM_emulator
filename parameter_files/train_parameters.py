@@ -7,7 +7,7 @@ hparams = {
     "model_name" : "test_run",
     "train_load_data" : {
         "year":"2015",
-        "freq":3,
+        "freq":5,
         "region":"BRAZIL",
         "coarsening_factor":1,
         "verbose":True,
