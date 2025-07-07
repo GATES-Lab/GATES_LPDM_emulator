@@ -6,9 +6,6 @@ sys.path.insert(0, "/user/work/yl18410/new_graphnet")
 sys.path.insert(0, "/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/")
 from new_graphnet.graphnet_LPDM_emulator.full_bc_prediction_pipeline import train_bc_prediction_pipeline
 from new_graphnet.graphnet_LPDM_emulator.parameter_files.practice_parameters import practice_hparams_list
-
-
-
 from new_graphnet.graphnet_LPDM_emulator.parameter_files.train_parameters import hparams_list
 
 

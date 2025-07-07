@@ -144,6 +144,8 @@ def write_to_file(path, model_name,message):
     f.close()
 
 
+
+
 '''
 def train_bc_prediction_pipeline(_hparams,_practice):
     folder_name = 'boundary_condition'
@@ -177,6 +179,8 @@ def train_bc_prediction_pipeline(_hparams,_practice):
         torch.cuda.manual_seed(34)
         random.seed(34)
     
+    
+
     name_train_data = name_train_data.replace("[", "").replace("]", "")    
 
     name_seed = parameters['seed']
@@ -184,14 +188,18 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     
     name_inference_epochs = parameters["epochs"]
     name_baselines = str(parameters['use_baselines'])
-    model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_coarsening-{name_coarsening}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
+    if "size" in (parameters["train_load_data"].keys()):
+        name_size = str(parameters["train_load_data"]['size'])
+        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_size-{name_size}_coarsening-{name_coarsening}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
+    else:
+        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_coarsening-{name_coarsening}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
 
     if _practice:
         model_name = 'practice_run'
         
-        #with open("Analysis/quickload_data.pkl", "rb") as f:
-        #    loaded_data = pickle.load(f)
-        #data, test_data, grid, inputs, names, test_inputs =loaded_data["data"],loaded_data["test_data"],loaded_data["grid"], loaded_data["inputs"], loaded_data["names"], loaded_data["test_inputs"]
+        with open("Analysis/quickload_data.pkl", "rb") as f:
+            loaded_data = pickle.load(f)
+        data, test_data, grid, inputs, names, test_inputs =loaded_data["data"],loaded_data["test_data"],loaded_data["grid"], loaded_data["inputs"], loaded_data["names"], loaded_data["test_inputs"]
         
 
     else:
@@ -233,10 +241,19 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     test_load_data.update(parameters["test_load_data"])
     print(train_load_data)
     print(test_load_data)
-
-    data = LoadDomainSatelliteData(**train_load_data)
     
-    test_data = LoadDomainSatelliteData(**test_load_data)
+    
+    if "size" in (parameters["train_load_data"].keys()):
+        print('Using square domain')
+        data = LoadSquareSatelliteData(**train_load_data)
+        test_data = LoadSquareSatelliteData(**test_load_data)
+        
+    else:    
+        print('Using fixed domain')
+        data = LoadDomainSatelliteData(**train_load_data)
+        test_data = LoadDomainSatelliteData(**test_load_data)
+        
+    
 
     
     train_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
@@ -272,7 +289,6 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     
     grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
 
-
     input_variables = parameters["variables"]
 
     inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
@@ -290,7 +306,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     print(train_load_data)
     print(test_load_data)
     write_to_file(inference_path,model_name,"Before loading data")
-    grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
+    #grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
 
     train_dataset = BoundaryDataset(inputs,baseline_list,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
@@ -451,9 +467,8 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     data_dict = {'test_dataset_predictions':test_out,'test_dataset_truths':test_outputs}
     with open(data_savename, 'wb') as f:
         pickle.dump(data_dict, f)
-'''
 
-
+'''    
 
 def train_bc_prediction_pipeline(_hparams,_practice):
     folder_name = 'boundary_condition'
@@ -487,8 +502,6 @@ def train_bc_prediction_pipeline(_hparams,_practice):
         torch.cuda.manual_seed(34)
         random.seed(34)
     
-    
-
     name_train_data = name_train_data.replace("[", "").replace("]", "")    
 
     name_seed = parameters['seed']
@@ -502,23 +515,23 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     else:
         model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_coarsening-{name_coarsening}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
 
+    
     if _practice:
         model_name = 'practice_run'
-        '''
-        with open("Analysis/quickload_data.pkl", "rb") as f:
-            loaded_data = pickle.load(f)
-        data, test_data, grid, inputs, names, test_inputs =loaded_data["data"],loaded_data["test_data"],loaded_data["grid"], loaded_data["inputs"], loaded_data["names"], loaded_data["test_inputs"]
-        '''
-
+        model_folder = f"{inference_path}{model_name}"
     else:
         print('Not using practice')
-        model_folder = f"{inference_path}{model_name}"
-        if os.path.exists(model_folder):
-            print('Exiting simulation')
-            return None
-    
+        # Check if the folder exists and make a new one if it does
+        base_model_folder = f"{inference_path}{model_name}"
+        model_folder = base_model_folder
+        counter = 1
+        while os.path.exists(model_folder):
+            model_folder = f"{base_model_folder}_{counter}"
+            model_name = os.path.basename(model_folder)  # update model_name as well
+            counter += 1
+        print(f"Using model folder: {model_folder}")
      # make files
-    model_folder = f"{inference_path}{model_name}"
+    
     img_folder =  f"{model_folder}/training_imgs"
     model_folder_Exist = os.path.exists(model_folder)
     if not model_folder_Exist:
@@ -561,9 +574,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
         data = LoadDomainSatelliteData(**train_load_data)
         test_data = LoadDomainSatelliteData(**test_load_data)
         
-    
-
-    
+        
     train_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     # TODO: Nawid- get the train year and the test year from the trainload data 
     train_year = 2015
