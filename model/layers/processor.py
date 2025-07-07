@@ -1,12 +1,14 @@
 """Processor for the latent graph
 
-In the original paper the processor is described as
+Functions for building GNN
 
-The Processor iteratively processes the 256-channel latent feature data on the icosahedron grid
-using 9 rounds of message-passing GNNs. During each round, a node exchanges information with itself
-and its immediate neighbors. There are residual connections between each round of processing.
+Original code (GraphProcessor, build_satellite_processor_block) was developed by https://github.com/openclimatefix/graph_weather for weather forecasting applications. Here, setup is modified and used as part of the GATES model
+
+
+author: Elena Fillola @elenafillo
 
 """
+
 import torch
 import einops 
 

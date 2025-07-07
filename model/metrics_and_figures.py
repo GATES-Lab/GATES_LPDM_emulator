@@ -1,3 +1,7 @@
+"""
+author: Elena Fillola @elenafillo
+"""
+
 import sys
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -42,6 +46,8 @@ These load full footprint files - they compare LPDM outputs with the predictions
 to achieve this format, use integrate_fps.py after you have general_make_prediction.py to make model predictions (we could probably streamline this?) 
 
 These functions still need to be documented/improved
+
+author: Elena Fillola @elenafillo
 
 """
 

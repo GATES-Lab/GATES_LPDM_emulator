@@ -1,3 +1,10 @@
+"""
+Data loading functions, loading footprints, meteorology and topography data.
+Can be fed into the GATES model as a dataset, or used for other models
+
+author: Elena Fillola @elenafillo
+"""
+
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -720,6 +727,8 @@ class LoadSquareSiteData(LoadSquareSatelliteData):
         # self.release_coords = [site_lat, site_lon]
         self.release_coords = [self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lat.values, self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lon.values]
 
+        self.site_fp_lats = self.fp_lats[0]
+        self.site_fp_lons = self.fp_lons[0]
 
     def _get_release_idxs(self):
         idx_release_lat = np.argmin(abs(self.fp_data_full.lat.values - self.release_coords[0]))
@@ -1388,9 +1397,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
                 if data.dataset_format == "square":
-                    print(met_variables_needed)
                     met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False, add_wind_direction=True)
-                    print("met", met)
                 if data.dataset_format == "domain":
                     met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, add_wind_direction=True)
 

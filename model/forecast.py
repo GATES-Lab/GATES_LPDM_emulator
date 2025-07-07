@@ -10,7 +10,7 @@ import numpy as np
 
 
 class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
-    """Main weather prediction model from the paper"""
+    """GATES - Graph based footprint emulator """
 
     def __init__(
         self,
@@ -42,7 +42,8 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         concat_decoder_neighbours=False, concat_decoder_neighbours_2=False, better_meshnodes=False, scatter="mean",disaggregated=False, batchsize=5, attention=False, release_coords="default", release_edges=False, decoder_append_latlon=False, concat_enc_neighbours=False,initial_enc=False
     ):
         """
-        Graph Weather Model based off https://arxiv.org/pdf/2202.07575.pdf
+        GATES uses a GNN in an encode-process-decode architecture to output footprint values
+        The original model architecture was based of Keisler's weather forecasting setup (https://arxiv.org/pdf/2202.07575.pdf)
 
         Args:
             lat_lons: List of latitude and longitudes for the grid

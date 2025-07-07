@@ -1,9 +1,15 @@
 """
 Functions for building GNN
 
-This code is taken from https://github.com/CCSI-Toolset/MGN which is available under the
+Original code (GraphProcessor, build_satellite_processor_block) was developed by https://github.com/openclimatefix/graph_weather for weather forecasting applications, with some of their code taken from https://github.com/CCSI-Toolset/MGN which is available under the
 US Government License
+
+
+author: Elena Fillola @elenafillo
+
 """
+
+
 from typing import Tuple, Optional
 import einops
 

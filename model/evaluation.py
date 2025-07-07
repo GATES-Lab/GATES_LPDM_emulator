@@ -312,7 +312,6 @@ def corrective_layer_footprint(truths, preds, size=100, to_correct=None, degree=
 
 
 
-
 # eval funs
 def mae(y_true, predictions):
     y_true, predictions = np.array(y_true), np.array(predictions)

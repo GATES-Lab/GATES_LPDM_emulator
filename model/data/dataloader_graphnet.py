@@ -174,10 +174,10 @@ class FootprintsDataset(Dataset):
 
         assert np.shape(self.transformed_predictions) == np.shape(self.fp_untransformed), "predictions and fp have to have the same shape to evaluate errors"
 
-        print(f"nans in transformed_predictions: {np.sum(np.isnan(self.transformed_predictions))} ")
+        #print(f"nans in transformed_predictions: {np.sum(np.isnan(self.transformed_predictions))} ")
         self.transformed_predictions = np.nan_to_num(self.transformed_predictions)
-        print(f"nans in transformed_predictions after nan to num: {np.sum(np.isnan(self.transformed_predictions))} ")
-        print(f"nans in fp_untransformed: {np.sum(np.isnan(self.fp_untransformed))} ")
+        #print(f"nans in transformed_predictions after nan to num: {np.sum(np.isnan(self.transformed_predictions))} ")
+        #print(f"nans in fp_untransformed: {np.sum(np.isnan(self.fp_untransformed))} ")
         metrics = {}
         metrics["NMAE"] = NMAE_nans(self.transformed_predictions, self.fp_untransformed)
         metrics["MSE"] = mean_squared_error(self.transformed_predictions, np.nan_to_num(self.fp_untransformed))
