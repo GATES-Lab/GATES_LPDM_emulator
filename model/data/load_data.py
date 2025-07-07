@@ -116,18 +116,18 @@ class LoadBaseSatelliteData:
         - select_time_index: list or 1D np array of timestamps to be selected as datapoints. Applied after sampling with freq (or pass freq=1 to load all footprints)
         - fp_datadir: str, directory for footprints. default directs to ACRG folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
         - verbose: if True, prints out the steps throughout the data loading process
-        - hpc: computation location, "isambard_ai", "bp"
+        - compute_location, "isambard_ai", "bp", "local"
     
     met_args:
         see load_meteorology()
     topog_args:
         see load_topogs()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, hpc="bp", met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, compute_location="bp", met_args={}, topog_args={}):
         
         self.dataset_format = "base" 
         self.data_type="satellite"
-        self.hpc = hpc
+        self.compute_location = compute_location
 
         #### check domains
         self.region = region
@@ -145,10 +145,10 @@ class LoadBaseSatelliteData:
         with open("config.yml", "r") as f:
             config = yaml.safe_load(f)
 
-        hpc_config = config["hpc"].get(self.hpc)
-        if hpc_config is None:
-            raise ValueError(f"Unknown HPC target: {self.hpc}")
-        data_root = hpc_config["base_data_path"]
+        path_config = config["data_paths"].get(self.compute_location)
+        if path_config is None:
+            raise ValueError(f"Unknown HPC target: {self.compute_location}")
+        data_root = path_config["base_data_path"]
         self.data_root = data_root
 
         if month != None:
