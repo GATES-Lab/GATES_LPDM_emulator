@@ -1,7 +1,7 @@
 """
 Functions for building GNN
 
-Original code (GraphProcessor, build_satellite_processor_block) was developed by https://github.com/openclimatefix/graph_weather for weather forecasting applications, with some of their code taken from https://github.com/CCSI-Toolset/MGN which is available under the
+Original code (GraphProcessor, build_processor_block) was developed by https://github.com/openclimatefix/graph_weather for weather forecasting applications (Copyright (c) 2022 Open Climate Fix), with some of their code taken from https://github.com/CCSI-Toolset/MGN, available under the
 US Government License
 
 

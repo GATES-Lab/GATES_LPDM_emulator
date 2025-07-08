@@ -1,7 +1,16 @@
-"""Model for forecasting weather from NWP states"""
+"""
+author: Elena Fillola @elenafillo
+
+Implementation of the GATES model, a graph-based satellite forecaster
+Developed from code by Climate Fix (Copyright (c) 2022 Open Climate Fix) implementing Keisler et al.'s weather forecasting model (see https://github.com/openclimatefix/graph_weather)
+
+"""
+
+
+
 import torch
 from typing import Optional
-#from huggingface_hub import PyTorchModelHubMixin
+
 
 from model.layers.encoder import SatelliteEncoder, FixedSatelliteEncoder
 from model.layers.decoder import SatelliteDecoder
@@ -156,7 +165,6 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
 
 
 class FixedGraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
-    """Main weather prediction model from the paper"""
 
     def __init__(
         self,
