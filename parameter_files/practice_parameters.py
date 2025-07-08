@@ -74,14 +74,16 @@ hparams = {
     "model_name" : "test_run",
     "train_load_data" : {
         "year":"2015",
-        "freq":100,
+        #"freq":100,
+        "freq":200,
         "region":"BRAZIL",
         "verbose":True,
     },
 
     "test_load_data" : {
         "year":"2016",
-        "freq":300
+        #"freq":300
+        "freq":600
     },
 
     "variables" : {
@@ -115,7 +117,8 @@ hparams = {
     'normalization':'all',
     "learning_rate":5e-7,
     "seed":42,
-    "epochs":2,
+    "epochs":300,
+    #"epochs":2,
     "num_classes":4,
     "use_baselines":False,
 

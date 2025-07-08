@@ -37,6 +37,10 @@ import argparse
 import random
 from datetime import date
 
+import wandb
+
+# Set your W&B API key to log in automatically
+wandb.login()
 
 
 def baseline_mol(desired_data,months,desired_year):
@@ -549,6 +553,12 @@ def train_bc_prediction_pipeline(_hparams,_practice):
         f = open(f"{inference_path}/{model_name}/{model_name}_updates.txt", "x")
         f.close()
     
+    wandb.init(
+        project="BoundaryCondition-Prediction",
+        name=model_name,
+        config=parameters
+    )
+    
     # Load the data
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(inference_path,model_name,f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"))
@@ -662,6 +672,10 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     epoch_so_far = 0
     if torch.cuda.is_available():
         model.cuda()
+    
+    wandb.watch(model, log="all", log_freq=10)  # 👈 Track gradients and weights
+
+
     # Nawid- true outputs of the test data (not using the train valeus as the training data is shuffled)
     denormalized_test_truths = (test_outputs*outputs_std_values) + outputs_mean_values
     denormalized_test_truths_summed = np.sum(denormalized_test_truths ,axis=1)
@@ -729,6 +743,14 @@ def train_bc_prediction_pipeline(_hparams,_practice):
         test_mae = np.mean(np.abs(denormalized_test_truths_summed - denormalized_test_predictions_summed))
         
         losses["individual_summed_test_MAE"].append(test_mae)
+
+         # 👇 Log to W&B
+        wandb.log({
+            "epoch": epoch + 1,
+            "train_loss": running_loss / (i_train + 1),
+            "test_loss": test_loss,
+            "summed_test_MAE": test_mae
+        })
         write_to_file(inference_path, model_name,f"{epoch + 1}, loss: {running_loss/(i_train+1)}, test loss: {test_error/(i_test+1)}, denormzalised summed test loss:{test_mae}")
         '''
         # Save best model and predictions
@@ -764,6 +786,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
 
         ## save checkpoint every 50 epochs
         if epoch % 50 ==0:
+            checkpoint_path = f"{inference_path}{model_name}/{model_name}_{epoch}.pt"
             torch.save({
                         'epoch': epoch,
                         'model_state_dict': model.state_dict(),
@@ -771,8 +794,10 @@ def train_bc_prediction_pipeline(_hparams,_practice):
                         'loss': losses,
                         "normalization":normalization_vals, 
                         'learning_rate':lr,
-                        }, f"{inference_path}{model_name}/{model_name}_{epoch}.pt")
-
+                        }, checkpoint_path)
+            wandb.save(checkpoint_path)  # 👈 Save to W&B
+            
+    final_model_path = f"{inference_path}{model_name}/{model_name}_{epoch}.pt"
     # Nawid - Save for the final epoch
     torch.save({
                         'epoch': epoch,
@@ -781,7 +806,9 @@ def train_bc_prediction_pipeline(_hparams,_practice):
                         'loss': losses,
                         "normalization":normalization_vals, 
                         'learning_rate':lr,
-                        }, f"{inference_path}{model_name}/{model_name}_{epoch}.pt")
+                        }, final_model_path)
+    wandb.save(final_model_path)
+
     
 
     # Nawid - Used to save the training outputs for the model at the end
@@ -798,3 +825,6 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     data_dict = {'test_dataset_predictions':test_out,'test_dataset_truths':test_outputs, 'train_dataset_predictions':train_out,'train_dataset_truths':outputs}
     with open(data_savename, 'wb') as f:
         pickle.dump(data_dict, f)
+
+    wandb.save(data_savename)
+    wandb.finish()  # 👈 End wandb session

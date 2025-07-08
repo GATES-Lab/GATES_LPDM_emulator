@@ -40,7 +40,6 @@ from datetime import date
 import wandb
 
 # Set your W&B API key to log in automatically
-os.environ["WANDB_API_KEY"] = "xxxxx"  # <<-- REPLACE THIS
 wandb.login()
 
 def train_bc_prediction_pipeline_practice(_hparams,_practice):
