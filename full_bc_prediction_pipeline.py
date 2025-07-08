@@ -468,8 +468,8 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     with open(data_savename, 'wb') as f:
         pickle.dump(data_dict, f)
 
-'''    
-
+'''
+    
 def train_bc_prediction_pipeline(_hparams,_practice):
     folder_name = 'boundary_condition'
     inference_path=f"/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/graph_weather/{folder_name}/"
@@ -482,7 +482,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     #name_output_transforms = parameters["dataloader_parameters"]["output_transforms"][0].replace('"', '').replace('[', '').replace(']', '')
     name_train_data = str(parameters['train_load_data']['year'])
     name_lr = parameters['learning_rate']
-    name_coarsening = str(parameters["train_load_data"]["coarsening_factor"])
+    #name_coarsening = str(parameters["train_load_data"]["coarsening_factor"])
     #name_alpha = parameters['loss_weight']
     name_normalization = parameters['normalization']
     today = date.today()
@@ -511,9 +511,9 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     name_baselines = str(parameters['use_baselines'])
     if "size" in (parameters["train_load_data"].keys()):
         name_size = str(parameters["train_load_data"]['size'])
-        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_size-{name_size}_coarsening-{name_coarsening}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
+        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_size-{name_size}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
     else:
-        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_coarsening-{name_coarsening}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
+        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
 
     
     if _practice:
@@ -629,6 +629,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
 
     train_dataset = BoundaryDataset(inputs,baseline_list,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
+    deterministic_train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=False)
     test_dataset = BoundaryDataset(test_inputs,test_baseline_list,test_outputs,use_baselines= use_baselines,input_names=names, **parameters["dataloader_parameters"])
     test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
 
@@ -699,6 +700,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
             #individual_mol_train_errors += np.mean(np.abs(((labels-model_outputs)*outputs_std_values).detach().cpu().numpy()),axis=0)
 
             end = time.time()
+            
             del model_outputs 
             if i_train % 10==0:
                 print(f"[{epoch + 1}, {i_train + 1:5d}] loss: {running_loss / (i_train + 1):.3f} Time: {end - start} sec")
@@ -728,7 +730,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
         
         losses["individual_summed_test_MAE"].append(test_mae)
         write_to_file(inference_path, model_name,f"{epoch + 1}, loss: {running_loss/(i_train+1)}, test loss: {test_error/(i_test+1)}, denormzalised summed test loss:{test_mae}")
-        
+        '''
         # Save best model and predictions
         if test_loss < best_test_loss:
             best_test_loss = test_loss
@@ -758,7 +760,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
                 inference_path, model_name,
                 f"Best model saved at epoch {epoch+1} with Test Loss: {best_test_loss:.6f}"
             )
-
+        '''
 
         ## save checkpoint every 50 epochs
         if epoch % 50 ==0:
@@ -780,9 +782,19 @@ def train_bc_prediction_pipeline(_hparams,_practice):
                         "normalization":normalization_vals, 
                         'learning_rate':lr,
                         }, f"{inference_path}{model_name}/{model_name}_{epoch}.pt")
+    
+
+    # Nawid - Used to save the training outputs for the model at the end
+    for i_det, batch in enumerate(deterministic_train_loader):
+        # get the inputs; data is a list of [inputs, labels]
+        ins, labels = batch[0].to(device), batch[1].to(device)
+        det_outputs = model(ins)
+
+        train_out[i_det*train_batch_size:(i_det+1)*train_batch_size,:] = det_outputs.detach().cpu().numpy()
+            
 
     print("Finished Training")
     data_savename = f"{inference_path}{model_name}/{model_name}_final_epoch_data.pkl"
-    data_dict = {'test_dataset_predictions':test_out,'test_dataset_truths':test_outputs}
+    data_dict = {'test_dataset_predictions':test_out,'test_dataset_truths':test_outputs, 'train_dataset_predictions':train_out,'train_dataset_truths':outputs}
     with open(data_savename, 'wb') as f:
         pickle.dump(data_dict, f)

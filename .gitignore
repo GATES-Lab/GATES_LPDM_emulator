@@ -2,3 +2,5 @@ graph_weather
 *.pkl
 *.npy
 *.out
+wandb
+modloss
