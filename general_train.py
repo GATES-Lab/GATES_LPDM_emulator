@@ -1,9 +1,5 @@
 import sys
 
-# delete before use!!
-sys.path.insert(0,"/software/local/languages/miniforge3/envs/elena/lib/python3.12/site-packages/")
-sys.path.insert(0,"/user/work/ef17148/oldstuff/ef17148/.conda/envs/new_graphnet/lib/python3.12/site-packages")
-
 #import cartopy
 #import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
@@ -17,8 +13,6 @@ import pickle
 import random
 
 
-sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
-sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
 from model.layers.encoder import *
 from model.layers.decoder import *
 from model.layers.processor import *
@@ -51,7 +45,7 @@ print(file_name, file_path)
 #### 1 Set up
 
 ## make this importable!
-path="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_NORTHAFRICA/"
+path = file_path
 
 def write_to_file(message):
     f = open(f"{path}{model_name}/{model_name}_updates.txt", "a")
@@ -106,11 +100,27 @@ else:
 
 
 # make files
-os.makedirs(f"{path}{model_name}", exist_ok=True)
-os.mkdir(f"{path}{model_name}/training_imgs")
-f = open(f"{path}{model_name}/{model_name}_updates.txt", "x")
-f.close()
+os.makedirs(f"{path}{model_name}", #exist_ok=True
+            )
+os.makedirs(f"{path}{model_name}/training_imgs", #exist_ok=True
+            )
+with open(f"{path}{model_name}/{model_name}_updates.txt", "a") as f:
+    pass
 
+# Load config
+with open("config.yml", "r") as f:
+    config = yaml.safe_load(f)
+
+# Select the environment you're using
+env = "isambard_ai"
+env_paths = config["data_paths"][env]
+
+# Join paths
+base_data_path = env_paths["base_data_path"]
+fp_datadir = os.path.join(base_data_path, env_paths["fp_datadir"].lstrip("/"))
+met_datadir = os.path.join(base_data_path, env_paths["met_datadir"].lstrip("/"))
+topog_datadir = os.path.join(base_data_path, env_paths["topog_datadir"].lstrip("/"))
+landcover_datadir = os.path.join(base_data_path, env_paths["landcover_datadir"].lstrip("/"))
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"))
@@ -122,11 +132,23 @@ train_load_data = copy.deepcopy(parameters["train_load_data"])
 # load train parameters and upload with any changes to test data
 test_load_data = copy.deepcopy(parameters["train_load_data"])
 test_load_data.update(parameters["test_load_data"])
-print(train_load_data)
-print(test_load_data)
 
-data = LoadSquareSatelliteData(**train_load_data)
-test_data = LoadSquareSatelliteData(**test_load_data)
+
+shared_data_args = dict(
+    load_everything=True,
+    base_data_path=base_data_path,
+    fp_datadir=fp_datadir,
+    met_datadir=met_datadir,
+    topog_args={
+        "topog_path": topog_datadir,
+        "landcover_path": landcover_datadir
+    }
+)
+print("Load training met and fp data")
+data = LoadSquareSatelliteData(**train_load_data, **shared_data_args)
+print("Load test met and fp data")
+test_data = LoadSquareSatelliteData(**test_load_data, **shared_data_args)
+
 
 write_to_file("setting up data")
 
@@ -134,8 +156,10 @@ write_to_file("setting up data")
 
 input_variables = parameters["variables"]
 
-inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
+print("Load training satellite data")
 
+inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
+print("Load test satellite data")
 test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=True)
 
 # the model gets built with respect to a "reference footprint", and all predictions are done on this grid. An improvement would be to explore a way to select the best reference footrpint, or to find a way to do this dynamically for each footprint
@@ -161,6 +185,9 @@ if data.dataset_format == "square":
 if data.dataset_format == "domain":
     size = data.domain_size
 
+image_plots = random.sample(list(range(len(test_inputs))), k=4)
+image_dates = np.datetime_as_string(test_data.fp_data_full.time.values[image_plots])
+
 # all the necessary data is already in the loaders, so we can delete the objects
 del data, test_data
 
@@ -169,8 +196,9 @@ print(lr)
 #### 3 Make model
 
 # this is leftover from the previous model and actually shouldnt make a difference
-aux_dim = len(input_variables["others"]) 
-feature_dim=np.shape(inputs)[-1]-aux_dim
+#aux_dim = len(input_variables["others"]) 
+feature_dim=np.shape(inputs)[-1]
+aux_dim = 0
 
 image_plots = random.sample(list(range(len(test_inputs))), k=4)
 
@@ -219,13 +247,12 @@ for epoch in range(302):
     start = time.time()
     for i, batch in enumerate(train_loader):
         # get the inputs; data is a list of [inputs, labels]
-        ins, labels = batch[0].to(device), batch[1].to(device), batch[2].to(device)
-        # zero the parameter gradients
+        ins, labels, true_fp = batch[0].to(device), batch[1].to(device), batch[2].to(device)        # zero the parameter gradients
         optimizer.zero_grad()
 
         # forward + backward + optimize
         outputs = model(ins)
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels, true_fp)
         loss.backward()
         optimizer.step()
         loss = criterion_test(outputs, labels)
@@ -267,21 +294,22 @@ for epoch in range(302):
 
     write_to_file(f"{epoch + 1}, loss: {running_loss/(i+1)}, test loss: {test_error/(i_test+1)}, NMAE test: {NMAE_nans(test_out,truths)}, NMAE test trasformed: {evaluation_metrics['NMAE']}, MSE test transformed: {evaluation_metrics['MSE']}, IoU {evaluation_metrics['IOU']}, flux metrics (checkerboard 5): {flux_metrics}")
     
+
     # every five epochs plot and save 
     if epoch % 5 == 0:
         n=0
         og_fps = test_dataset.fp_untransformed
         fps = test_dataset.fp.detach().numpy()
         fig, ax = plt.subplots(4,4, figsize=(10, 10))
-        for axis, fn in enumerate([10,50,190,600]):
+        for axis, fn in enumerate(image_plots):
             ax[0,axis].imshow(np.reshape(test_dataset.predictions[fn+n,:], (size[0],size[1])), origin="lower")
             ax[1,axis].imshow(np.reshape(fps[fn+n,:], (size[0],size[1])), origin="lower") 
             ax[2,axis].imshow(np.reshape(transformed_preds[fn+n,:], (size[0],size[1])), origin="lower")
             ax[3,axis].imshow(np.reshape(og_fps[fn+n,:], (size[0],size[1])), origin="lower")   
-            ax[0,axis].set_title(f"prediction, \n sample {fn+n}")
-            ax[1,axis].set_title(f"truth, \n sample {fn+n}")
-            ax[2,axis].set_title(f"transformed prediction, \n sample {fn+n}")
-            ax[3,axis].set_title(f"original truth, \n sample {fn+n}")
+            ax[0,axis].set_title(f"prediction, \n sample {fn}")
+            ax[1,axis].set_title(f"truth, \n sample {fn} \n ({str(image_dates[axis][:-10])})")
+            ax[2,axis].set_title(f"transformed prediction, \n sample {fn}")
+            ax[3,axis].set_title(f"original truth, \n sample {fn}")
             for a in range(4):
                 ax[a,axis].xaxis.set_ticks([])
                 ax[a,axis].yaxis.set_ticks([])

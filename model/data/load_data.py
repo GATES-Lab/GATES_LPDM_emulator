@@ -32,7 +32,7 @@ def load_fps(fp_datadir, verbose=False):
         time_chunk = 25
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             # attempt to load dataset of multiple files the standard way
-            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}) as ds:
+            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, engine="h5netcdf", ) as ds:
                 fp_data_full = ds.copy()
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
@@ -90,6 +90,10 @@ def load_fps(fp_datadir, verbose=False):
         else:
             print("there was a problem", e)
 
+    if 'fp_data_full' not in locals():
+        raise RuntimeError("No valid footprint files were loaded — check file availability and formatting.")
+
+
     fp_data_full= fp_data_full.sortby('time')
 
     return fp_data_full
@@ -123,7 +127,7 @@ class LoadBaseSatelliteData:
     topog_args:
         see load_topogs()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, compute_location="bp", met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", base_data_path = None, fp_datadir = None, met_datadir= None, load_everything=False, compute_location="bp", met_args={}, topog_args={}):
         
         self.dataset_format = "base" 
         self.data_type="satellite"
@@ -148,8 +152,13 @@ class LoadBaseSatelliteData:
         path_config = config["data_paths"].get(self.compute_location)
         if path_config is None:
             raise ValueError(f"Unknown HPC target: {self.compute_location}")
-        data_root = path_config["base_data_path"]
-        self.data_root = data_root
+        base_data_path = path_config["base_data_path"]
+        self.base_data_path = base_data_path
+
+
+        self.met_datadir = met_datadir
+
+        print()
 
         if month != None:
             self.month = month
@@ -166,6 +175,10 @@ class LoadBaseSatelliteData:
         self.padding=None
 
         if load_everything:
+            if met_datadir is not None:
+                self.verbose_print(f"Loading meteorology from {met_datadir}")
+            else:
+                raise ValueError("`met_datadir` is required but was not provided.")
             self.met_file = self.load_meteorology(**met_args)
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)
 
@@ -216,13 +229,13 @@ class LoadBaseSatelliteData:
         #### load topography
         print("\n---- LOADING TOPOG")
         if topog_path=="default":
-            topog_path= self.data_root+"/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+            topog_path= self.base_data_path+"/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
         print(f"trying to load topography from {topog_path}")
         with xr.load_dataset(topog_path) as topog_dataset:
             topog_file = topog_dataset.copy()
 
         if landcover_path=="default":
-            landcover_path = self.data_root+"/LPDM/topog_NAME/land_cover.nc"
+            landcover_path = self.base_data_path+"/LPDM/topog_NAME/land_cover.nc"
         with xr.load_dataset(landcover_path) as landcover_dataset:
             landcover_file = landcover_dataset.copy()
             
@@ -234,17 +247,14 @@ class LoadBaseSatelliteData:
         return topog_file, landcover_file
 
     def _get_meteorology_file(self, met_datadir, lazy_load=True):
-        if met_datadir==None:
-            met_datadir = self.data_root+"/met_archive/UM/"+self.domain+"/"+self.domain+"_Met_"+str(self.date)+"*.nc"
-        else:
-            met_datadir = met_datadir+str(self.date)+"*.nc"
+        met_datadir = f"{met_datadir}/UM/{self.region}/{self.region}_Met_{self.date}*.nc"
         if self.verbose: print("Loading meteorology from " + met_datadir)
 
         # each chunk should have around 1mill values,  - chunk per level and by time, rounded to the nearest hundred, 100MB-1GB
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}) as met_file:
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, engine="h5netcdf", ) as met_file:
 
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
@@ -267,11 +277,11 @@ class LoadBaseSatelliteData:
 
     def _load_footprints(self, fp_datadir):
         #### load footprint (fp) data from file
-        if fp_datadir is None:
-            fp_datadir = self.data_root+"/LPDM/fp_NAME_pre20210701/"+self.domain+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc" 
-        else:
-            fp_datadir=fp_datadir+str(self.date)+"*.nc"
-            #fp_datadir = f"{fp_datadir}{self.domain}/*{self.region}*{self.domain}_{str(self.date)}*.nc"
+        #fp_datadir = fp_datadir+"/"+self.region+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc" 
+        fp_datadir = f"{fp_datadir}/{self.region}/*{self.region}*{self.domain}*{self.date}*.nc"
+        #fp_datadir = os.path.join(fp_datadir, self.region, f"*{self.domain}_{self.date}*.nc") 
+
+        
         if self.verbose: print("Loading footprint data from " + fp_datadir) 
 
         self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose)  
@@ -375,7 +385,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="zeros", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, met_datadir = None, load_everything=False, base_data_path=None, lazy_load=True, met_args={}, topog_args={}):
 
         self.dataset_format = "square" 
         #### check domains
@@ -392,15 +402,28 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
 
         self.year = year
         self.date = self.year
-        self.verbose=verbose
-
-
+        self.verbose = verbose
+ 
         if month != None:
             self.month = month
             self.date = str(self.year)+month
 
         self.subsample_parameters = {"freq":freq, "sampling_mode":sampling_mode, "freq_offset":freq_offset}
         
+        # Require base_data_path
+        if base_data_path is None:
+            raise ValueError("You must pass base_data_path (from config.yml).")
+        
+        self.base_data_path = base_data_path
+
+        # Construct default fp_datadir if not passed
+        if fp_datadir is None:
+            fp_datadir = os.path.join(self.base_data_path, "fp_archive")
+
+        # Construct default met_datadir if not passed
+        if met_datadir is None:
+            met_datadir = os.path.join(self.base_data_path, "met_archive")
+
         #### load footprint (fp) data    
         if verbose: print("---- LOADING FOOTPRINTS") 
         self._load_footprints(fp_datadir)
@@ -410,7 +433,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         self.met_processed = False
 
         if load_everything:
-            self.met_file = self.load_meteorology(**met_args,lazy_load=lazy_load)
+            self.met_file = self.load_meteorology(**met_args, met_datadir=met_datadir, lazy_load=lazy_load)
             self.met = self._process_meteorology(lazy_load=True)
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)
             self.topog = self._process_topog_and_landcover()
