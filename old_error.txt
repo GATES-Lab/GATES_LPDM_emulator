@@ -1,0 +1,14 @@
+cpu-bind=MASK - bp1-gpu040, task  0  0 [1659312]: mask 0x2000000020000 set
+/tmp/slurmd/job13000898/slurm_script: line 13: cd: user/work/yl18410/new_graphnet/graphnet_LPDM_emulator: No such file or directory
+activate env
+wandb: Currently logged in as: nerdk312. Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.21.0 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.16.6
+wandb: Run data is saved locally in /user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/wandb/run-20250708_174220-6n6g2m5o
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run num_classes-4_baselines-False_normalization-all_trainyear-2015_trainfreq-5_epochs-100_lr-5e-05_seed-31_date-Jul-08-2025
+wandb: ⭐️ View project at https://wandb.ai/nerdk312/BoundaryCondition-Prediction
+wandb: 🚀 View run at https://wandb.ai/nerdk312/BoundaryCondition-Prediction/runs/6n6g2m5o
+/tmp/slurmd/job13000898/slurm_script: line 24: 1659340 Segmentation fault      (core dumped) python Run/run_bc_prediction.py
+boxcox trained

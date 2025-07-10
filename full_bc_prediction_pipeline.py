@@ -40,6 +40,7 @@ from datetime import date
 import wandb
 
 # Set your W&B API key to log in automatically
+os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<-- REPLACE THIS
 wandb.login()
 
 
