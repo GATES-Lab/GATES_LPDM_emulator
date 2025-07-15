@@ -624,7 +624,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         valid_times = (
         (self.fp_data_full.release_lat.values >= lat_min) & (self.fp_data_full.release_lat.values <= lat_max) &
         (self.fp_data_full.release_lon.values >= lon_min) & (self.fp_data_full.release_lon.values <= lon_max))
-        
+        #import ipdb; ipdb.set_trace()
         self.fp_data_full = self.fp_data_full.sel(time=self.fp_data_full.time[valid_times])
 
         if self.verbose and np.sum(valid_times)<len(valid_times): print(f"keeping only the {np.sum(valid_times)} footprints where the release point is within the defined domain")
