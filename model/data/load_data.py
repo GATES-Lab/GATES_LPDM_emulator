@@ -37,7 +37,7 @@ def load_fps(fp_datadir, verbose=False):
         time_chunk = 25
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             # attempt to load dataset of multiple files the standard way
-            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}) as ds:
+            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, parallel=True) as ds:
                 fp_data_full = ds.copy()
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
@@ -100,6 +100,18 @@ def load_fps(fp_datadir, verbose=False):
     return fp_data_full
 
 
+def remove_duplicates(ds, dim="longitude"):
+    """
+    Remove duplicate values along a specified dimension in an xarray Dataset.
+    
+    Parameters:
+    - ds: xarray Dataset
+    - dim: Dimension along which to check for duplicates (default is "longitude")
+    
+    Returns:
+    - xarray Dataset with duplicates removed
+    """
+    return ds.drop_duplicates(dim)
 
 
 class LoadBaseSatelliteData:
@@ -237,7 +249,7 @@ class LoadBaseSatelliteData:
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}) as met_file:
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=remove_duplicates) as met_file:
 
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
