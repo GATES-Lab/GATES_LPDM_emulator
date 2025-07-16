@@ -253,8 +253,19 @@ class LoadBaseSatelliteData:
         # each chunk should have around 1mill values,  - chunk per level and by time, rounded to the nearest hundred, 100MB-1GB
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
-        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, engine="h5netcdf", ) as met_file:
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):           
+            with xr.open_mfdataset(
+                sorted(glob.glob(met_datadir)),
+                combine='by_coords',
+                data_vars="all",        # ← treat everything as data vars
+                coords="minimal",
+                parallel=True,
+                join="inner",
+                chunks={"level": 1, "time": time_chunk},
+                engine="h5netcdf"
+            ) as met_file:
+
+
 
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
@@ -305,7 +316,8 @@ class LoadBaseSatelliteData:
         
         elif freq>1 and sampling_mode=="random":
             print(f"reduced the number of datapoints by frequency {freq}, chosen at random")
-            self.fp_data_full = self.fp_data_full.sel(time=np.random.choice(self.fp_data_full.time.values, size=np.shape(self.fp_data_full.time.values[::freq]), replace=False))
+            rng = np.random.default_rng(seed=34)
+            self.fp_data_full = self.fp_data_full.sel(time=rng.choice(self.fp_data_full.time.values, size=np.shape(self.fp_data_full.time.values[::freq]), replace=False))
         else:
             if self.verbose: print("no sampling was done because you didnt pass a valid sampling mode, or freq=1")
 

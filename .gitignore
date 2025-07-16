@@ -1,0 +1,4 @@
+/parameter_files/
+/model/layers/__pycache__
+/model/data/__pycache__
+/logs
