@@ -232,7 +232,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     train_dataset = BoundaryDataset(inputs,baseline_list,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
     deterministic_train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=False)
-    test_dataset = BoundaryDataset(test_inputs,test_baseline_list,test_outputs,use_baselines= use_baselines,input_names=names, **parameters["dataloader_parameters"])
+    test_dataset = BoundaryDataset(test_inputs,test_baseline_list,test_outputs,use_baselines= use_baselines,input_names=names,test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
     test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
 
     #aux_dim = len(input_variables["static_variables"]) 

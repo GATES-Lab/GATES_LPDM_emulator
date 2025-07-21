@@ -665,7 +665,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     train_dataset = BoundaryDataset(inputs,baseline_list,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
     deterministic_train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=False)
-    test_dataset = BoundaryDataset(test_inputs,test_baseline_list,test_outputs,use_baselines= use_baselines,input_names=names, **parameters["dataloader_parameters"])
+    test_dataset = BoundaryDataset(test_inputs,test_baseline_list,test_outputs,use_baselines= use_baselines,input_names=names,test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
     test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
 
     #aux_dim = len(input_variables["static_variables"]) 
@@ -941,6 +941,8 @@ def baseline_mol_updated(desired_data,months,years):
     #months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     #year = 2016
     datetime_array = np.array(desired_data.fp_data_full.particle_locations_n.time)
+    specific_years = np.array([np.datetime64(date, 'Y').astype(int) + 1970 for date in datetime_array])
+    specific_months = np.array([np.datetime64(date, 'M').astype(int) % 12 + 1 for date in datetime_array])
 
     total_data_points = desired_data.fp_data_full.particle_locations_n.time.shape[-1]
     north_list = np.zeros(total_data_points) # Creates a list of size N with None values
@@ -957,8 +959,7 @@ def baseline_mol_updated(desired_data,months,years):
                 cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion.nc")    
             # Extract year and month
             #import ipdb; ipdb.set_trace()
-            years = np.array([np.datetime64(date, 'Y').astype(int) + 1970 for date in datetime_array])
-            months = np.array([np.datetime64(date, 'M').astype(int) % 12 + 1 for date in datetime_array])
+            
 
             # Desired year and month
             #desired_year = 2016
@@ -970,7 +971,7 @@ def baseline_mol_updated(desired_data,months,years):
             coarse_cams  = cams.coarsen(lon=desired_data.coarsening_factor, lat=desired_data.coarsening_factor, boundary="pad").mean()
             '''
             # Find the index of the first occurrence
-            indices = np.where((years == desired_year) & (months == int(desired_month)))[0]
+            indices = np.where((specific_years == desired_year) & (specific_months == int(desired_month)))[0]
             print(indices)
             if len(indices)>0:
                 # Get the inputs

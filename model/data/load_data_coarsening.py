@@ -655,6 +655,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         if hasattr(self, "landcover_file"):
             self.landcover_file = self.landcover_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
     '''
+    '''
     def _slice_to_domain(self, domain_to_cut, downsample_factor=2):
         # slice
         lat_slice = slice(domain_to_cut["lat"][0] - 0.0001, domain_to_cut["lat"][1] + 0.0001)
@@ -685,7 +686,47 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         #import ipdb; ipdb.set_trace()
 
         #print('Hello')
+    '''
+    def _slice_to_domain(self, domain_to_cut, downsample_factor=2):
+        # Nawid - Updated version which slices and removes points which are not in the release point as well as coarsening the data
+        ## slice all arrays to the passed domain
+        self.fp_data_full = self.fp_data_full.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
 
+        # removing footprints that arent within the slice domain
+        lat_min, lat_max = self.fp_data_full.lat.min().item(), self.fp_data_full.lat.max().item()
+        lon_min, lon_max = self.fp_data_full.lon.min().item(), self.fp_data_full.lon.max().item()
+        valid_times = (
+        (self.fp_data_full.release_lat.values >= lat_min) & (self.fp_data_full.release_lat.values <= lat_max) &
+        (self.fp_data_full.release_lon.values >= lon_min) & (self.fp_data_full.release_lon.values <= lon_max))
+        
+        self.fp_data_full = self.fp_data_full.sel(time=self.fp_data_full.time[valid_times])
+
+        if self.verbose and np.sum(valid_times)<len(valid_times): print(f"keeping only the {np.sum(valid_times)} footprints where the release point is within the defined domain")
+
+        if hasattr(self, "met_file"):
+            self.met_file = self.met_file.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
+
+        if hasattr(self, "topog_file"):
+            self.topog_file = self.topog_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+
+        if hasattr(self, "landcover_file"):
+            self.landcover_file = self.landcover_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+
+        # downsample if factor > 1
+        if self.coarsening_factor > 1:
+            self.fp_data_full = self.fp_data_full.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            if hasattr(self, "met_file"):
+                self.met_file = self.met_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            
+            if hasattr(self, "topog_file"):
+                self.topog_file = self.topog_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            
+            if hasattr(self, "landcover_file"):
+                self.landcover_file = self.landcover_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+
+        #import ipdb; ipdb.set_trace()
+
+        #print('Hello')
     def _process_footprints(self):
         self.fp_data = self.fp_data_full.fp.transpose("time","lat", "lon").values
         self.fp_data = np.reshape(self.fp_data, (self.fp_data_full.time.size, self.fp_data_full.lat.size*self.fp_data_full.lon.size))

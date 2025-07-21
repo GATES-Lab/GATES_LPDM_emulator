@@ -1586,3 +1586,106 @@ def grid_coordinates(side):
     z[:, 0] = yy.reshape(side**2)
     return z
 """
+
+
+
+
+import torch
+from torch.utils.data import Dataset
+import xarray as xr
+import numpy as np
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+class _CleverTransform3XR:
+    """
+    Applies StandardScaler per variable/level combo,
+    and MinMaxScaler to land_cover variables.
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.transformers = {}
+        self.vars_to_ignore = {"sin_time_year", "cos_time_year"}
+
+        if self.parent.mode == "test":
+            self.transformers = self.parent.test_mode["clever_transform_3"]["transformers"]
+
+    def transform(self):
+        transformed_data = []
+        variable_names = self.parent.inputs.coords["variable_name"].values
+
+        for name_tuple in variable_names:
+            varname = name_tuple[0]
+
+            # Skip ignored variables
+            if varname in self.vars_to_ignore:
+                da = self.parent.inputs.sel(variable_name=name_tuple)
+                transformed_data.append(da)
+                continue
+
+            # Select variable-level slice
+            da = self.parent.inputs.sel(variable_name=name_tuple)
+            flat_data = da.values.reshape(-1, 1)
+
+            # Choose scaler
+            if "land_cover" in varname:
+                scaler = MinMaxScaler()
+            else:
+                scaler = StandardScaler()
+
+            if self.parent.mode == "train":
+                scaler.fit(flat_data)
+                self.transformers[name_tuple] = scaler
+            else:
+                scaler = self.transformers[name_tuple]
+
+            scaled = scaler.transform(flat_data).reshape(da.shape)
+            scaled_da = xr.DataArray(
+                scaled,
+                dims=da.dims,
+                coords=da.coords,
+                name="transformed"
+            )
+            transformed_data.append(scaled_da)
+
+        # Concatenate all scaled variables along the 'variable_name' dimension
+        self.parent.inputs = xr.concat(transformed_data, dim="variable_name")
+        self.parent.transform_parameters["clever_transform_3"] = {"transformers": self.transformers}
+
+
+class BoundaryDatasetXR(Dataset):
+    def __init__(self, inputs, outputs, input_transforms=None,
+                 transform_parameters=None, test_mode=None, input_names=None):
+
+        self.inputs = inputs
+        self.outputs = outputs
+        self.input_names = input_names or []
+        self.mode = "test" if test_mode else "train"
+        self.test_mode = test_mode
+        self.input_transforms = input_transforms or []
+        self.transform_parameters = transform_parameters or {}
+
+        # Map transform names to implementations
+        self.valid_input_transforms = {
+            "clever_transform_3": {"fun": _CleverTransform3XR}
+        }
+
+        # Run requested input transforms
+        for transform in self.input_transforms:
+            transform_instance = self.valid_input_transforms[transform]["fun"](self)
+            self.input_transforms[self.input_transforms.index(transform)] = transform_instance
+            transform_instance.transform()
+
+        # Ensure consistent dim order
+        self.inputs = self.inputs.transpose("fp_time", "lat", "lon", "variable_name")
+        #self.outputs = self.outputs.transpose("fp_time", ...)
+
+    def __len__(self):
+        return self.inputs.sizes["fp_time"]
+
+    def __getitem__(self, idx):
+        # Use lazy slicing and convert to torch.Tensor
+        x = self.inputs.isel(fp_time=idx).values.astype(np.float32)
+        #y = self.outputs.isel(fp_time=idx).values.astype(np.float32)
+
+        return torch.from_numpy(x)#, torch.from_numpy(y)

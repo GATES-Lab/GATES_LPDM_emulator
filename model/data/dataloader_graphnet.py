@@ -409,10 +409,16 @@ class BoundaryDataset(Dataset):
 
         if type(self.inputs) != torch.Tensor:
             self.inputs = torch.tensor(self.inputs, dtype=torch.float)
+            #self.inputs = torch.tensor(self.inputs, dtype=torch.float,requires_grad=False)
+            # requires grad or false
+            #self.inputs.requires_grad = False;
         
         if type(self.outputs) != torch.Tensor:
             self.outputs = torch.tensor(self.outputs, dtype=torch.float)
-                                        
+
+            #self.outputs = torch.tensor(self.outputs, dtype=torch.float,requires_grad=False)
+        
+    
     def inverse_transform(self, predictions, return_transformed=True):
         self.predictions=predictions
         if type(self.predictions) == torch.Tensor:
