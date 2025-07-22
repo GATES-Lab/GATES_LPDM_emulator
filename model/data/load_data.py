@@ -37,7 +37,7 @@ def load_fps(fp_datadir, verbose=False):
         time_chunk = 25
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             # attempt to load dataset of multiple files the standard way
-            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}) as ds:
+            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, parallel=True) as ds:
                 fp_data_full = ds.copy()
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
@@ -100,6 +100,18 @@ def load_fps(fp_datadir, verbose=False):
     return fp_data_full
 
 
+def remove_duplicates(ds, dim="longitude"):
+    """
+    Remove duplicate values along a specified dimension in an xarray Dataset.
+    
+    Parameters:
+    - ds: xarray Dataset
+    - dim: Dimension along which to check for duplicates (default is "longitude")
+    
+    Returns:
+    - xarray Dataset with duplicates removed
+    """
+    return ds.drop_duplicates(dim)
 
 
 class LoadBaseSatelliteData:
@@ -237,7 +249,7 @@ class LoadBaseSatelliteData:
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}) as met_file:
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=remove_duplicates) as met_file:
 
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
@@ -368,7 +380,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}):
 
         self.dataset_format = "square" 
         #### check domains
@@ -565,8 +577,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         self.dataset_format = "domain"
 
         if verbose: print("-----CROPPING TO A FIXED DOMAIN")
-        
-        self.locs = self.fp_data_full[["particle_locations_n", "particle_locations_s",  "particle_locations_e",  "particle_locations_w"]].copy()
+
         # calculate the max possible domain, given by the footprint and the met files
         lats = [np.max([self.fp_data_full.lat.values[0], self.met_file.lat.values[0]]), np.min([self.fp_data_full.lat.values[-1], self.met_file.lat.values[-1]])]
         lons = [np.max([self.fp_data_full.lon.values[0], self.met_file.lon.values[0]]), np.min([self.fp_data_full.lon.values[-1], self.met_file.lon.values[-1]])]
@@ -624,7 +635,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         valid_times = (
         (self.fp_data_full.release_lat.values >= lat_min) & (self.fp_data_full.release_lat.values <= lat_max) &
         (self.fp_data_full.release_lon.values >= lon_min) & (self.fp_data_full.release_lon.values <= lon_max))
-        #import ipdb; ipdb.set_trace()
+        
         self.fp_data_full = self.fp_data_full.sel(time=self.fp_data_full.time[valid_times])
 
         if self.verbose and np.sum(valid_times)<len(valid_times): print(f"keeping only the {np.sum(valid_times)} footprints where the release point is within the defined domain")
@@ -720,7 +731,7 @@ class LoadSquareSiteData(LoadSquareSatelliteData):
         else:
             self.domain=domain
 
-        super().__init__(year=year, month=month, region=site, freq=freq, domain=self.domain, size=size, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
+        super().__init__(year=year, month=month, region=site, freq=freq, domain=self.domain, size=size, fp_datadir=fp_datadir, freq_offset=freq_offset, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
 
         self.data_type="site"
 
@@ -1589,7 +1600,6 @@ def grid_coordinates(side):
 
 
 
-
 import torch
 from torch.utils.data import Dataset
 import xarray as xr
@@ -1689,3 +1699,5 @@ class BoundaryDatasetXR(Dataset):
         #y = self.outputs.isel(fp_time=idx).values.astype(np.float32)
 
         return torch.from_numpy(x)#, torch.from_numpy(y)
+
+

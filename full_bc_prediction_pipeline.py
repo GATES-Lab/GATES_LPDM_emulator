@@ -600,7 +600,6 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     print(train_load_data)
     print(test_load_data)
     
-    
     if "size" in (parameters["train_load_data"].keys()):
         print('Using square domain')
         data = LoadSquareSatelliteData(**train_load_data)
@@ -726,6 +725,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     train_out = np.zeros((train_dataset.inputs.size()[0], num_classes))
     for epoch in range(num_epochs):
         epoch=epoch+epoch_so_far
+        '''
         # Skip reloading on first interval (i.e., epoch 0)
         if epoch != 0 and epoch % interval == 0:
             print(f"🔄 Reloading training data at epoch {epoch} with offset {offset}")
@@ -748,7 +748,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
             train_batch_size
         )
         offset += 1  # Move to next chunk next time
-        
+        '''
         running_loss = 0.0
         #individual_mol_train_errors = np.zeros(output_num)
         
