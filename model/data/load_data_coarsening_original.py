@@ -1,10 +1,3 @@
-"""
-Data loading functions, loading footprints, meteorology and topography data.
-Can be fed into the GATES model as a dataset, or used for other models
-
-author: Elena Fillola @elenafillo
-"""
-
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -37,7 +30,7 @@ def load_fps(fp_datadir, verbose=False):
         time_chunk = 25
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             # attempt to load dataset of multiple files the standard way
-            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, parallel=True) as ds:
+            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}) as ds:
                 fp_data_full = ds.copy()
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
@@ -100,18 +93,6 @@ def load_fps(fp_datadir, verbose=False):
     return fp_data_full
 
 
-def remove_duplicates(ds, dim="longitude"):
-    """
-    Remove duplicate values along a specified dimension in an xarray Dataset.
-    
-    Parameters:
-    - ds: xarray Dataset
-    - dim: Dimension along which to check for duplicates (default is "longitude")
-    
-    Returns:
-    - xarray Dataset with duplicates removed
-    """
-    return ds.drop_duplicates(dim)
 
 
 class LoadBaseSatelliteData:
@@ -169,7 +150,6 @@ class LoadBaseSatelliteData:
         self.met_processed = False
         
         self.padding=None
-
         if load_everything:
             self.met_file = self.load_meteorology(**met_args)
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)
@@ -249,7 +229,7 @@ class LoadBaseSatelliteData:
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=remove_duplicates) as met_file:
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)), combine='by_coords', data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}) as met_file:
 
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
@@ -280,7 +260,7 @@ class LoadBaseSatelliteData:
         if self.verbose: print("Loading footprint data from " + fp_datadir) 
 
         self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose)  
-        print('footprints loaded')
+
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
 
         ## reduce data frequency with regular sampling 9eg keep only 1 in every 3 timesteps
@@ -380,7 +360,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=True, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={},coarsening_factor=1):
 
         self.dataset_format = "square" 
         #### check domains
@@ -389,7 +369,8 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.domain = self._get_domain(region)
         else:
             self.domain=domain
-
+        self.coarsening_factor = coarsening_factor
+        
         self.size = size
 
         self.fill_outofdomain_with = fill_outofdomain_with
@@ -409,6 +390,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         #### load footprint (fp) data    
         if verbose: print("---- LOADING FOOTPRINTS") 
         self._load_footprints(fp_datadir)
+        self.locs = self.fp_data_full[["particle_locations_n", "particle_locations_s",  "particle_locations_e",  "particle_locations_w"]].copy()
         self._process_footprints(lazy_load)
 
         self.met_args = met_args
@@ -418,8 +400,9 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met_file = self.load_meteorology(**met_args,lazy_load=lazy_load)
             self.met = self._process_meteorology(lazy_load=True)
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)
+            '''
             self.topog = self._process_topog_and_landcover()
-
+            '''
         if check_for_nans:
             print("\n Checking if there are any nans in the data")
             self._remove_fp_nans()
@@ -433,7 +416,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         fp data returned is array of shape (time, size*size) with each footprint centered around its release point
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load,coarsening_factor = self.coarsening_factor) 
 
         # if self.fill_outofdomain_with == "all_nans":
             # remove here all indeces from self.idxs_out_of_domain! so we only keep the footprints that were fully inside the domain
@@ -552,12 +535,17 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         # check if any of the met entries are nans, and if so remove from all objects
         # this shouldnt be hardcoded !!
         # needs a revision
+        '''
+        if np.sum(np.isnan(self.met[list(self.met.data_vars)[0]].values)) != 0:
+            nan_idxs = np.unique(np.where(np.isnan(self.met[list(self.met.data_vars)[0]].values[0,0,0,:])))
+            print(f"There are {len(nan_idxs)} nans in the met data. finding and deleting from met and fp (only on axis time)")
+        ''' 
         if np.sum(np.isnan(self.met[[list(self.met.data_vars)[0]]].values)) != 0:
             nan_idxs = np.unique(np.where(np.isnan(self.met[[list(self.met.data_vars)[0]]].values[0,0,0,:])))
             print(f"There are {len(nan_idxs)} nans in the met data. finding and deleting from met and fp (only on axis time)")
             
             self.remove_indeces(nan_idxs)
-            self.met_nan_idxs = nan_idxs
+            self.met_nan_idxs = nan_idxs       
         else:
             self.met_nan_idxs=[]
 
@@ -569,7 +557,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
 
     all other inputs are the same
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, domain_to_cut=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, domain_to_cut=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, met_args={}, topog_args={},coarsening_factor=1):
         
         ## INITIALISE THE BASE OBJECT, TO LOAD THE FOOTPRINTS
         super().__init__(year, region, month=month, domain=domain, freq=freq, freq_offset=freq_offset, verbose=verbose, sampling_mode=sampling_mode, fp_datadir=fp_datadir, load_everything=True, met_args=met_args, topog_args=topog_args)
@@ -577,6 +565,23 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
         self.dataset_format = "domain"
 
         if verbose: print("-----CROPPING TO A FIXED DOMAIN")
+
+        '''
+        #.Nawid- Coarsening the values for the approach
+        resolution = 2
+        if resolution> 1:
+            self.fp_data_full = self.fp_data_full.sel(lat=self.fp_data_full.lat.values[::resolution], lon=self.fp_data_full.lon.values[::resolution])
+        '''
+        # Used to make it so that I can use the values
+        self.coarsening_factor = coarsening_factor
+        self.locs = self.fp_data_full[["particle_locations_n", "particle_locations_s",  "particle_locations_e",  "particle_locations_w"]].copy()
+
+        # the particle locations need to add up to one
+        # so we need to coarsen taking the sum, to maintain this! 
+        '''
+        if self.coarsening_factor>1:
+            self.locs = self.locs.coarsen(lon=self.coarsening_factor, lat=self.coarsening_factor, boundary="pad").sum()
+        '''
 
         # calculate the max possible domain, given by the footprint and the met files
         lats = [np.max([self.fp_data_full.lat.values[0], self.met_file.lat.values[0]]), np.min([self.fp_data_full.lat.values[-1], self.met_file.lat.values[-1]])]
@@ -624,7 +629,7 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
             print(f"the domain you passed is bigger than the domain of the data in at least one direction. cropping to {rounded_dom}")
 
         return self.domain_to_cut
-
+    '''
     def _slice_to_domain(self, domain_to_cut):
         ## slice all arrays to the passed domain
         self.fp_data_full = self.fp_data_full.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
@@ -649,7 +654,79 @@ class LoadDomainSatelliteData(LoadBaseSatelliteData):
 
         if hasattr(self, "landcover_file"):
             self.landcover_file = self.landcover_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+    '''
+    '''
+    def _slice_to_domain(self, domain_to_cut, downsample_factor=2):
+        # slice
+        lat_slice = slice(domain_to_cut["lat"][0] - 0.0001, domain_to_cut["lat"][1] + 0.0001)
+        lon_slice = slice(domain_to_cut["lon"][0] - 0.0001, domain_to_cut["lon"][1] + 0.0001)
+        self.fp_data_full = self.fp_data_full.sel(lat=lat_slice, lon=lon_slice)
 
+        if hasattr(self, "met_file"):
+            self.met_file = self.met_file.sel(lat=lat_slice, lon=lon_slice)
+        
+        if hasattr(self, "topog_file"):
+            self.topog_file = self.topog_file.sel(lat=lat_slice, lon=lon_slice)
+
+        if hasattr(self, "landcover_file"):
+            self.landcover_file = self.landcover_file.sel(lat=lat_slice, lon=lon_slice)
+
+        # downsample if factor > 1
+        if self.coarsening_factor > 1:
+            self.fp_data_full = self.fp_data_full.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            if hasattr(self, "met_file"):
+                self.met_file = self.met_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            
+            if hasattr(self, "topog_file"):
+                self.topog_file = self.topog_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            
+            if hasattr(self, "landcover_file"):
+                self.landcover_file = self.landcover_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+
+        #import ipdb; ipdb.set_trace()
+
+        #print('Hello')
+    '''
+    def _slice_to_domain(self, domain_to_cut, downsample_factor=2):
+        # Nawid - Updated version which slices and removes points which are not in the release point as well as coarsening the data
+        ## slice all arrays to the passed domain
+        self.fp_data_full = self.fp_data_full.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
+
+        # removing footprints that arent within the slice domain
+        lat_min, lat_max = self.fp_data_full.lat.min().item(), self.fp_data_full.lat.max().item()
+        lon_min, lon_max = self.fp_data_full.lon.min().item(), self.fp_data_full.lon.max().item()
+        valid_times = (
+        (self.fp_data_full.release_lat.values >= lat_min) & (self.fp_data_full.release_lat.values <= lat_max) &
+        (self.fp_data_full.release_lon.values >= lon_min) & (self.fp_data_full.release_lon.values <= lon_max))
+        
+        self.fp_data_full = self.fp_data_full.sel(time=self.fp_data_full.time[valid_times])
+
+        if self.verbose and np.sum(valid_times)<len(valid_times): print(f"keeping only the {np.sum(valid_times)} footprints where the release point is within the defined domain")
+
+        if hasattr(self, "met_file"):
+            self.met_file = self.met_file.sel(lat=slice(domain_to_cut["lat"][0]-0.0001, domain_to_cut["lat"][1]+0.0001), lon=slice(domain_to_cut["lon"][0]-0.0001, domain_to_cut["lon"][1]+0.0001))
+
+        if hasattr(self, "topog_file"):
+            self.topog_file = self.topog_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+
+        if hasattr(self, "landcover_file"):
+            self.landcover_file = self.landcover_file.sel(lat=slice(domain_to_cut["lat"][0], domain_to_cut["lat"][1]), lon=slice(domain_to_cut["lon"][0], domain_to_cut["lon"][1]))
+
+        # downsample if factor > 1
+        if self.coarsening_factor > 1:
+            self.fp_data_full = self.fp_data_full.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            if hasattr(self, "met_file"):
+                self.met_file = self.met_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            
+            if hasattr(self, "topog_file"):
+                self.topog_file = self.topog_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+            
+            if hasattr(self, "landcover_file"):
+                self.landcover_file = self.landcover_file.coarsen(lat=self.coarsening_factor, lon=self.coarsening_factor, boundary="trim").mean()
+
+        #import ipdb; ipdb.set_trace()
+
+        #print('Hello')
     def _process_footprints(self):
         self.fp_data = self.fp_data_full.fp.transpose("time","lat", "lon").values
         self.fp_data = np.reshape(self.fp_data, (self.fp_data_full.time.size, self.fp_data_full.lat.size*self.fp_data_full.lon.size))
@@ -731,7 +808,7 @@ class LoadSquareSiteData(LoadSquareSatelliteData):
         else:
             self.domain=domain
 
-        super().__init__(year=year, month=month, region=site, freq=freq, domain=self.domain, size=size, fp_datadir=fp_datadir, freq_offset=freq_offset, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
+        super().__init__(year=year, month=month, region=site, freq=freq, domain=self.domain, size=size, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args, verbose=verbose, load_everything=True)
 
         self.data_type="site"
 
@@ -739,8 +816,6 @@ class LoadSquareSiteData(LoadSquareSatelliteData):
         # self.release_coords = [site_lat, site_lon]
         self.release_coords = [self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lat.values, self.fp_data_full.sel(time=self.fp_data_full.time.values[0]).release_lon.values]
 
-        self.site_fp_lats = self.fp_lats[0]
-        self.site_fp_lons = self.fp_lons[0]
 
     def _get_release_idxs(self):
         idx_release_lat = np.argmin(abs(self.fp_data_full.lat.values - self.release_coords[0]))
@@ -951,7 +1026,7 @@ def cut_emissions_data(flux, fp_full, size):
     return flux_cut
 
 
-def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True, fill_latlons=True, return_everything=False):
+def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True, fill_latlons=True, return_everything=False,coarsening_factor =1):
     """
     cuts footprint to square of size "size" around release point and returns as a netcdf with artificial lat-lon coordinates 0-size
 
@@ -1063,10 +1138,33 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
         # copy the latitude/longitude values for this specific cropped square
         lats = cutfp.lat.values.copy()
         lons = cutfp.lon.values.copy()
+
+        if coarsening_factor > 1:
+            cutfp = cutfp.coarsen(lat=coarsening_factor, lon=coarsening_factor, boundary="trim").mean()
+        # Note: this will change the size of the footprint from size x size to (size/downsample_factor) x (size/downsample_factor)
+        coords_array = np.arange(cutfp.sizes["lat"])  # update artificial coordinates
         #print(cutfp.fp)
         # store them as variables to use as inputs and assign artificial coordinates
-        cutfp = cutfp.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), lats), "lon_coords":(("lon"), lons)})
+        # Coarsen lat/lon coordinate values to match the coarsened grid shape
 
+
+        # PART ADDED FROM CHAT GPT
+        # These should be the original lat/lon coordinate arrays from before coarsening
+        lats_coarse = lats[:cutfp.sizes["lat"] * coarsening_factor].reshape(-1, coarsening_factor).mean(axis=1)
+        lons_coarse = lons[:cutfp.sizes["lon"] * coarsening_factor].reshape(-1, coarsening_factor).mean(axis=1)
+
+        # Artificial grid coordinate indexing
+        coords_array = np.arange(cutfp.sizes["lat"])
+
+        # Assign artificial grid coordinates and coarsened spatial coordinates
+        cutfp = cutfp.assign_coords({"lat": coords_array, "lon": coords_array})
+        cutfp = cutfp.assign({
+            "lat_coords": (("lat"), lats_coarse),
+            "lon_coords": (("lon"), lons_coarse)
+})      
+        '''
+        cutfp = cutfp.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), lats), "lon_coords":(("lon"), lons)})
+        '''
         cropped_arrays.append(cutfp)
 
     # concatenate all of the cropped arrays
@@ -1083,9 +1181,14 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
             return cropped_fp, release_idxs, padding
         else:
             return cropped_fp
+        
     if return_as=="array":
         fp_data = cropped_fp.fp.transpose("time","lat", "lon").values
+        '''
         fp_data = np.reshape(fp_data, (len(cropped_fp.time), size**2))
+        '''
+        new_size = cropped_fp.sizes["lat"]
+        fp_data = np.reshape(fp_data, (len(cropped_fp.time), new_size**2))
 
         if return_everything:
             fp_lats = cropped_fp.lat_coords.values
@@ -1099,9 +1202,14 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
     met = select_met_levels(met, levels=relevant_levels)
 
     met = select_met_variables(met, variables=relevant_variables)  
-
+    
     fp_times = np.copy(fp.time.values)
-
+    '''
+    # Nawid - added this part of the code to lead to coarsening of the data
+    resolution =2
+    if resolution>1:
+        met = met.sel(lat=met.lat.values[::resolution], lon=met.lon.values[::resolution])
+    '''
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
 
     if time_delta==0:
@@ -1124,7 +1232,7 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
     delta_lat_fp = fp.lat.values[1]-fp.lat.values[0]
     delta_lon = domain_lons[1]-domain_lons[0]
     delta_lon_fp = fp.lon.values[1]-fp.lon.values[0]
-
+    #import ipdb; ipdb.set_trace()
     if abs(delta_lat - delta_lat_fp) > 0.01 or abs(delta_lon - delta_lon_fp)>0.01:
         print("the resolution is different! this doesnt work yet?")    
 
@@ -1200,6 +1308,8 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
 
 
+
+
     domain_lats = np.copy(met.lat.values)
     domain_lons = np.copy(met.lon.values)
 
@@ -1213,6 +1323,57 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     
     #met = self.met.interp({"lat":self.domain_lats, "lon":self.domain_lons})
 
+    '''
+    # Orignal valeus of domain lat
+    domain_lats = np.copy(met.lat.values)
+    domain_lons = np.copy(met.lon.values)
+
+
+    # Get spatial resolution of met and fp
+    delta_lat = np.abs(domain_lats[1] - domain_lats[0])
+    delta_lat_fp = np.abs(fp.lat.values[1] - fp.lat.values[0])
+    delta_lon = np.abs(domain_lons[1] - domain_lons[0])
+    delta_lon_fp = np.abs(fp.lon.values[1] - fp.lon.values[0])
+    # ADDED FROM CHATGPT
+    # If resolution mismatch is significant, downsample met
+    tol = 1e-4  # tolerance for float comparison
+    if abs(delta_lat - delta_lat_fp) > tol or abs(delta_lon - delta_lon_fp) > tol:
+        print(f"[INFO] Detected resolution mismatch:")
+        print(f"       met Δlat: {delta_lat:.4f}, Δlon: {delta_lon:.4f}")
+        print(f"       fp  Δlat: {delta_lat_fp:.4f}, Δlon: {delta_lon_fp:.4f}")
+        print("[INFO] Downsampling met to match fp spatial resolution...")
+
+        lat_ratio = int(round(delta_lat_fp / delta_lat))
+        lon_ratio = int(round(delta_lon_fp / delta_lon))
+
+        assert lat_ratio >= 1 and lon_ratio >= 1, "Downsampling ratio must be ≥1"
+
+        met = met.coarsen(lat=lat_ratio, lon=lon_ratio, boundary="trim").mean()
+
+        # Recompute updated lat/lon arrays after downsampling
+        domain_lats = np.copy(met.lat.values)
+        domain_lons = np.copy(met.lon.values)
+
+        delta_lat = domain_lats[1] - domain_lats[0]
+        delta_lon = domain_lons[1] - domain_lons[0]
+
+        print(f"[INFO] Downsampled met resolution: Δlat = {delta_lat:.4f}, Δlon = {delta_lon:.4f}")
+    '''
+    
+    '''
+    domain_lats = np.copy(met.lat.values)
+    domain_lons = np.copy(met.lon.values)
+
+    delta_lat = domain_lats[1]-domain_lats[0]
+    delta_lat_fp = fp.lat.values[1]-fp.lat.values[0]
+    delta_lon = domain_lons[1]-domain_lons[0]
+    delta_lon_fp = fp.lon.values[1]-fp.lon.values[0]
+
+    if abs(delta_lat - delta_lat_fp) > 0.01 or abs(delta_lon - delta_lon_fp)>0.01:
+        print("the resolution is different! this doesnt work yet?")
+    
+    #met = self.met.interp({"lat":self.domain_lats, "lon":self.domain_lons})
+    '''
     met_release_idxs = get_release_idxs(fp, domain_lats = domain_lats, domain_lons = domain_lons)
     padding = {"lat":[0,0], "lon":[0,0]}
 
@@ -1290,14 +1451,33 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
 
         cutmet = met.sel(time=fp_times[idxs])
         cutmet = cutmet.interp({"lat":domain_lats[rel_unique[0]-half:rel_unique[0]+half], "lon":domain_lons[rel_unique[1]-half:rel_unique[1]+half]}, method="nearest")
-        # copy the latitude/longitude values for this specific cropped square
-        #lats = cutmet.lat.values.copy()
-        #lons = cutmet.lon.values.copy()
         
+        
+        
+        # copy the latitude/longitude values for this specific cropped square
+        lats = cutmet.lat.values.copy()
+        lons = cutmet.lon.values.copy()
+        coarsening_factor = 2 
+        if coarsening_factor > 1:
+            cutmet = cutmet.coarsen(lat=coarsening_factor, lon=coarsening_factor, boundary="trim").mean()
+        # Note: this will change the size of the footprint from size x size to (size/downsample_factor) x (size/downsample_factor)
+        coords_array = np.arange(cutmet.sizes["lat"])  # update artificial coordinates
+        # PART ADDED FROM CHAT GPT
+        # These should be the original lat/lon coordinate arrays from before coarsening
+        lats_coarse = lats[:cutmet.sizes["lat"] * coarsening_factor].reshape(-1, coarsening_factor).mean(axis=1)
+        lons_coarse = lons[:cutmet.sizes["lon"] * coarsening_factor].reshape(-1, coarsening_factor).mean(axis=1)
+
+        # Artificial grid coordinate indexing
+        coords_array = np.arange(cutmet.sizes["lat"])
+
+
         # replace the latitude/longitude coordinates with grid-like coords (0-metsize), and save the actual coordinates as variables
         #.rename({"latitude":"lat","longitude":"lon"})
         with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+            '''
             cutmet = cutmet.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), domain_lats[rel_unique[0]-half:rel_unique[0]+half]), "lon_coords":(("lon"), domain_lons[rel_unique[1]-half:rel_unique[1]+half])})
+            '''
+            cutmet = cutmet.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), domain_lats[rel_unique[0]-half:rel_unique[0]+half:coarsening_factor]), "lon_coords":(("lon"), domain_lons[rel_unique[1]-half:rel_unique[1]+half:coarsening_factor])})
 
         cropped_met_arrays.append(cutmet)
     # concatenate all of the cropped arrays
@@ -1405,19 +1585,29 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 #met = met.reset_coords(["time"])
                 met = met.drop_vars("time")
                 #met = met.rename({"fp_time":"time"})
-
+                '''
+                import ipdb; ipdb.set_trace()
+                print('delta = 0')
+                '''
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
                 if data.dataset_format == "square":
+                    print(met_variables_needed)
                     met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False, add_wind_direction=True)
+                    print("met", met)
                 if data.dataset_format == "domain":
                     met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, add_wind_direction=True)
 
                 met = met.swap_dims({"time":"fp_time"})
                 #met = met.reset_coords(["time"])
                 met = met.drop_vars("time")
-                
 
+                # Nawid - Added code to make it so that i can coarsen the data
+                '''
+                resolution =2
+                if resolution > 1:
+                    met = met.sel(lat=met.lat.values[::resolution], lon=met.lon.values[::resolution])
+                '''
                 
             all_met_files[delta] = met.copy()
 
@@ -1600,104 +1790,5 @@ def grid_coordinates(side):
 
 
 
-import torch
-from torch.utils.data import Dataset
-import xarray as xr
-import numpy as np
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-
-class _CleverTransform3XR:
-    """
-    Applies StandardScaler per variable/level combo,
-    and MinMaxScaler to land_cover variables.
-    """
-
-    def __init__(self, parent):
-        self.parent = parent
-        self.transformers = {}
-        self.vars_to_ignore = {"sin_time_year", "cos_time_year"}
-
-        if self.parent.mode == "test":
-            self.transformers = self.parent.test_mode["clever_transform_3"]["transformers"]
-
-    def transform(self):
-        transformed_data = []
-        variable_names = self.parent.inputs.coords["variable_name"].values
-
-        for name_tuple in variable_names:
-            varname = name_tuple[0]
-
-            # Skip ignored variables
-            if varname in self.vars_to_ignore:
-                da = self.parent.inputs.sel(variable_name=name_tuple)
-                transformed_data.append(da)
-                continue
-
-            # Select variable-level slice
-            da = self.parent.inputs.sel(variable_name=name_tuple)
-            flat_data = da.values.reshape(-1, 1)
-
-            # Choose scaler
-            if "land_cover" in varname:
-                scaler = MinMaxScaler()
-            else:
-                scaler = StandardScaler()
-
-            if self.parent.mode == "train":
-                scaler.fit(flat_data)
-                self.transformers[name_tuple] = scaler
-            else:
-                scaler = self.transformers[name_tuple]
-
-            scaled = scaler.transform(flat_data).reshape(da.shape)
-            scaled_da = xr.DataArray(
-                scaled,
-                dims=da.dims,
-                coords=da.coords,
-                name="transformed"
-            )
-            transformed_data.append(scaled_da)
-
-        # Concatenate all scaled variables along the 'variable_name' dimension
-        self.parent.inputs = xr.concat(transformed_data, dim="variable_name")
-        self.parent.transform_parameters["clever_transform_3"] = {"transformers": self.transformers}
-
-
-class BoundaryDatasetXR(Dataset):
-    def __init__(self, inputs, outputs, input_transforms=None,
-                 transform_parameters=None, test_mode=None, input_names=None):
-
-        self.inputs = inputs
-        self.outputs = outputs
-        self.input_names = input_names or []
-        self.mode = "test" if test_mode else "train"
-        self.test_mode = test_mode
-        self.input_transforms = input_transforms or []
-        self.transform_parameters = transform_parameters or {}
-
-        # Map transform names to implementations
-        self.valid_input_transforms = {
-            "clever_transform_3": {"fun": _CleverTransform3XR}
-        }
-
-        # Run requested input transforms
-        for transform in self.input_transforms:
-            transform_instance = self.valid_input_transforms[transform]["fun"](self)
-            self.input_transforms[self.input_transforms.index(transform)] = transform_instance
-            transform_instance.transform()
-
-        # Ensure consistent dim order
-        self.inputs = self.inputs.transpose("fp_time", "lat", "lon", "variable_name")
-        #self.outputs = self.outputs.transpose("fp_time", ...)
-
-    def __len__(self):
-        return self.inputs.sizes["fp_time"]
-
-    def __getitem__(self, idx):
-        # Use lazy slicing and convert to torch.Tensor
-        x = self.inputs.isel(fp_time=idx).values.astype(np.float32)
-        #y = self.outputs.isel(fp_time=idx).values.astype(np.float32)
-
-        return torch.from_numpy(x)#, torch.from_numpy(y)
 
 

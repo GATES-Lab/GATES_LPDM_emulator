@@ -178,7 +178,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
         data = LoadDomainSatelliteData(**train_load_data)
         test_data = LoadDomainSatelliteData(**test_load_data)
         
-        
+    
     train_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     # TODO: Nawid- get the train year and the test year from the trainload data 
     train_year = parse_years(train_load_data['year'])
