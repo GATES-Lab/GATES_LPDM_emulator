@@ -249,8 +249,8 @@ class LoadBaseSatelliteData:
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=remove_duplicates) as met_file:
-
+            #with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=remove_duplicates) as met_file:
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time","level_height_0", "sigma_0"], compat="override", preprocess=remove_duplicates) as met_file:
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
                     met_file = met_file.rename({"model_level_number": "levels", "latitude":"lat", "longitude":"lon"})

@@ -6,8 +6,8 @@ from itertools import product
 hparams = {
     "model_name" : "test_run",
     "train_load_data" : {
-        "year":"2013",
-        "freq":6,
+        "year":"2014",
+        "freq":4,
         "region":"BRAZIL",
         "verbose":True,
     },
