@@ -53,7 +53,7 @@ def main():
     summary_ds.to_netcdf(save_path("uncertainty_summary_statistics.nc"))
     print("Saved uncertainty_summary_statistics.nc")
 
-    # Optional: Compare against ground truth footprints
+    # Compare against ground truth footprints
     fps = datasets[0]["fp"]
 
     # Compute absolute error
