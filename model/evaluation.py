@@ -1,3 +1,7 @@
+"""
+author: Elena Fillola @elenafillo
+"""
+
 import numpy as np
 import glob
 import torch
@@ -339,7 +343,7 @@ def get_loss(model_name, directory=None):
         # change to default directory!
         directory="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/"
     files = sorted(glob.glob(glob.escape(f"{directory}{model_name}/{model_name}_")+"*.pt"), key=getint)
-    assert len(files)>0, f"no files found for model name {model_name}"
+    assert len(files)>0, f"no files found for model name {model_name} at {directory}{model_name}/{model_name}"
     checkpoint_to_load = files[-1] 
         
     checkpoint = torch.load(checkpoint_to_load, map_location=torch.device('cpu'))

@@ -1,3 +1,7 @@
+"""
+author: Elena Fillola @elenafillo
+"""
+
 from torch.utils.data import DataLoader, Dataset
 import torch
 import numpy as np
