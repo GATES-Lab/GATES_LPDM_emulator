@@ -1103,18 +1103,16 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
     fp_times = np.copy(fp.time.values)
 
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
-
+    interp_method ="nearest"
     if time_delta==0:
         met = met.interp(time=fp_times)
         met = met.assign({"fp_time":(("time"), fp_times)})
     else:
-
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
-        met = met.interp(time=fp_times)
+        met = met.interp(time=fp_times,method=interp_method)
 
         # store the original footprint times as a separate value
         met = met.assign({"fp_time":(("time"),fp.time.values)})
-
     
 
     domain_lats = np.copy(met.lat.values)
@@ -1599,7 +1597,7 @@ def grid_coordinates(side):
 """
 
 
-
+'''
 import torch
 from torch.utils.data import Dataset
 import xarray as xr
@@ -1689,6 +1687,8 @@ class BoundaryDatasetXR(Dataset):
         # Ensure consistent dim order
         self.inputs = self.inputs.transpose("fp_time", "lat", "lon", "variable_name")
         #self.outputs = self.outputs.transpose("fp_time", ...)
+        if type(self.outputs) != torch.Tensor:
+            self.outputs = torch.tensor(self.outputs, dtype=torch.float)
 
     def __len__(self):
         return self.inputs.sizes["fp_time"]
@@ -1698,6 +1698,6 @@ class BoundaryDatasetXR(Dataset):
         x = self.inputs.isel(fp_time=idx).values.astype(np.float32)
         #y = self.outputs.isel(fp_time=idx).values.astype(np.float32)
 
-        return torch.from_numpy(x)#, torch.from_numpy(y)
-
+        return torch.from_numpy(x), self.outputs[idx,:] #, torch.from_numpy(y)
+'''
 

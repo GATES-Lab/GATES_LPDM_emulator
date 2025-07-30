@@ -167,7 +167,6 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     print(train_load_data)
     print(test_load_data)
     
-    
     if "size" in (parameters["train_load_data"].keys()):
         print('Using square domain')
         data = LoadSquareSatelliteData(**train_load_data)
@@ -178,7 +177,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
         data = LoadDomainSatelliteData(**train_load_data)
         test_data = LoadDomainSatelliteData(**test_load_data)
         
-    
+        
     train_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     # TODO: Nawid- get the train year and the test year from the trainload data 
     train_year = parse_years(train_load_data['year'])
@@ -212,9 +211,9 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
 
     input_variables = parameters["variables"]
 
-    inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
+    inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=False)
     
-    test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=True)
+    test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=False)
     
     use_baselines = parameters['use_baselines']
     if use_baselines:
@@ -228,11 +227,11 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     print(test_load_data)
     write_to_file(inference_path,model_name,"Before loading data")
     #grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
-
-    train_dataset = BoundaryDataset(inputs,baseline_list,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
+    import ipdb; ipdb.set_trace()
+    train_dataset = BoundaryDatasetXR(inputs,outputs,input_names=names, **parameters["dataloader_parameters"])
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
     deterministic_train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=False)
-    test_dataset = BoundaryDataset(test_inputs,test_baseline_list,test_outputs,use_baselines= use_baselines,input_names=names,test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
+    test_dataset = BoundaryDatasetXR(test_inputs,test_outputs,test_mode=True,input_names=names, **parameters["dataloader_parameters"])
     test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
 
     #aux_dim = len(input_variables["static_variables"]) 
@@ -293,6 +292,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     train_out = np.zeros((train_dataset.inputs.size()[0], num_classes))
     for epoch in range(num_epochs):
         epoch=epoch+epoch_so_far
+        '''
         # Skip reloading on first interval (i.e., epoch 0)
         if epoch != 0 and epoch % interval == 0:
             print(f"🔄 Reloading training data at epoch {epoch} with offset {offset}")
@@ -315,7 +315,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
             train_batch_size
         )
         offset += 1  # Move to next chunk next time
-        
+        '''
         running_loss = 0.0
         #individual_mol_train_errors = np.zeros(output_num)
         
@@ -457,6 +457,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
 
     wandb.save(data_savename)
     wandb.finish()  # 👈 End wandb session
+
 
 
 

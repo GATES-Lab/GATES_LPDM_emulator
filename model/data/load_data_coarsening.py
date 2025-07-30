@@ -1115,22 +1115,34 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
     met = select_met_levels(met, levels=relevant_levels)
 
     met = select_met_variables(met, variables=relevant_variables)  
-
+    
+    #met = met.astype("float32")
     fp_times = np.copy(fp.time.values)
 
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
-
+    interp_method = 'nearest'
     if time_delta==0:
-        met = met.interp(time=fp_times)
+        
+        met = met.chunk({"time": 10})  # Ensure lazy evaluation
+        met = met.sel(time=fp_times, method="nearest", tolerance="1H")
+        met = met.assign_coords(fp_time=("time", fp_times))
+        '''
+        met = met.interp(time=fp_times,method =interp_method)
         met = met.assign({"fp_time":(("time"), fp_times)})
+        '''
     else:
-
+        
+        met = met.chunk({"time": 10})  # Ensure lazy evaluation
+        shifted_fp_times = pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h")
+        met = met.sel(time=shifted_fp_times, method="nearest", tolerance="1H")
+        met = met.assign_coords(fp_time=("time", fp_times))
+        '''
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
-        met = met.interp(time=fp_times)
+        met = met.interp(time=fp_times,method=interp_method)
 
         # store the original footprint times as a separate value
         met = met.assign({"fp_time":(("time"),fp.time.values)})
-
+        '''
     
 
     domain_lats = np.copy(met.lat.values)
@@ -1415,6 +1427,8 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 met = data.met
                 met = select_met_levels(met, levels=min_levels_needed)
                 met = select_met_variables(met, variables=met_variables_needed)
+                
+                #met = met.astype("float32")
                 # swap the dimensions so that each dataset, no matter the time delta, is aligned along the fp_time (the time of the measurement)
                 # so that met.time = met.fp_time - met.time_delta in hours
                 met = met.swap_dims({"time":"fp_time"})
@@ -1615,7 +1629,7 @@ def grid_coordinates(side):
 """
 
 
-
+'''
 import torch
 from torch.utils.data import Dataset
 import xarray as xr
@@ -1716,5 +1730,5 @@ class BoundaryDatasetXR(Dataset):
         #y = self.outputs.isel(fp_time=idx).values.astype(np.float32)
 
         return torch.from_numpy(x)#, torch.from_numpy(y)
-
+'''
 
