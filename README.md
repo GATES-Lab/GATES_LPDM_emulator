@@ -6,14 +6,14 @@ This repo implements the model described at [add link!]
 ## To Do - restructuring and updating
 - [ ] Update data loading functions:
   - [x] Load footprints function
-  - [ ] Data loader - update, comment, update documentation
+  - [x] Data loader - update, comment, update documentation
   - [x] Add capability to cut and interpolate met directly from file, without needing to cut
   - [x] Input extracting - update, comment, udpate documentation
-  - [ ] Add plotting function to data object?
+  - [x] Add plotting function to data object? (future work)
 - [x] Update training/testing scripts to work with new data loading functions
-  - [ ] test that the new training/predicting files work as expected, with new parameter templates
-- [ ] Small improvements to model code
-- [ ] Improvements to evaluation code
+  - [x] test that the new training/predicting files work as expected, with new parameter templates
+- [x] Small improvements to model code
+- [ ] Improvements to evaluation code (future work)
 
 ## Environment - check this section! 
 
