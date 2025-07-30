@@ -111,7 +111,29 @@ def remove_duplicates(ds, dim="longitude"):
     Returns:
     - xarray Dataset with duplicates removed
     """
-    return ds.drop_duplicates(dim)
+    with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+        ds = ds.drop_duplicates(dim)
+    return ds
+
+
+def preprocess_met_data(ds, duplicate_dim="longitude"):
+    """
+    Remove duplicate values along a specified dimension in an xarray Dataset.
+    
+    Parameters:
+    - ds: xarray Dataset
+    - dim: Dimension along which to check for duplicates (default is "longitude")
+    
+    Returns:
+    - xarray Dataset with duplicates removed
+    """
+
+    ds = ds.astype("float32")
+
+    
+    ds = remove_duplicates(ds, dim=duplicate_dim)
+
+    return ds
 
 
 class LoadBaseSatelliteData:
@@ -249,7 +271,7 @@ class LoadBaseSatelliteData:
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=remove_duplicates) as met_file:
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"], compat="override", preprocess=remove_duplicates) as met_file:
 
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
@@ -1141,7 +1163,7 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
 
 
 
-def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None):
+def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None, interp_method="nearest"):
     """
     make into smaller functions!
     
@@ -1172,12 +1194,18 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     met = select_met_levels(met, levels=relevant_levels)
 
     met = select_met_variables(met, variables=relevant_variables)       
+    
+
+    first_var = list(met.data_vars)[0]
+    if met[first_var].dtype != "float32":
+        print(f"made met float32, from {met[first_var].dtype} to {met[first_var].astype('float32').dtype}")
+        met = met.astype("float32")
 
     #if verbose: print("loading data")
     
     half = int(metsize/2)
 
-    fp_times = np.copy(fp.time.values)
+    fp_times = np.copy(fp.time.values) 
 
     # interpolate the meteorology to the correct timestamps
     ###
@@ -1185,14 +1213,14 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     ###
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
 
-
+    interp_method = "nearest"
     if time_delta==0:
-        met = met.interp(time=fp_times)
+        met = met.interp(time=fp_times, method=interp_method)
         met = met.assign({"fp_time":(("time"), fp_times)})
     else:
 
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
-        met = met.interp(time=fp_times)
+        met = met.interp(time=fp_times, method=interp_method)
 
         # store the original footprint times as a separate value
         met = met.assign({"fp_time":(("time"),fp.time.values)})
@@ -1370,7 +1398,9 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
 
     assert type(met_variables) is dict, "met_variables should be a dict of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list"
 
-    if verbose: print("---Preparing met")
+    if verbose: 
+        print("------------------------")
+        print("---EXTRACTING MET DATA---")
 
     if not (0 in time_deltas):
         time_deltas.append(0) # append 0 to get present met too
@@ -1417,8 +1447,6 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 #met = met.reset_coords(["time"])
                 met = met.drop_vars("time")
                 
-
-                
             all_met_files[delta] = met.copy()
 
             del met 
@@ -1461,6 +1489,10 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
 
         stacked_levels_met = stacked_levels_met.drop_vars({'time_delta', 'variable_name', 'levels','variable'}).assign_coords({"variable_name":stacked_levels_met.variable_name.values})
 
+        if return_asarray:
+            stacked_levels_met = stacked_levels_met.chunk({"fp_time":100, "variable_name":1})
+            stacked_levels_met.load()
+
         input_arrays.append(stacked_levels_met)
         
     else:
@@ -1474,6 +1506,9 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
         stacked_surface_met = full_met[surface_variables_needed].assign_coords(levels=0).expand_dims("levels").transpose("fp_time", "lat", "lon", "levels", "time_delta").to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_surface_met")
         varnames_dict = varnames_dict + [{"var":tup[0], "time_delta":tup[2], "type":"surface_met"} for tup in stacked_surface_met.variable_name.values]
         stacked_surface_met = stacked_surface_met.drop_vars({'time_delta', 'variable_name', 'variable'}).assign_coords({"variable_name":stacked_surface_met.variable_name.values})
+
+        if return_asarray:
+            stacked_surface_met.load()
 
         input_arrays.append(stacked_surface_met)
 
@@ -1527,6 +1562,9 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
         varnames_dict = varnames_dict + [{"var":tup[0], "type":"static"} for tup in stacked_static_inputs.variable_name.values]
         stacked_static_inputs = stacked_static_inputs.drop_vars({'variable_name', 'variable'}).assign_coords({"variable_name":stacked_static_inputs.variable_name.values})
 
+        if return_asarray:
+            stacked_static_inputs.load()
+
         input_arrays.append(stacked_static_inputs)
 
     else:
@@ -1545,7 +1583,14 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             return concatenated_inputs
         
     if return_asarray:
+        concatenated_inputs = concatenated_inputs.chunk({"fp_time":100, "variable_name":1})
+
+        concatenated_inputs = concatenated_inputs.load()
+
+        print("rechunked and loaded?!")
+
         if return_variable_names:
+
             return np.reshape(concatenated_inputs.values, (concatenated_inputs.fp_time.size, concatenated_inputs.lat.size*concatenated_inputs.lon.size, concatenated_inputs.variable_name.size)), varnames_dict
         else:
             return np.reshape(concatenated_inputs.values, (concatenated_inputs.fp_time.size, concatenated_inputs.lat.size*concatenated_inputs.lon.size, concatenated_inputs.variable_name.size))
