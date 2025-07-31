@@ -1221,7 +1221,7 @@ class _CleverTransform3XR:
         self.parent.transform_parameters["clever_transform_3"] = {"transformers": self.transformers}
 
 
-class BoundaryDatasetXR(Dataset):
+class BoundaryDatasetXROriginal(Dataset):
     def __init__(self, inputs, outputs, input_transforms=None,
                  transform_parameters=None, test_mode=None, input_names=None):
 
@@ -1272,3 +1272,48 @@ class BoundaryDatasetXR(Dataset):
         return x, self.outputs[idx,:] #, torch.from_numpy(y)
 
 
+
+import torch
+from torch.utils.data import Dataset
+import xarray as xr
+import numpy as np
+
+class BoundaryDatasetXR(Dataset):
+    def __init__(self, inputs, outputs, input_transforms=None,
+                 transform_parameters=None, test_mode=None, input_names=None):
+
+        # Transpose to consistent order
+        self.inputs = inputs.transpose("fp_time", "lat", "lon", "variable_name")
+
+        # Ensure Dask is chunked optimally (safe default, tune lat/lon if needed)
+        if isinstance(self.inputs.data, xr.core.dataarray.DataArray) or hasattr(self.inputs.data, "chunks"):
+            #self.inputs = self.inputs.chunk({"fp_time": 1, "lat": 50, "lon": 50, "variable_name": -1})
+            self.inputs = self.inputs.persist()  # keep in memory across iterations
+
+        self.outputs = torch.as_tensor(outputs, dtype=torch.float32) if not isinstance(outputs, torch.Tensor) else outputs
+        self.input_names = input_names or []
+        self.mode = "test" if test_mode else "train"
+        self.test_mode = test_mode
+        self.input_transforms = input_transforms or []
+        self.transform_parameters = transform_parameters or {}
+
+        # TODO: add back transform support if needed
+        # for transform in self.input_transforms:
+        #     ...
+
+    def __len__(self):
+        return self.inputs.sizes["fp_time"]
+
+    def __getitem__(self, idx):
+        # Lazy index and load into memory only one time step
+        x_da = self.inputs.isel(fp_time=idx)
+
+        # Compute into memory; Dask will only pull 1 chunk (fp_time=1)
+        x_np = x_da.compute().astype(np.float32)
+
+        # Convert to torch tensor
+        x = torch.from_numpy(x_np)
+
+        y = self.outputs[idx]
+
+        return x, y

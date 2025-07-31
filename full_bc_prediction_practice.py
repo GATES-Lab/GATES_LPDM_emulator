@@ -227,12 +227,30 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     print(test_load_data)
     write_to_file(inference_path,model_name,"Before loading data")
     #grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
-    import ipdb; ipdb.set_trace()
+
     train_dataset = BoundaryDatasetXR(inputs,outputs,input_names=names, **parameters["dataloader_parameters"])
-    train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
+    #train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
+    train_loader = DataLoader(     train_dataset,
+    batch_size=train_batch_size,
+    shuffle=True,
+    num_workers=12,             # Tune based on CPU cores
+    pin_memory=True,           # Enables fast transfer to GPU
+    persistent_workers=True,   # Keeps worker processes alive
+    prefetch_factor=2          # Loads 2 batches ahead per worker
+)
     deterministic_train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=False)
     test_dataset = BoundaryDatasetXR(test_inputs,test_outputs,test_mode=True,input_names=names, **parameters["dataloader_parameters"])
-    test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
+    #test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
+    test_loader = DataLoader(
+    test_dataset,
+    batch_size=test_batch_size,  # Use as large as your GPU can handle
+    shuffle=False,               # Don't shuffle during evaluation
+    num_workers=4,               # Fewer workers are usually enough
+    pin_memory=True,
+    persistent_workers=False,    # No need to keep them alive after inference
+    prefetch_factor=2
+)
+    
 
     #aux_dim = len(input_variables["static_variables"]) 
     feature_dim=np.shape(inputs)[-1]
