@@ -1,0 +1,14 @@
+cff-version: 1.1.0
+authors:
+- family-names: Fillola
+  given-names: Elena
+  orcid: https://orcid.org/0000-0003-4706-9833
+- family-names: Clark
+  given-names: Jeff
+  orcid: https://orcid.org/0000-0003-0118-3999
+- family-names: Keshtmand
+  given-names: Nawid
+title: "GATES: A Graph-Neural-Network Atmospheric Transport Emulation System"
+version: v0.1.0-beta
+date-released: 2025-07-31
+url: "https://github.com/elenafillo/GATES_LPDM_emulator"
