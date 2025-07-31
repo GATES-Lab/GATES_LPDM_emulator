@@ -40,7 +40,7 @@ import random
 
 
 
-def write_to_file(message):
+def write_to_file(message, path, model_name):
     f = open(f"{path}{model_name}/{model_name}_updates.txt", "a")
     f.write(datetime.now().strftime("%d/%m/%y %H:%M:%S") + " " + message + "\n")
     f.close()
@@ -79,14 +79,14 @@ def train_and_save_model(parameters, path):
 
 
     if "seed" in (parameters.keys()):
-        print(parameters["seed"])
+        print("seed ", parameters["seed"])
         np.random.seed(parameters["seed"])
         torch.manual_seed(parameters["seed"])
         torch.cuda.manual_seed(parameters["seed"])
         random.seed(parameters["seed"])
 
     else:
-        print("34")
+        print("seed 34")
         np.random.seed(34)
         torch.manual_seed(34)
         torch.cuda.manual_seed(34)
@@ -102,9 +102,9 @@ def train_and_save_model(parameters, path):
 
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"))
+    write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"), path, model_name)
     #write_to_file("loading data")
-    write_to_file("loading data")
+    write_to_file("loading data", path, model_name)
 
     #### 2 Load Data
     train_load_data = copy.deepcopy(parameters["train_load_data"])
@@ -117,7 +117,7 @@ def train_and_save_model(parameters, path):
     data = LoadSquareSatelliteData(**train_load_data, load_everything=True)
     test_data = LoadSquareSatelliteData(**test_load_data,load_everything=True)
 
-    write_to_file("setting up data")
+    write_to_file("setting up data", path, model_name)
 
     # extract inputs
 
@@ -130,7 +130,7 @@ def train_and_save_model(parameters, path):
     # the model gets built with respect to a "reference footprint", and all predictions are done on this grid. An improvement would be to explore a way to select the best reference footrpint, or to find a way to do this dynamically for each footprint
     grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
 
-    write_to_file("setting up model")
+    write_to_file("setting up model", path, model_name)
     print("setting up model")
 
     test_batch_size=10
@@ -257,7 +257,7 @@ def train_and_save_model(parameters, path):
             losses[f"flux_{flux_mode}"]["MAE"].append(flux_metrics["MAE"])
             losses[f"flux_{flux_mode}"]["R2"].append(flux_metrics["R2"])
 
-        write_to_file(f"{epoch + 1}, loss: {running_loss/(i+1)}, test loss: {test_error/(i_test+1)}, NMAE test: {NMAE_function(test_out,truths)}, NMAE test trasformed: {evaluation_metrics['NMAE']}, MSE test transformed: {evaluation_metrics['MSE']}, IoU {evaluation_metrics['IOU']}, flux metrics (checkerboard 5): {flux_metrics}")
+        write_to_file(f"{epoch + 1}, loss: {running_loss/(i+1)}, test loss: {test_error/(i_test+1)}, NMAE test: {NMAE_function(test_out,truths)}, NMAE test trasformed: {evaluation_metrics['NMAE']}, MSE test transformed: {evaluation_metrics['MSE']}, IoU {evaluation_metrics['IOU']}, flux metrics (checkerboard 5): {flux_metrics}", path, model_name)
         
         # every five epochs plot and save 
         if epoch % 5 == 0:
