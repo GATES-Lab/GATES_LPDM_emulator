@@ -1,19 +1,13 @@
 # graphnet_LPDM_emulator
-WIP!
-This repo implements the model described at [add link!] 
+This repo implements the model described at [Enabling Fast Greenhouse Gas Emissions Inference from Satellites with GATES: a Graph-Neural-Network Atmospheric Transport Emulation System (egusphere-2025-2392)](https://egusphere.copernicus.org/preprints/2025/egusphere-2025-2392)  
 
-
-## To Do - restructuring and updating
-- [ ] Update data loading functions:
-  - [x] Load footprints function
-  - [x] Data loader - update, comment, update documentation
-  - [x] Add capability to cut and interpolate met directly from file, without needing to cut
-  - [x] Input extracting - update, comment, udpate documentation
-  - [x] Add plotting function to data object? (future work)
-- [x] Update training/testing scripts to work with new data loading functions
-  - [x] test that the new training/predicting files work as expected, with new parameter templates
-- [x] Small improvements to model code
-- [ ] Improvements to evaluation code (future work)
+## Replicating the paper
+1) Download all the necessary data
+2) Set up the environment
+3) Run launch_train.sh to train a model
+4) Run launch_emulate.sh to make predictions at 200x200 size
+5) Run integrate_fps.py file to bias correct (make sure to edit the paths at the top!)
+6) Use the ACRC repo with the bias-corrected, integrated footprints to do inversion
 
 ## Environment - check this section! 
 
