@@ -33,7 +33,7 @@ this file can probably do with some improvements!
 
 parser = argparse.ArgumentParser(description="Load parameters")
 
-parser.add_argument("--months", help="model to use to generate fps", default="all")
+parser.add_argument("--months", help="which month to load and biascorrect", default="all")
 parser.add_argument("--name_footprint_path", help="path to original NAME footprints", default=None)
 parser.add_argument("--emulated_footprints_path", help="path to folder where to save fps", default=None)
 parser.add_argument("--model_name", help="model to use to generate fps", default=None)
@@ -51,14 +51,12 @@ if name_footprint_path is None:
 emulated_footprints_path = args.emulated_footprints_path
 if emulated_footprints_path is None:
     emulated_footprints_path = "/group/chemistry/acrg/LPDM/fp_Elena/satellite_emulated_logv4/def_lc_biascorrected/SOUTHAMERICA/GOSAT-BRAZIL-column_SOUTHAMERICA_"
-    # DID YOU CREATE A SOUTHAMERICA FOLDER???
 
 model_name = args.model_name
 if model_name is None:
-    model_name = "satellite_clever2_200_[6,12]_vB_logv4_weightedbytruth_B_landcover"
-    #model_name = "satellite_clever2_200_[6,12]_vB_logv4_relu_weightedbytrutha05_B"
+    model_name = "satellite_Brazil_200x200_from_50x50"
 
-month="08"
+#month="08"
 test_year="2016"
 
 size=200
