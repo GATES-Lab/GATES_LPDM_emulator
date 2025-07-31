@@ -56,7 +56,7 @@ parser = argparse.ArgumentParser(description="Load parameters")
 parser.add_argument("file_name", help="parameter file name")
 parser.add_argument("--file_path", help="parameter file path")
 parser.add_argument("--month", help="month number", default="all")
-parser.add_argument("--grid_file", help="name id for grid file to use in the prediction", default="grid")
+parser.add_argument("--grid_file", help="name id for grid file to use in the prediction", default="auto")
 parser.add_argument("--saving_folder", help="folder to save predictions to", default="predictions")
 
 
@@ -74,7 +74,7 @@ def load_file(file_name, file_path):
     # file_path=False if no argument was passed to the parser
     if not file_path:
        # edit this to your default filepath
-       file_path ="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/" 
+       file_path ="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_newversion/" 
 
     print(f"opening {file_path}{file_name}")
     file_path = f"{file_path}{file_name}"
@@ -94,7 +94,10 @@ def load_file(file_name, file_path):
         return None
     
 # make this importable!
-path="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/"
+path="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_newversion/"
+
+if not file_path:
+    file_path = path
 
 parameters = load_file(file_name, file_path) 
 
@@ -117,9 +120,16 @@ else:
     random.seed(34)
 
 
-assert os.path.isdir(f"{path}{model_name}"), f"There should exist a folder called {path}{model_name} that contains a grid of the right size!"
-assert os.path.isfile(f"{path}{model_name}/{grid_file}_{model_name}.pickle"), f"There should exist a file with the grid of the right size, named {path}{model_name}/{grid_file}_{model_name}.pickle"
+assert os.path.isdir(f"{path}{model_name}"), f"There should exist a folder called {path}{model_name}"#that contains a grid of the right size!"
 
+if grid_file != "auto":
+    assert os.path.isfile(f"{path}{model_name}/{grid_file}_{model_name}.pickle"), f"There should exist a file with the grid of the right size, named {path}{model_name}/{grid_file}_{model_name}.pickle \n otherwise, leave grid_file as 'auto' and the script will build the grid once"
+    with open(f"{path}{model_name}/{grid_file}_{model_name}.pickle", 'rb') as f:
+        grid = pickle.load(f)
+
+    print(f"loaded grid from {path}{model_name}/{grid_file}_{model_name}.pickle")
+else:
+    print("no grid was loaded, it will be calculated automatically")
 
 os.makedirs(f"{path}{model_name}/{saving_folder}", exist_ok=True)
 
@@ -132,9 +142,6 @@ else:
     reference_model_name = model_name
     reference_model=False
 
-
-with open(f"{path}{model_name}/{grid_file}_{model_name}.pickle", 'rb') as f:
-    grid = pickle.load(f)
 
 try: 
     with open(f"{path}{model_name}/transform_parameters_{model_name}.pickle", 'rb') as f:
@@ -160,6 +167,7 @@ input_variables = parameters["variables"]
 # loading the model into memory is an expensive step
 # we only do it once, then it stays loaded
 model_loaded = False
+size = 0
 
 # "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"
 all_months = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
@@ -189,7 +197,7 @@ for month in all_months:
         print(f"loading month {month} w offset {offset} (set {offset/test_load_data["freq"]}) at {datetime.now().strftime('%d/%m %H:%M:%S')}")
 
         date=str(test_year)+month
-        test_data = LoadSquareSatelliteData(month=month, year=test_year, freq_offset=offset, **test_load_data)
+        test_data = LoadSquareSatelliteData(month=month, year=test_year, freq_offset=offset, **test_load_data,load_everything=True)
 
         inputs, names = get_square_satellite_inputs(test_data, **input_variables, return_variable_names=True, return_asarray=True)
 
@@ -197,17 +205,29 @@ for month in all_months:
         size = test_data.size
         time_vals = test_data.met.time.values
 
+        if size==0:
+            if test_data.dataset_format == "square":
+                size = [test_data.size, test_data.size]
+            if test_data.dataset_format == "domain":
+                size = test_data.domain_size
+
+        if not model_loaded:
+            auto_grid, idx_latlon = get_grid(test_data, parameters.get("grid_reference_fp"))
+            
+            if grid_file == "auto":
+                grid = auto_grid
+
         del test_data
 
-        aux_dim = len(input_variables["others"]) 
-        feature_dim=np.shape(inputs)[-1]-aux_dim 
+        aux_dim = 0
+        feature_dim=np.shape(inputs)[-1]
 
         test_dataset = FootprintsDataset(inputs, fps, input_names=names, test_mode=test_mode, **parameters["dataloader_parameters"])
     
         del inputs
 
         if not model_loaded:
-            grid, idx_latlon = get_grid(test_data, parameters.get("grid_reference_fp"))
+
 
             model = GraphSatelliteForecaster(grid, whole_world=False, idx_latlon=idx_latlon, feature_dim=feature_dim, aux_dim=aux_dim, **parameters["model_parameters"])
     
@@ -221,7 +241,7 @@ for month in all_months:
             optimizer = optim.AdamW(model.parameters(), lr=checkpoint["learning_rate"])
     
 
-            if reference_model:
+            if reference_model or checkpoint["model_state_dict"]["encoder.h3_nodes"].shape != model.encoder.h3_nodes.shape:
                 # this h3 parameter means nothing, it's just an array of zeros. But when loading different model sizes it complains. I should get rid of it but in the meantime this is fine.
                 checkpoint["model_state_dict"]["encoder.h3_nodes"] = model.encoder.h3_nodes
     
@@ -235,8 +255,8 @@ for month in all_months:
         preds = model(test_dataset.inputs).detach().numpy()
         transformed_preds = test_dataset.inverse_transform(np.squeeze(preds))
 
-        preds = np.reshape(np.squeeze(preds), (len(preds), size,size))
-        transformed_preds = np.reshape(transformed_preds, (len(transformed_preds), size,size))
+        preds = np.reshape(np.squeeze(preds), (len(preds),size[0],size[1]))
+        transformed_preds = np.reshape(transformed_preds, (len(transformed_preds), size[0],size[1]))
 
         data_vars = {'predictions':(['time', "lat", "lon"], preds, 
                                 {'space': 'transformed', 'type':"prediction", 'emulated_with': model_name}),
@@ -244,13 +264,13 @@ for month in all_months:
                                 {'space': 'original', 'type':"prediction",'emulated_with': model_name}),
                     'fp':(['time', "lat", "lon"], np.reshape(fps, (len(test_dataset.fp), size,size)), 
                                 {'space': 'original', 'type':"truth"}),
-                    'trans_fp':(['time', "lat", "lon"], np.reshape(test_dataset.fp, (len(test_dataset.fp), size,size)), 
+                    'trans_fp':(['time', "lat", "lon"], np.reshape(test_dataset.fp, (len(test_dataset.fp), size[0],size[1])), 
                                 {'space': 'transformed', 'type':"truth"})}
 
         # define coordinates
         coords = {'time': (['time'], time_vals),
-                'lat': (['lat'], list(range(size))),
-                'lon': (['lon'],  list(range(size)))}
+                'lat': (['lat'], list(range(size[0]))),
+                'lon': (['lon'],  list(range(size[1])))}
 
         # define global attributes
         attrs = {'creation_date':str(datetime.now())}
