@@ -1,4 +1,4 @@
-# graphnet_LPDM_emulator
+# GATES_LPDM_emulator
 This repo implements the model described at [Enabling Fast Greenhouse Gas Emissions Inference from Satellites with GATES: a Graph-Neural-Network Atmospheric Transport Emulation System (egusphere-2025-2392)](https://egusphere.copernicus.org/preprints/2025/egusphere-2025-2392)  
 
 ## Replicating the paper
