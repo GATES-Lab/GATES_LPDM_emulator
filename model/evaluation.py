@@ -10,6 +10,9 @@ import pandas as pd
 import xarray as xr
 from .loss_functions import *
 from .data.dataloader_graphnet import predict_fluxes
+import cartopy
+from matplotlib.colors import TwoSlopeNorm
+from matplotlib.colors import Normalize
 
 class LOCI():
     """
@@ -477,7 +480,8 @@ class ModelEv():
 
         if which=="thr_only":
             adjusted_precipitation_thr = apply_threshold(observed_precip_val, model_precip_val, to_correct=model_precip_test)
-            self.variations = {"preds":model_precip, "thr":adjusted_precipitation_thr}            
+            self.variations = {"preds":model_precip, "thr":adjusted_precipitation_thr}
+            self.preds_test["thr"] = (["time", "lat", "lon"], adjusted_precipitation_thr)
 
 
         if which=="small":
@@ -534,6 +538,7 @@ class ModelEv():
         #print(type(fluxes))
         if type(fluxes) is str and fluxes=="def":
             fluxes = np.ones((self.size,self.size))
+            print("using UNIFORM fluxes!")
         observed_precip = np.copy(self.preds_test.fp.values)
         self.pred_fluxes = {}
         print("USING NO UNITS TRANSFORM on the fluxes! this may have changed")
@@ -667,3 +672,89 @@ def quantile_mapping_interp(truths, preds, to_correct, n_quantiles=100, mode="re
     #print(np.shape(corrected))
     
     return corrected
+
+
+def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], cut_lons=[0,0], title_modifier="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title="top", return_cbar=False):
+    
+    
+    if domain_lats is None:
+        print("need domain lats!")
+    if domain_lons is None:
+        print("need domain lons!")
+
+    extent = (domain_lons[cut_lons[0]], domain_lons[-1-cut_lons[1]], domain_lats[cut_lats[0]], domain_lats[-1-cut_lats[1]])
+    ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
+
+
+    higher_or_lower = {"IoU":"Higher", 'MSE':"Lower", "Corr Coeff": "Higher", "Log CorrCoeff": "Higher"}
+
+    if cmap == "metrics":
+        if metric_name in higher_or_lower.keys():
+            if higher_or_lower[metric_name] == "Higher": 
+                cmap="autumn"
+            if higher_or_lower[metric_name] == "Lower": 
+                cmap="autumn_r"
+        else:
+            cmap="autumn"
+    """ 
+        if metric_name== "IoU":
+            cmap="Reds_r"
+            cmap="autumn"
+        else:
+            cmap = "Reds"
+            cmap="autumn_r"
+    """
+
+    if vmin_vmax is None:
+        print("repla")
+        vmin_vmax = [np.nanmin(metric), np.nanmax(metric)]
+        
+    
+    if divergent:
+        norm = TwoSlopeNorm(vmin=vmin_vmax[0], vcenter=0, vmax=vmin_vmax[1])
+        cmap="PiYG"
+    else:
+        
+        norm = Normalize(vmin=vmin_vmax[0], vmax=vmin_vmax[1])
+
+    im = ax.pcolormesh(binned_lons, binned_lats, metric, transform=cartopy.crs.PlateCarree(),cmap=cmap, norm=norm) 
+
+    if title=="top":    
+        ax.set_title(metric_name)
+    if title=="left":
+        coord = -0.1
+        if "\n" in metric_name:
+            coord = -0.2
+        ax.text(coord, 0.5, metric_name,  
+              va="center", ha="center",  
+              rotation="vertical", fontsize=15,  
+              transform=ax.transAxes, multialignment="center")
+
+
+
+    if cbar:
+        assert fig is not None, "fig cant be empty if you want a cbar in this axis!"
+        
+        if metric_name in higher_or_lower.keys():
+            cbar_label = f"{metric_name} \n {higher_or_lower[metric_name]} is better"
+        else:
+            cbar_label = f"{metric_name}" 
+
+        if cbar_position == "bottom":
+            cbar = fig.colorbar(im, ax=ax, orientation="horizontal", extend='both', shrink=0.7).set_label(cbar_label)
+        if cbar_position == "right":
+            cbar_label = "ppb"
+            cbar = fig.colorbar(im, ax=ax, orientation="vertical", extend='both', shrink=0.7).set_label(cbar_label)
+
+    ax.coastlines()
+    ax.add_feature(cartopy.feature.BORDERS,linewidth=1.)
+    ax.add_feature(cartopy.feature.LAND)
+    ax.add_feature(cartopy.feature.OCEAN)
+
+    if return_cbar:
+        return ax, im
+    else:
+        return ax
+
+
+
