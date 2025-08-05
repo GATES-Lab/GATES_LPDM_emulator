@@ -1297,9 +1297,22 @@ class BoundaryDatasetXR(Dataset):
         self.input_transforms = input_transforms or []
         self.transform_parameters = transform_parameters or {}
 
+        
         # TODO: add back transform support if needed
         # for transform in self.input_transforms:
-        #     ...
+        
+        
+        # Map transform names to implementations
+        self.valid_input_transforms = {
+            "clever_transform_3": {"fun": _CleverTransform3XR}
+        }
+
+        # Run requested input transforms
+        for transform in self.input_transforms:
+            transform_instance = self.valid_input_transforms[transform]["fun"](self)
+            self.input_transforms[self.input_transforms.index(transform)] = transform_instance
+            transform_instance.transform()
+        
 
     def __len__(self):
         return self.inputs.sizes["fp_time"]

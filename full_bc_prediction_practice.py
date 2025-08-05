@@ -43,7 +43,7 @@ import re
 # Set your W&B API key to log in automatically
 os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<-- REPLACE THIS
 wandb.login()
-
+π
 def train_bc_prediction_pipeline_practice(_hparams,_practice):
     folder_name = 'boundary_condition'
     inference_path=f"/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/graph_weather/{folder_name}/"
@@ -227,7 +227,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     print(test_load_data)
     write_to_file(inference_path,model_name,"Before loading data")
     #grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
-
+    import ipdb; ipdb.set_trace()
     train_dataset = BoundaryDatasetXR(inputs,outputs,input_names=names, **parameters["dataloader_parameters"])
     #train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
     train_loader = DataLoader(     train_dataset,
@@ -238,6 +238,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     persistent_workers=True,   # Keeps worker processes alive
     prefetch_factor=2          # Loads 2 batches ahead per worker
 )
+    
     deterministic_train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=False)
     test_dataset = BoundaryDatasetXR(test_inputs,test_outputs,test_mode=True,input_names=names, **parameters["dataloader_parameters"])
     #test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)

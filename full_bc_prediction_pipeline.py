@@ -38,13 +38,14 @@ import argparse
 import random
 from datetime import date
 
-import wandb
-import re
 
+import re
+'''
+import wandb
 # Set your W&B API key to log in automatically
 os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<-- REPLACE THIS
 wandb.login()
-
+'''
 
 def baseline_mol(desired_data,months,desired_year):
     '''
@@ -985,23 +986,24 @@ def baseline_mol_updated(desired_data,months,years):
                 print(cams.vmr_n.shape)
                 # CAMS field should be stationary over the period of a month
                 #import ipdb; ipdb.set_trace()
-
+                '''
                 north_mol = np.sum(cams.vmr_n * desired_data.locs.particle_locations_n[:,:,indices], axis=(0,1))
                 south_mol = np.sum(cams.vmr_s * desired_data.locs.particle_locations_s[:,:,indices], axis=(0,1))
                 east_mol = np.sum(cams.vmr_e * desired_data.locs.particle_locations_e[:,:,indices], axis=(0,1))
                 west_mol = np.sum(cams.vmr_w * desired_data.locs.particle_locations_w[:,:,indices], axis=(0,1))
+                '''
                 '''
                 north_mol = np.sum(coarse_cams.vmr_n * desired_data.locs.particle_locations_n[:,:,indices], axis=(0,1))
                 south_mol = np.sum(coarse_cams.vmr_s * desired_data.locs.particle_locations_s[:,:,indices], axis=(0,1))
                 east_mol = np.sum(coarse_cams.vmr_e * desired_data.locs.particle_locations_e[:,:,indices], axis=(0,1))
                 west_mol = np.sum(coarse_cams.vmr_w * desired_data.locs.particle_locations_w[:,:,indices], axis=(0,1))
                 '''
-                '''
+                
                 north_mol = np.sum(cams.vmr_n * desired_data.fp_data_full.particle_locations_n[:,:,indices], axis=(0,1))
                 south_mol = np.sum(cams.vmr_s * desired_data.fp_data_full.particle_locations_s[:,:,indices], axis=(0,1))
                 east_mol = np.sum(cams.vmr_e * desired_data.fp_data_full.particle_locations_e[:,:,indices], axis=(0,1))
                 west_mol = np.sum(cams.vmr_w * desired_data.fp_data_full.particle_locations_w[:,:,indices], axis=(0,1))
-                '''
+                
                 #import ipdb; ipdb.set_trace()
                 north_list[indices] = north_mol
                 south_list[indices] = south_mol
