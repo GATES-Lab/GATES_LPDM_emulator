@@ -12,9 +12,9 @@ import torch
 from typing import Optional
 
 
-from model.layers.encoder import SatelliteEncoder, FixedSatelliteEncoder
-from model.layers.decoder import SatelliteDecoder
-from model.layers.processor import SatelliteProcessor
+from graphnet_LPDM_emulator.model.layers.encoder import SatelliteEncoder, FixedSatelliteEncoder
+from graphnet_LPDM_emulator.model.layers.decoder import SatelliteDecoder
+from graphnet_LPDM_emulator.model.layers.processor import SatelliteProcessor
 import numpy as np
 
 
