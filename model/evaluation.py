@@ -344,7 +344,7 @@ def get_loss(model_name, directory=None):
     print(f"loading last checkpoint for {model_name}")
     if directory is None:
         # change to default directory!
-        directory="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/"
+        directory="/group/chemistry/acrg/ef17148/trained_satellite_models/"
     files = sorted(glob.glob(glob.escape(f"{directory}{model_name}/{model_name}_")+"*.pt"), key=getint)
     assert len(files)>0, f"no files found for model name {model_name} at {directory}{model_name}/{model_name}"
     checkpoint_to_load = files[-1] 
