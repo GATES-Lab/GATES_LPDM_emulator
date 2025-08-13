@@ -32,9 +32,14 @@ import argparse
 
 import random
 
+
+#### 1 Set up
+
 parser = argparse.ArgumentParser(description="Load parameters")
 parser.add_argument("file_name", help="parameter file name")
 parser.add_argument("--file_path", help="parameter file path")
+parser.add_argument("--output_dir", type=str, default="training_output")
+parser.add_argument("--seed", type=int, default=34)
 
 args = parser.parse_args()
 file_name = args.file_name
@@ -42,16 +47,12 @@ file_path = args.file_path
 
 print(file_name, file_path)
 
-#### 1 Set up
-
-## make this importable!
-path = file_path
 
 def write_to_file(message):
-    f = open(f"{path}{model_name}/{model_name}_updates.txt", "a")
-    f.write(datetime.now().strftime("%d/%m/%y %H:%M:%S") + " " + message + "\n")
-    f.close()
-
+    with open(log_file_path, "a") as f:
+        f.write(datetime.now().strftime("%d/%m/%y %H:%M:%S") + " " + message + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 def load_file(file_name, file_path):
     # file_path=False if no argument was passed to the parser
@@ -72,7 +73,6 @@ def load_file(file_name, file_path):
     except Exception as e:
         print(f"An error occurred while loading the file: {str(e)}")
         return None
-    
 
 parameters = load_file(file_name, file_path) 
 
@@ -82,30 +82,38 @@ print(parameters)
 model_name = parameters["model_name"]
 print(model_name)
 
+# Ensure output dir and subfolders exist
+os.makedirs(args.output_dir, exist_ok=True)
+training_img_dir = os.path.join(args.output_dir, "training_imgs")
+os.makedirs(training_img_dir, exist_ok=True)
+
+log_file_path = os.path.join(args.output_dir, f"{model_name}_updates.txt")
+with open(log_file_path, "a") as f:
+    pass
+
 
 if "seed" in (parameters.keys()):
-    print(parameters["seed"])
-    np.random.seed(parameters["seed"])
-    torch.manual_seed(parameters["seed"])
-    torch.cuda.manual_seed(parameters["seed"])
-    random.seed(parameters["seed"])
+    seed = parameters["seed"]
 
 else:
-    print("34")
-    np.random.seed(34)
-    torch.manual_seed(34)
-    torch.cuda.manual_seed(34)
-    random.seed(34)
+    seed = args.seed
 
 
 
-# make files
-os.makedirs(f"{path}{model_name}", #exist_ok=True
-            )
-os.makedirs(f"{path}{model_name}/training_imgs", #exist_ok=True
-            )
-with open(f"{path}{model_name}/{model_name}_updates.txt", "a") as f:
-    pass
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+random.seed(seed)
+
+os.environ["PYTHONHASHSEED"] = str(seed)
+
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.use_deterministic_algorithms(True)
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"
+
+print(seed)
+print("Random check:", random.randint(0, 10000), np.random.randint(0, 10000), torch.randint(0, 10000, (1,)))
 
 # Load config
 with open("config.yml", "r") as f:
@@ -123,8 +131,7 @@ topog_datadir = os.path.join(base_data_path, env_paths["topog_datadir"].lstrip("
 landcover_datadir = os.path.join(base_data_path, env_paths["landcover_datadir"].lstrip("/"))
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"))
-#write_to_file("loading data")
+write_to_file(f"using device {device}, starting at " + datetime.now().strftime("%d/%m/%y %H:%M:%S"))
 write_to_file("loading data")
 
 #### 2 Load Data
@@ -133,7 +140,7 @@ train_load_data = copy.deepcopy(parameters["train_load_data"])
 test_load_data = copy.deepcopy(parameters["train_load_data"])
 test_load_data.update(parameters["test_load_data"])
 
-
+write_to_file("loading parameters")
 shared_data_args = dict(
     load_everything=True,
     base_data_path=base_data_path,
@@ -145,10 +152,13 @@ shared_data_args = dict(
     }
 )
 print("Load training met and fp data")
+write_to_file("Load training met and fp data")
 data = LoadSquareSatelliteData(**train_load_data, **shared_data_args)
+write_to_file("Successfully load training met and fp data")
+write_to_file("Now load test met and fp data")
 print("Load test met and fp data")
 test_data = LoadSquareSatelliteData(**test_load_data, **shared_data_args)
-
+write_to_file("Successfully load test met and fp data")
 
 write_to_file("setting up data")
 
@@ -177,8 +187,11 @@ print(train_dataset.transform_parameters)
 
 test_dataset = FootprintsDatasetV3(test_inputs, test_data.fp_data, input_names=names, test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
 
-train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=10)
+g = torch.Generator()
+g.manual_seed(seed)
+
+train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True, generator=g, num_workers=0)
+test_loader = DataLoader(test_dataset, batch_size=10, generator=g, num_workers=0)
 
 if data.dataset_format == "square":
     size = [data.size, data.size]
@@ -188,6 +201,7 @@ if data.dataset_format == "domain":
 image_plots = random.sample(list(range(len(test_inputs))), k=4)
 image_dates = np.datetime_as_string(test_data.fp_data_full.time.values[image_plots])
 
+time_values = test_data.met.time.values
 # all the necessary data is already in the loaders, so we can delete the objects
 del data, test_data
 
@@ -219,19 +233,20 @@ losses.update({f"flux_{f}":{"MAE":[], "R2":[]} for f in flux_evaluation})
 
 
 NMAE_function = NMAE
+NMAE_function = NMAE_nans
 
 
 #### 3 Dump info
 print("saving grids etc")
 
 # save transform parameters, grid and training settings
-with open(f"{path}{model_name}/grid_{model_name}.pickle", 'wb') as handle:
+with open(os.path.join(args.output_dir, f"grid_{model_name}.pickle"), 'wb') as handle:
     pickle.dump(grid, handle)
 
-with open(f"{path}{model_name}/transform_parameters_{model_name}.pickle", 'wb') as handle:
+with open(os.path.join(args.output_dir, f"transform_parameters_{model_name}.pickle"), 'wb') as handle:
     pickle.dump(train_dataset.transform_parameters, handle)
 
-with open(f"{path}{model_name}/training_settings_{model_name}.json", 'w') as handle:
+with open(os.path.join(args.output_dir, f"training_settings_{model_name}.json"), 'w') as handle:
     json.dump(parameters, handle)
 
 
@@ -239,8 +254,10 @@ epoch_so_far = 0
 if torch.cuda.is_available():
     model.cuda()
 
+num_epochs = parameters.get("epochs", 350)  # fallback to 350 if not set
+write_to_file(f"Training for {num_epochs} epochs")
 #### 4 Train loop
-for epoch in range(302):
+for epoch in range(num_epochs):
     epoch=epoch+epoch_so_far
     running_loss = 0.0
     print(f"Start Epoch: {epoch}")
@@ -315,11 +332,13 @@ for epoch in range(302):
                 ax[a,axis].yaxis.set_ticks([])
 
         plt.tight_layout()
-        savename = f"{path}{model_name}/training_imgs/{model_name}_{epoch}.png"
+        savename = os.path.join(training_img_dir, f"{model_name}_{epoch}.png")   
         plt.savefig(savename, dpi=300, bbox_inches='tight')
         plt.close()
 
     ## save checkpoint every 50 epochs
+    checkpoint_path = os.path.join(args.output_dir, f"{model_name}_{epoch}.pt")
+
     if epoch % 50 ==0:
         torch.save({
                     'epoch': epoch,
@@ -327,21 +346,25 @@ for epoch in range(302):
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': losses,
                     'learning_rate':lr,
-                    }, f"{path}{model_name}/{model_name}_{epoch}.pt")
+                    }, checkpoint_path)
 
-    if epoch == 350:
+    if epoch == num_epochs - 1:
         test_out = np.reshape(np.squeeze(test_out), (len(test_out), size[0],size[1]))
+        transformed_preds = np.reshape(np.squeeze(transformed_preds), (len(transformed_preds), size[0],size[1]))
+        fps = np.reshape(fps, (len(test_dataset.fp), size[0],size[1]))
+        test_dataset = np.reshape(test_dataset.fp, (len(test_dataset.fp), size[0],size[1]))
+        
         data_vars = {'predictions':(['time', "lat", "lon"], test_out, 
                                 {'space': 'transformed', 'type':"prediction", 'emulated_with': model_name}),
                     'trans_predictions':(['time', "lat", "lon"], transformed_preds, 
                                 {'space': 'original', 'type':"prediction",'emulated_with': model_name}),
-                    'fp':(['time', "lat", "lon"], np.reshape(fps, (len(test_dataset.fp),size[0],size[1])), 
+                    'fp':(['time', "lat", "lon"], fps, 
                                 {'space': 'original', 'type':"truth"}),
-                    'trans_fp':(['time', "lat", "lon"], np.reshape(test_dataset.fp, (len(test_dataset.fp), size[0],size[1])), 
+                    'trans_fp':(['time', "lat", "lon"], test_dataset, 
                                 {'space': 'transformed', 'type':"truth"})}
 
         # define coordinates
-        coords = {'time': (['time'], test_data.met.time.values),
+        coords = {'time': (['time'], time_values),
                 'lat': (['lat'], list(range(size[0]))),
                 'lon': (['lon'],  list(range(size[1])))}
 
@@ -354,14 +377,15 @@ for epoch in range(302):
                         coords=coords, 
                         attrs=attrs)
         
+        netcdf_save_path = os.path.join(args.output_dir, "sample_predictions_training.nc")
+        ds.to_netcdf(netcdf_save_path)
 
-        ds.to_netcdf(f"{path}{model_name}/sample_predictions_training.nc")
+        print(f"Saved sample_predictions_training.nc to {netcdf_save_path}")
         
     if epoch == 102:
         ## replaced NMAE with NMAE_nans in the whole file!
         if NMAE_nans(test_out,truths) == 1:
             print("no learning is happening! early stopping")
             break
-
 
 print("Finished Training")
