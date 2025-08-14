@@ -900,6 +900,8 @@ class SatelliteDecoderConvClassifier(torch.nn.Module):
 
         self.input_height = input_height
         self.input_width = input_width
+        print('input height',self.input_height)
+        print('input width',self.input_width)
 
         self.linear_class = torch.nn.Linear(flattened_size, num_classes)
 
@@ -933,7 +935,7 @@ class SatelliteDecoderConvClassifier(torch.nn.Module):
         processor_features = torch.multiply(processor_features[:,:, self.edge_index[0,:]], torch.flatten(self.edge_weights))
         #print("doing scatter", processor_features.dtype, torch.from_numpy(self.edge_weights.astype(np.float32)).dtype, self.edge_weights.astype(float).dtype, self.edge_weights.dtype)
         processor_features = scatter_mean(src=processor_features, index=self.edge_index[1,:]) 
-
+        #print('processoor features',processor_features.shape)
             #processor_features_by_node = np.zeros((processor_features.size()[0], #start_features.size()[1], processor_features.size()[-1]))
             #for n in np.unique(self.edge_index[1,:]): 
             #    processor_features_by_node = np.where(self.edge_index[1,:]==n)
@@ -944,7 +946,13 @@ class SatelliteDecoderConvClassifier(torch.nn.Module):
         #print("after scatter", processor_features.size(), processor_features.dtype)
         
         #print(np.shape(processor_features))
+        print('processor features rearranged',processor_features.shape,'batch size',batch_size,self.input_height,self.input_width)
+        '''
         processor_features = processor_features.view(batch_size, 64,self.input_height, self.input_width)
+        '''
+        processor_features = processor_features.reshape(batch_size, 64, self.input_height, self.input_width)
+
+        #print('Before conv block',processor_features.shape)
         #print('before conv block',processor_features.shape)
         out = self.conv_block(processor_features)
         #print('after conv block',out.shape)

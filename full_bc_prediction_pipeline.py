@@ -22,8 +22,8 @@ from model.layers.decoder import *
 from model.layers.processor import *
 from model.layers.graph_net_block import *
 from model.data.dataloader_graphnet import *
-#from model.data.load_data import *
-from model.data.load_data_coarsening import *
+from model.data.load_data import *
+#from model.data.load_data_coarsening import *
 from model.forecast import GraphSatelliteForecaster, GraphSatelliteForecasterClassifier, GraphSatelliteForecasterConvClassifier
 from model.loss_functions import *
 
@@ -40,12 +40,12 @@ from datetime import date
 
 
 import re
-'''
+
 import wandb
 # Set your W&B API key to log in automatically
 os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<-- REPLACE THIS
 wandb.login()
-'''
+
 
 def baseline_mol(desired_data,months,desired_year):
     '''
@@ -493,7 +493,6 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     #name_coarsening = str(parameters["train_load_data"]["coarsening_factor"])
     #name_alpha = parameters['loss_weight']
     name_normalization = parameters['normalization']
-    name_coarsening = parameters['train_load_data']['coarsening_factor']
     name_decoder = parameters['network_decoder']
     today = date.today()
     d4 = today.strftime("%b-%d-%Y")
@@ -541,15 +540,18 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     if "size" in (parameters["train_load_data"].keys()):
         # Version where i use the square domain
         name_size = str(parameters["train_load_data"]['size'])
-        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_size-{name_size}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
+        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_size-{name_size}_decoder-{name_decoder}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
     else:
         # Version where I use the fixed domain
         model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}__size-{name_size}_coarsening-{name_coarsening}_decoder-{name_decoder}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
-
-    
-    
+        
     if _practice:
         model_name = 'practice_run'
+        #import ipdb; ipdb.set_trace()
+        #with open("practice_data_updated.pkl", "rb") as f:
+        with open("practice_data_2014_6_updated.pkl", "rb") as f:
+            loaded_data = pickle.load(f)
+        data, test_data, grid, inputs, names, test_inputs =loaded_data["data"],loaded_data["test_data"],loaded_data["grid"], loaded_data["inputs"], loaded_data["names"], loaded_data["test_inputs"]
         model_folder = f"{inference_path}{model_name}"
     else:
         print('Not using practice')
@@ -598,19 +600,20 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     # load train parameters and upload with any changes to test data
     test_load_data = copy.deepcopy(parameters["train_load_data"])
     test_load_data.update(parameters["test_load_data"])
+    
+
+    # Nawid - Making it so that the different value can be used for the case where there is a single value for the approach
     print(train_load_data)
     print(test_load_data)
-    
-    if "size" in (parameters["train_load_data"].keys()):
-        print('Using square domain')
-        data = LoadSquareSatelliteData(**train_load_data)
-        test_data = LoadSquareSatelliteData(**test_load_data)
-        
-    else:    
-        print('Using fixed domain')
-        data = LoadDomainSatelliteData(**train_load_data)
-        test_data = LoadDomainSatelliteData(**test_load_data)
-        
+    if not _practice:
+        if "size" in (parameters["train_load_data"].keys()):
+            print('Using square domain')
+            data = LoadSquareSatelliteData(**train_load_data)
+            test_data = LoadSquareSatelliteData(**test_load_data)    
+        else:    
+            print('Using fixed domain')
+            data = LoadDomainSatelliteData(**train_load_data)
+            test_data = LoadDomainSatelliteData(**test_load_data)
         
     train_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     # TODO: Nawid- get the train year and the test year from the trainload data 
@@ -618,6 +621,8 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     
     test_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     test_year = parse_years(test_load_data['year'])
+
+
     baseline_list, north_list, south_list, east_list, west_list = baseline_mol_updated(data,train_months, train_year)
     test_baseline_list, test_north_list, test_south_list, test_east_list, test_west_list = baseline_mol_updated(test_data,test_months, test_year)
     outputs = np.stack((north_list,south_list, east_list,west_list),axis=1)
@@ -640,14 +645,12 @@ def train_bc_prediction_pipeline(_hparams,_practice):
 
         test_outputs = (test_outputs-outputs_mean_values)/outputs_std_values
         test_baseline_list = (test_baseline_list-baseline_mean_values)/baseline_std_values
-    
+
     grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
-
     input_variables = parameters["variables"]
-
-    inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
-    
-    test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=True)
+    if not _practice:
+        inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
+        test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=True)
     
     use_baselines = parameters['use_baselines']
     if use_baselines:
@@ -661,13 +664,13 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     print(test_load_data)
     write_to_file(inference_path,model_name,"Before loading data")
     #grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
-
+    #dummy_dataset = BoundaryDatasetXR(dummy_inputs,dummy_outputs,input_names=names, **parameters["dataloader_parameters"])
     train_dataset = BoundaryDataset(inputs,baseline_list,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
     deterministic_train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=False)
     test_dataset = BoundaryDataset(test_inputs,test_baseline_list,test_outputs,use_baselines= use_baselines,input_names=names,test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
     test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
-
+    
     #aux_dim = len(input_variables["static_variables"]) 
     feature_dim=np.shape(inputs)[-1]
     
@@ -714,9 +717,6 @@ def train_bc_prediction_pipeline(_hparams,_practice):
 
     #best_test_loss = float("inf")
     #best_epoch = -1
-    
-
-
 
     num_epochs = parameters["epochs"]
     n = 2  # Number of times to reload new data
@@ -724,6 +724,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     offset = 1
     # Nawid - need to use it earlier to make sure if runs correctly I believe before i reinitialise the data
     train_out = np.zeros((train_dataset.inputs.size()[0], num_classes))
+    
     for epoch in range(num_epochs):
         epoch=epoch+epoch_so_far
         '''
@@ -758,13 +759,13 @@ def train_bc_prediction_pipeline(_hparams,_practice):
         #import ipdb; ipdb.set_trace()
         # Nawid - Looking at saving the outputs of the data
 
-        
+        #import ipdb; ipdb.set_trace()
         for i_train, batch in enumerate(train_loader):
             # get the inputs; data is a list of [inputs, labels]
             ins, labels = batch[0].to(device), batch[1].to(device)
             # zero the parameter gradients
             optimizer.zero_grad()
-
+            
             # forward + backward + optimize
             model_outputs = model(ins)
             loss = criterion(model_outputs, labels)
@@ -896,6 +897,8 @@ def train_bc_prediction_pipeline(_hparams,_practice):
 
 
 
+
+
 def additional_data(parameters,offset,train_months, train_year,outputs_mean_values, outputs_std_values, input_variables,use_baselines,names,train_batch_size):
     train_load_data = copy.deepcopy(parameters["train_load_data"])
     # load train parameters and upload with any changes to test data
@@ -951,6 +954,7 @@ def baseline_mol_updated(desired_data,months,years):
     east_list = np.zeros(total_data_points)
     west_list = np.zeros(total_data_points)
     for year in years:
+        print('year',year)
         for month in months:
             # Cams field for a particular month
             if year > 2017:

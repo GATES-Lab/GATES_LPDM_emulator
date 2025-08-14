@@ -47,7 +47,8 @@ def load_fps(fp_datadir, verbose=False):
         path = os.path.split(fp_datadir)[0] + "/"
         filenames = [os.path.split(x)[1] for x in fp_files]
 
-        bad_files = ["GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
+        bad_files = ["GOSAT-BRAZIL-column_SOUTHAMERICA_201304.nc", # Nawid - Added this one as this one has nans i believe in the met
+            "GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
             "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc", 
             'GOSAT-SAHARA-column_NORTHAFRICA_201501.nc',
             'GOSAT-SAHARA-column_NORTHAFRICA_201502.nc',
@@ -249,8 +250,7 @@ class LoadBaseSatelliteData:
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=remove_duplicates) as met_file:
-
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"], compat="override", preprocess=remove_duplicates) as met_file:
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
                     met_file = met_file.rename({"model_level_number": "levels", "latitude":"lat", "longitude":"lon"})
@@ -380,7 +380,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=True, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}):
 
         self.dataset_format = "square" 
         #### check domains
