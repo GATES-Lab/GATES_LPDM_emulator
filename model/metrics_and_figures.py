@@ -21,7 +21,7 @@ import einops
 
 #import plenoptic as po
 
-from data.load_data import *
+from graphnet_LPDM_emulator.model.data.load_data import *
 #from loss_functions import *
 #from evaluation import *
 
@@ -36,7 +36,7 @@ import cartopy.feature as cfeature
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.colors import Normalize
 import cartopy.crs as ccrs
-
+import matplotlib.ticker as mticker
 import random
 
 """
@@ -956,6 +956,68 @@ def get_gosat(site, species,
     # return single element list
     return [data,]
 
+
+from scipy.stats import binned_statistic_2d
+def bin_data(data, lats, lons, degree_bins=1):
+    lat_bins = range(int(np.floor(lats.min())), int(np.ceil(lats.max())) + 1, degree_bins) 
+    lon_bins = range(int(np.floor(lons.min())), int(np.ceil(lons.max())) + 1, degree_bins) 
+    binned_data, lat_edges, lon_edges, binnumber = binned_statistic_2d(
+        lats, lons, data, statistic='mean', bins=[lat_bins, lon_bins]
+    )
+    return binned_data, lat_edges, lon_edges
+
+
+def vcorrcoef(fp, pred, threshold = None, return_mean=False):
+    X = fp.reshape(fp.shape[0], -1)
+    y = pred.reshape(pred.shape[0], -1)
+    
+    if threshold is None:
+        mask = (X != 0) & (y != 0) & ~np.isnan(X) & ~np.isnan(y) & ~np.isinf(X) & ~np.isinf(y)
+    else:
+        mask = (X != 0) & (y != 0) & ~np.isnan(X) & ~np.isnan(y) & ~np.isinf(X) & ~np.isinf(y) & (X > threshold) & (y > threshold)
+    X_masked = np.where(mask, X, np.nan)
+    y_masked = np.where(mask, y, np.nan)
+
+    
+    Xm = np.nanmean(X_masked, axis=1, keepdims=True)
+    ym = np.nanmean(y_masked, axis=1)
+    r_num = np.nansum((X_masked - Xm) * (y_masked - ym[:, None]), axis=1)
+    r_den = np.sqrt(np.nansum((X_masked - Xm) ** 2, axis=1) * np.nansum((y_masked - ym[:, None]) ** 2, axis=1))
+
+    r = r_num / r_den
+
+    return np.nanmean(r) if return_mean else r
+
+
+def get_binned_seasonal_scores(true_fps, predictions, dates, release_lats, release_lons, degree_bins=2):
+    seasons = {"JFM":["01", "02", "03"], "AMJ":["04", "05", "06"], "JAS":["07", "08", "09"], "OND":["10", "11", "12"]}
+
+    all_ious = IoU(true_fps, predictions, threshold=0,return_mean=False)
+    all_mses = np.nanmean((true_fps - predictions) ** 2, axis=(1, 2))
+    all_corrcoeffs = vcorrcoef(true_fps, predictions, return_mean=False)
+    all_logged_corrcoeffs = vcorrcoef(np.log10(true_fps), np.log10(predictions), return_mean=False)
+
+    season_results = {}
+    degree_bins = 2
+    for n, seas in enumerate(list(seasons.keys())):
+            print(n, seas)
+            #seasonal_idxs = np.bitwise_and(dates.month==m)[0]
+            seasonal_idxs = np.where(np.bitwise_and(dates.month>=int(seasons[seas][0]), dates.month<=int(seasons[seas][-1])))[0]
+            
+            mses_binned, lat_edges, lon_edges = bin_data(all_mses[seasonal_idxs], release_lats[seasonal_idxs], release_lons[seasonal_idxs], degree_bins=degree_bins)
+
+            ious_binned, _, _= bin_data(all_ious[seasonal_idxs], release_lats[seasonal_idxs], release_lons[seasonal_idxs], degree_bins=degree_bins)
+
+            corrcoeffs_binned, _, _ = bin_data(all_corrcoeffs[seasonal_idxs], release_lats[seasonal_idxs], release_lons[seasonal_idxs], degree_bins=degree_bins)
+
+            logged_corrcoeffs_binned, _, _ = bin_data(all_logged_corrcoeffs[seasonal_idxs], release_lats[seasonal_idxs], release_lons[seasonal_idxs], degree_bins=degree_bins)
+
+            season_results[seas] = {"lat_edges": np.copy(lat_edges), "lon_edges": np.copy(lon_edges), "mses_binned":np.copy(np.array(mses_binned)), "ious_binned":np.copy(np.array(ious_binned)), "corrcoeffs_binned":np.copy(np.array(corrcoeffs_binned)), "logged_corrcoeffs_binned":np.copy(np.array(logged_corrcoeffs_binned))}
+
+    return season_results
+
+
+
 def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], title_modifier="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title="top", return_cbar=False):
     
     
@@ -965,7 +1027,7 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
         print("need domain lons!")
 
     extent = (domain_lons[0], domain_lons[-1], domain_lats[cut_lats[0]], domain_lats[-1-cut_lats[1]])
-    ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
 
 
     higher_or_lower = {"IoU":"Higher", 'MSE':"Lower", "Corr Coeff": "Higher", "Log CorrCoeff": "Higher"}
@@ -998,7 +1060,7 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
     else:
         norm = Normalize(vmin=vmin_vmax[0], vmax=vmin_vmax[1])
 
-    im = ax.pcolormesh(binned_lons, binned_lats, metric, transform=ccrs.PlateCarree(),cmap=cmap, norm=norm) 
+    im = ax.pcolormesh(binned_lons, binned_lats, metric, transform=ccrs.PlateCarree(), cmap=cmap, norm=norm)
 
     if title=="top":    
         ax.set_title(metric_name)
@@ -1028,7 +1090,7 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
             cbar = fig.colorbar(im, ax=ax, orientation="vertical", extend='both', shrink=0.7).set_label(cbar_label)
 
     ax.coastlines()
-    ax.add_feature(cartopy.feature.BORDERS,linewidth=1.)
+    ax.add_feature(cfeature.BORDERS, linewidth=1.)
     ax.add_feature(cfeature.LAND)
     ax.add_feature(cfeature.OCEAN)
 
@@ -1038,4 +1100,61 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
         return ax
 
 
+def plot_massive_binned_map(season_results, domain_lats, domain_lons, vmin_vmax = None):
+    rows = 4
+    fig = plt.figure(figsize=(17,15),  dpi=400, constrained_layout=True)
+    gs = fig.add_gridspec(rows, 5, figure=fig, width_ratios=[1, 1, 1,1,0.05])
 
+    vmin_vmax_default = {"ious_binned":[100*0.1,100*0.5], "mses_binned":[0,1e-6], "corrcoeffs_binned":[0.4,0.7], "logged_corrcoeffs_binned":[0.2,0.5]}
+
+
+    if vmin_vmax is not None:
+        vmin_vmax_default.update(vmin_vmax)
+
+
+    vmin_vmax = vmin_vmax_default
+    print(vmin_vmax)
+
+
+
+    ax = np.empty((rows, 4), dtype=object)
+    seasons = {"JFM":["01", "02", "03"], "AMJ":["04", "05", "06"], "JAS":["07", "08", "09"], "OND":["10", "11", "12"]}
+
+
+    for i in range(rows):  
+        for j in range(4):
+            ax[i, j] = fig.add_subplot(gs[i, j], projection=ccrs.PlateCarree())    
+
+    for season_n, seas in enumerate(seasons.keys()):
+        #season_results[seas] = {"mean_mfs":mean_mfs, "mean_mfs_emulated":mean_mfs_emulated}
+        ax[0, season_n], cbar_iou = plot_binned_map(ax[0, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], 100*season_results[seas]["ious_binned"], cut_lats=(40,20), cmap="metrics", metric_name="IoU", vmin_vmax=vmin_vmax["ious_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
+
+        ax[1, season_n], cbar_mses = plot_binned_map(ax[1, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], season_results[seas]["mses_binned"], cut_lats=(40,20), cmap="metrics", metric_name="MSE", vmin_vmax=vmin_vmax["mses_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
+
+        ax[2, season_n], cbar_corrcoeff = plot_binned_map(ax[2, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], season_results[seas]["corrcoeffs_binned"], cut_lats=(40,20), cmap="metrics", metric_name="Corr Coeff", vmin_vmax=vmin_vmax["corrcoeffs_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
+
+        ax[3, season_n], cbar_logged_corrcoeff = plot_binned_map(ax[3, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], season_results[seas]["logged_corrcoeffs_binned"], cut_lats=(40,20), cmap="metrics", metric_name="Logged Corr Coeff", vmin_vmax=vmin_vmax["logged_corrcoeffs_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
+
+        ax[0,season_n].set_title(seas, fontsize=15) 
+
+    metric_names = ["IoU", "MSE", 'Corr Coeff', 'Logged Corr Coeff']
+
+    for ax_num, (cbar_here, metric_name) in enumerate(zip([cbar_iou, cbar_mses, cbar_corrcoeff, cbar_logged_corrcoeff], metric_names)):
+        gs_cb = gs[ax_num, -1].subgridspec(3, 1, height_ratios=[1, 50, 1])  
+        cbar_ax = fig.add_subplot(gs_cb[1, 0])  
+        if metric_name == "IoU":
+            cbar = plt.colorbar(cbar_here, cax=cbar_ax, location='right', extend="both", format=mticker.PercentFormatter(decimals=0)).set_label(label=f'{metric_name}', size=12)  
+        else:
+            cbar = plt.colorbar(cbar_here, cax=cbar_ax, location='right', extend="both").set_label(label=f'{metric_name}', size=12)  
+
+        ax[ax_num, 0].text(-0.1, 0.5, metric_name,  
+                va="center", ha="center",  
+                rotation="vertical", fontsize=14,  
+                transform=ax[ax_num, 0].transAxes, multialignment="center")
+
+
+    #plt.tight_layout()
+    fig.suptitle("Metrics in space: Red means worse performance", fontsize=16)
+
+    #gs.tight_layout(fig)
+    gs.update(top=0.95)
