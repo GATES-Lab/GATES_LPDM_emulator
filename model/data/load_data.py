@@ -1213,14 +1213,20 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     ###
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
 
-    interp_method = "nearest"
     if time_delta==0:
-        met = met.interp(time=fp_times, method=interp_method)
+        if interp_method == "nearest":
+            # if we are not interpolating, we can just use the times of the footprints
+            met = met.reindex(time=fp_times, method=interp_method, tolerance="4h", fill_value = np.nan)
+        else:
+            met = met.interp(time=fp_times, method=interp_method)
         met = met.assign({"fp_time":(("time"), fp_times)})
     else:
-
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
-        met = met.interp(time=fp_times, method=interp_method)
+        # reindex and interp are the same when method="nearest", but reindex allows tol
+        if interp_method == "nearest":
+            met = met.reindex(time=fp_times, method=interp_method, tolerance="4h", fill_value = np.nan)
+        else:
+            met = met.interp(time=fp_times, method=interp_method)
 
         # store the original footprint times as a separate value
         met = met.assign({"fp_time":(("time"),fp.time.values)})
