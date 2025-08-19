@@ -169,8 +169,17 @@ input_variables = parameters["variables"]
 print("Load training satellite data")
 
 inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
+# Checking for NaNs
+nan_indices_train = np.argwhere(np.isnan(inputs))
+if nan_indices_train.size > 0:
+    print(f"NaNs found in training set at indices: {nan_indices_train[:10]}")  # show just first 10 for now
+
 print("Load test satellite data")
 test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=True)
+# Checking for NaNs
+nan_indices = np.argwhere(np.isnan(test_inputs))
+if nan_indices.size > 0:
+    print(f"NaNs found in test set at indices: {nan_indices[:10]}")  # show just first 10 for now
 
 # the model gets built with respect to a "reference footprint", and all predictions are done on this grid. An improvement would be to explore a way to select the best reference footrpint, or to find a way to do this dynamically for each footprint
 grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
@@ -186,6 +195,9 @@ train_dataset = FootprintsDatasetV3(inputs, data.fp_data, input_names=names, **p
 print(train_dataset.transform_parameters)
 
 test_dataset = FootprintsDatasetV3(test_inputs, test_data.fp_data, input_names=names, test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
+
+
+
 
 g = torch.Generator()
 g.manual_seed(seed)
@@ -284,6 +296,14 @@ for epoch in range(num_epochs):
     for i_test, batch in enumerate(test_loader):
         # get the inputs; data is a list of [inputs, labels]
         ins, labels = batch[0].to(device), batch[1].to(device)
+
+        # check if NaN
+        if torch.isnan(ins).any():
+            print(f"NaN detected in inputs at batch {i_test}")
+        if torch.isnan(labels).any():
+            print(f"NaN detected in labels at batch {i_test}")
+
+
         test_error += criterion_test(model(ins), labels).item()
         test_out[i_test*test_batch_size:(i_test+1)*test_batch_size,:] = np.squeeze(model(ins).detach().cpu().numpy())
     
@@ -293,8 +313,8 @@ for epoch in range(num_epochs):
 
     #evaluate
     truths = torch.squeeze(test_dataset.fp).detach().numpy()
-    print(f"NMAE: {NMAE(test_out,truths)}")
-    losses["NMAE_test"].append(NMAE(test_out,truths))
+    print(f"NMAE: {NMAE_function(test_out,truths)}")
+    losses["NMAE_test"].append(NMAE_function(test_out,truths))
     transformed_preds = test_dataset.inverse_transform(test_out)
     evaluation_metrics = test_dataset.evaluate()
     losses["NMAE_test_transformed"].append(evaluation_metrics["NMAE"])
@@ -302,7 +322,7 @@ for epoch in range(num_epochs):
     losses["accuracy"].append(evaluation_metrics["Accuracy"])
     losses["IoU"].append(evaluation_metrics["IOU"])
 
-    write_to_file(f"{epoch + 1}, loss: {running_loss/(i+1)}, test loss: {test_error/(i_test+1)}, NMAE test: {NMAE(test_out,truths)}, NMAE test trasformed: {evaluation_metrics['NMAE']}, MSE test transformed: {evaluation_metrics['MSE']}, IoU {evaluation_metrics['IOU']}")
+    #write_to_file(f"{epoch + 1}, loss: {running_loss/(i+1)}, test loss: {test_error/(i_test+1)}, NMAE test: {NMAE(test_out,truths)}, NMAE test trasformed: {evaluation_metrics['NMAE']}, MSE test transformed: {evaluation_metrics['MSE']}, IoU {evaluation_metrics['IOU']}")
 
     for flux_mode in flux_evaluation:
         flux_metrics = test_dataset.evaluate_flux(mode=flux_mode)

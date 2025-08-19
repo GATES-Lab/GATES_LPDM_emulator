@@ -32,7 +32,8 @@ def load_fps(fp_datadir, verbose=False):
         time_chunk = 25
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             # attempt to load dataset of multiple files the standard way
-            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, engine="h5netcdf", ) as ds:
+            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, #engine="h5netcdf"
+                                   ) as ds:
                 fp_data_full = ds.copy()
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
@@ -98,8 +99,27 @@ def load_fps(fp_datadir, verbose=False):
 
     return fp_data_full
 
+def remove_duplicates(ds, dim="longitude"):
+    """
+    Remove duplicate values along a specified dimension in an xarray Dataset.
+    
+    Parameters:
+    - ds: xarray Dataset
+    - dim: Dimension along which to check for duplicates (default is "longitude")
+    
+    Returns:
+    - xarray Dataset with duplicates removed
+    """
+    return ds.drop_duplicates(dim)
 
+def preprocess(ds):
+    # Move sigma and level_height to data_vars if they exist as coords
+    ds = ds.astype("float32")
 
+    for var in ["sigma", "level_height"]:
+        if var in ds.coords:
+            ds = ds.reset_coords(var, drop=True)
+    return ds
 
 class LoadBaseSatelliteData:
     """
@@ -247,24 +267,32 @@ class LoadBaseSatelliteData:
         return topog_file, landcover_file
 
     def _get_meteorology_file(self, met_datadir, lazy_load=True):
-        met_datadir = f"{met_datadir}/UM/{self.region}/{self.region}_Met_{self.date}*.nc"
+        
+        met_datadir = f"{met_datadir}/UM/{self.region}/{self.domain}_Met_{self.date}*.nc"
         if self.verbose: print("Loading meteorology from " + met_datadir)
 
         # each chunk should have around 1mill values,  - chunk per level and by time, rounded to the nearest hundred, 100MB-1GB
         # could calcualte this dynamically 
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
-        with dask.config.set(**{'array.slicing.split_large_chunks': True}):           
+        # xr.open_mfdataset(sorted(glob.glob(metdir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":4}, drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=force_data_vars)
+
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):  
+            """          
             with xr.open_mfdataset(
                 sorted(glob.glob(met_datadir)),
                 combine='by_coords',
-                data_vars="all",        # ← treat everything as data vars
+                #data_vars="all",        # ← treat everything as data vars
                 coords="minimal",
                 parallel=True,
                 join="inner",
                 chunks={"level": 1, "time": time_chunk},
-                engine="h5netcdf"
+                engine="netcdf4",
+                preprocess=preprocess
             ) as met_file:
-
+            """
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, 
+                join="inner", chunks = {"level":1, "time":4}, 
+                drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=preprocess) as met_file:
 
 
                 #) rename, select levels and variables
@@ -278,7 +306,7 @@ class LoadBaseSatelliteData:
     def _get_domain(self, region):
         #### check domains
         # TODO make domains dict importable
-        domains = {"BRAZIL":"SOUTHAMERICA", "SOUTHAMERICA":"SOUTHAMERICA", "SAHARA":"NORTHAFRICA", "INDIA":"SOUTHASIA"} 
+        domains = {"BRAZIL":"SOUTHAMERICA", "SOUTHAMERICA":"SOUTHAMERICA", "SAHARA":"NORTHAFRICA", "INDIA":"INDIA"} 
         try:
             domain = domains[region]   
         except: 
@@ -289,7 +317,7 @@ class LoadBaseSatelliteData:
     def _load_footprints(self, fp_datadir):
         #### load footprint (fp) data from file
         #fp_datadir = fp_datadir+"/"+self.region+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc" 
-        fp_datadir = f"{fp_datadir}/{self.region}/*{self.region}*{self.domain}*{self.date}*.nc"
+        fp_datadir = f"{fp_datadir}/{self.region}/*{self.region}*{self.date}*.nc"
         #fp_datadir = os.path.join(fp_datadir, self.region, f"*{self.domain}_{self.date}*.nc") 
 
         
@@ -397,7 +425,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="zeros", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, met_datadir = None, load_everything=False, base_data_path=None, lazy_load=True, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, met_datadir = None, load_everything=False, base_data_path=None, lazy_load=True, met_args={}, topog_args={}):
 
         self.dataset_format = "square" 
         #### check domains
@@ -1132,7 +1160,8 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
         met = met.assign({"fp_time":(("time"),fp.time.values)})
 
     met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
-
+    met = met.astype("float32") 
+    
     domain_lats = np.copy(met.lat.values)
     domain_lons = np.copy(met.lon.values)
 
@@ -1150,7 +1179,11 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
             met["wind_speed"]=np.sqrt(met.x_wind**2 + met.y_wind**2)
         except Exception as e:
             print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
+    
+    met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
+
     return met
+
 
 
 
@@ -1198,14 +1231,13 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     ###
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
 
-
+    interp_method = "nearest"
     if time_delta==0:
-        met = met.interp(time=fp_times)
+        met = met.interp(time=fp_times, method=interp_method)
         met = met.assign({"fp_time":(("time"), fp_times)})
     else:
-
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
-        met = met.interp(time=fp_times)
+        met = met.interp(time=fp_times, method=interp_method)
 
         # store the original footprint times as a separate value
         met = met.assign({"fp_time":(("time"),fp.time.values)})
@@ -1327,11 +1359,13 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         print("loading cropped met dataset into memory. If you only want to lazy-load, pass load=False")
         cropped_met.load()
 
-    # add additional wind variables
-    if add_wind_direction and (relevant_variables is None or "wind_speed" in relevant_variables):
+    if add_wind_direction:# and (relevant_variables is None or "wind_speed" in relevant_variables or "wind_angle" in relevant_variables):
         try:
-            cropped_met["wind_angle"]=np.arctan2(-cropped_met.x_wind,-cropped_met.y_wind)
-            cropped_met["wind_speed"]=np.sqrt(cropped_met.x_wind**2 + cropped_met.y_wind**2)
+            if relevant_variables is None or "wind_angle" in relevant_variables:
+                cropped_met["wind_angle"]=np.arctan2(-cropped_met.x_wind,-cropped_met.y_wind)
+            if relevant_variables is None or "wind_speed" in relevant_variables:
+                cropped_met["wind_speed"]=np.sqrt(cropped_met.x_wind**2 + cropped_met.y_wind**2)
+            print("calculated wind angle and/or speed from x_wind and y_wind")
         except Exception as e:
             print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
 

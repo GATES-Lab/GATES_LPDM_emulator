@@ -338,6 +338,10 @@ class FootprintsDatasetV3(FootprintsDataset):
     def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[],full_land_cover=False, returning="original_footprints", size=None):
         super().__init__(inputs, fp, input_transforms, output_transforms, transform_parameters, test_mode, input_names, size=size)
 
+        # Checking for NaNs
+        if torch.isnan(self.inputs).any():
+            print("NaN detected in self.inputs at dataset init!")
+
         if returning=="original_footprints":
             self.original_fp = torch.tensor(self.fp_untransformed, dtype=torch.float)
         elif returning == "transformed_footprints":

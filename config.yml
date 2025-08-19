@@ -23,3 +23,20 @@ data_paths:
 user_paths:
   save_models_dir: "path/to/folder/where/models/should/be/saved"
   parameter_files_dir: "path/to/folder/with/parameter_files"
+
+domains:
+  SA:
+    domain_name: "SOUTHAMERICA"
+    footprint: "GOSAT-BRAZIL-column_SOUTHAMERICA_201801.nc"
+    
+  SAHARA:
+    domain_name: "NORTHAFRICA"
+    footprint: "GOSAT-SAHARA-column_NORTHAFRICA_201611.nc"
+
+  CHINA:
+    domain_name: "CHINA"
+    footprint: "GOSAT-CHINA-column_EASTASIA_201605.nc"
+
+  INDIA:
+    domain_name: "INDIA"
+    footprint: "GOSAT-INDIA-SAM-column_SOUTHASIA_201503.nc"
