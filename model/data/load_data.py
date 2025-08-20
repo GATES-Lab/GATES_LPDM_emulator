@@ -276,24 +276,8 @@ class LoadBaseSatelliteData:
         time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
         # xr.open_mfdataset(sorted(glob.glob(metdir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":4}, drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=force_data_vars)
 
-        with dask.config.set(**{'array.slicing.split_large_chunks': True}):  
-            """          
-            with xr.open_mfdataset(
-                sorted(glob.glob(met_datadir)),
-                combine='by_coords',
-                #data_vars="all",        # ← treat everything as data vars
-                coords="minimal",
-                parallel=True,
-                join="inner",
-                chunks={"level": 1, "time": time_chunk},
-                engine="netcdf4",
-                preprocess=preprocess
-            ) as met_file:
-            """
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, 
-                join="inner", chunks = {"level":1, "time":4}, 
-                drop_variables=["forecast_period", "forecast_reference_time"], compat="override", preprocess=preprocess) as met_file:
-
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"], compat="override", preprocess=remove_duplicates) as met_file:
 
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
@@ -1158,9 +1142,6 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
 
         # store the original footprint times as a separate value
         met = met.assign({"fp_time":(("time"),fp.time.values)})
-
-    met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
-    met = met.astype("float32") 
     
     domain_lats = np.copy(met.lat.values)
     domain_lons = np.copy(met.lon.values)
@@ -1183,7 +1164,6 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
     met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
 
     return met
-
 
 
 
@@ -1231,13 +1211,20 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     ###
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
 
-    interp_method = "nearest"
     if time_delta==0:
-        met = met.interp(time=fp_times, method=interp_method)
+        if interp_method == "nearest":
+            # if we are not interpolating, we can just use the times of the footprints
+            met = met.reindex(time=fp_times, method=interp_method, tolerance="4h", fill_value = np.nan)
+        else:
+            met = met.interp(time=fp_times, method=interp_method)
         met = met.assign({"fp_time":(("time"), fp_times)})
     else:
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
-        met = met.interp(time=fp_times, method=interp_method)
+        # reindex and interp are the same when method="nearest", but reindex allows tol
+        if interp_method == "nearest":
+            met = met.reindex(time=fp_times, method=interp_method, tolerance="4h", fill_value = np.nan)
+        else:
+            met = met.interp(time=fp_times, method=interp_method)
 
         # store the original footprint times as a separate value
         met = met.assign({"fp_time":(("time"),fp.time.values)})
@@ -1359,10 +1346,14 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         print("loading cropped met dataset into memory. If you only want to lazy-load, pass load=False")
         cropped_met.load()
 
-    if add_wind_direction and (relevant_variables is None or "wind_speed" in relevant_variables):
+    # add additional wind variables
+    if add_wind_direction:# and (relevant_variables is None or "wind_speed" in relevant_variables or "wind_angle" in relevant_variables):
         try:
-            met["wind_angle"]=np.arctan2(-met.x_wind,-met.y_wind)
-            met["wind_speed"]=np.sqrt(met.x_wind**2 + met.y_wind**2)
+            if relevant_variables is None or "wind_angle" in relevant_variables:
+                cropped_met["wind_angle"]=np.arctan2(-cropped_met.x_wind,-cropped_met.y_wind)
+            if relevant_variables is None or "wind_speed" in relevant_variables:
+                cropped_met["wind_speed"]=np.sqrt(cropped_met.x_wind**2 + cropped_met.y_wind**2)
+            print("calculated wind angle and/or speed from x_wind and y_wind")
         except Exception as e:
             print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
 
@@ -1454,6 +1445,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 if data.dataset_format == "domain":
                     met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, add_wind_direction=True)
 
+
                 met = met.swap_dims({"time":"fp_time"})
                 #met = met.reset_coords(["time"])
                 met = met.drop_vars("time")
@@ -1465,6 +1457,16 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             del met 
 
     print(len(all_met_files))
+
+    datasets = list(all_met_files.values())
+    first = datasets[0]
+
+    print("First ds data_vars:", list(first.data_vars))
+    print("First ds coords:", list(first.coords))
+    print("Which of the requested vars are data_vars in the first ds?",
+        [v for v in met_variables_needed if v in first.data_vars])
+    print("Requested but missing in first ds:",
+        [v for v in met_variables_needed if v not in first.data_vars])
     
     # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
     full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", ..., "time_delta")

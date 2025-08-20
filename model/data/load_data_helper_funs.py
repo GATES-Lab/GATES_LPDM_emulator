@@ -17,7 +17,7 @@ def haversine(lat1, lon1, lat2, lon2, radius=6371.0):
     a = np.sin(dlat / 2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0)**2
     c = 2 * np.arcsin(np.sqrt(a))
     return radius * c
-    
+
 def select_met_levels(met, levels=None):
     # subset the right levels and variables, as specified in the inputs
     if levels is not None and len(levels)>0 and "levels" in met.coords:
@@ -67,7 +67,8 @@ def _static_var_landcover_disaggregated(topog_ds, coordinate_ds):
     # extract the ten types of landcover as separate 2D inputs
     for landcover_type in range(n_landcover_types):
         coordinate_ds = coordinate_ds.assign({f"landcover_type_{landcover_type}":topog_ds.disaggregated_landcover.sel(landcover_level=landcover_type).rename({"time":"fp_time"})})
-    coordinate_ds = coordinate_ds.drop_vars("landcover_level")
+    if "landcover_level" in coordinate_ds.variables:
+        coordinate_ds = coordinate_ds.drop_vars("landcover_level")
     return coordinate_ds
 
 def _static_var_sin_lat_coords(coordinate_ds):
@@ -105,6 +106,62 @@ def _static_var_y_coords(coordinate_ds):
 
     return coordinate_ds 
 
+def _domain_distance_release(fp_data, coordinate_ds):
+    # calculates the haversine distance from each grid point to the release point for each fp
+    lat_vals = np.radians(fp_data.lat.values)  # shape (n_lat,)
+    lon_vals = np.radians(fp_data.lon.values)  # shape (n_lon,)
+    release_lat = np.radians(fp_data.release_lat.values)  # shape (n_time,)
+    release_lon = np.radians(fp_data.release_lon.values)  # shape (n_time,)
+
+    lat_grid, lon_grid = np.meshgrid(lat_vals, lon_vals, indexing='ij')  # shape (n_lat, n_lon)
+
+    # Broadcast all to 3d
+    lat_grid_3d = lat_grid[:, :, np.newaxis]  
+    lon_grid_3d = lon_grid[:, :, np.newaxis]  
+
+    release_lat_3d = release_lat[np.newaxis, np.newaxis, :]  
+    release_lon_3d = release_lon[np.newaxis, np.newaxis, :] 
+
+    distances = haversine(lat_grid_3d, lon_grid_3d, release_lat_3d, release_lon_3d)
+
+    coordinate_ds = coordinate_ds.assign({"distance_release":(("fp_time", "lat", "lon"), distances.transpose([2,0,1]))})
+
+    return coordinate_ds
+
+def _domain_binary_release(fp_data, coordinate_ds):
+    # provides a grid the size of the domain filled with zeros, except 1 at the release point
+
+    lat_vals = fp_data.lat.values  # shape (n_lat,)
+    lon_vals = fp_data.lon.values  # shape (n_lon,)
+    release_lat = fp_data.release_lat.values  # shape (n_time,)
+    release_lon = fp_data.release_lon.values  # shape (n_time,)
+
+    lat_grid, lon_grid = np.meshgrid(lat_vals, lon_vals, indexing='ij')  # shape (n_lat, n_lon)
+
+    # Broadcast all to 3d
+    lat_grid_3d = lat_grid[:, :, np.newaxis]  
+    lon_grid_3d = lon_grid[:, :, np.newaxis]  
+
+    release_lat_3d = release_lat[np.newaxis, np.newaxis, :]  
+    release_lon_3d = release_lon[np.newaxis, np.newaxis, :] 
+
+
+    # Compute squared distances to all grid points for all times
+    dist2 = (lat_grid_3d - release_lat_3d)**2 + (lon_grid_3d - release_lon_3d)**2  
+    min_indices = np.argmin(dist2.reshape(len(lat_vals)*len(lon_vals), -1), axis=0)  
+    lat_indices, lon_indices = np.unravel_index(min_indices, (len(lat_vals), len(lon_vals)))
+
+    marker = np.zeros((len(lat_vals), len(lon_vals), len(release_lat)), dtype=np.uint8)
+
+    marker[lat_indices, lon_indices, np.arange(len(release_lat))] = 1
+
+    coordinate_ds = coordinate_ds.assign({"binary_release":(("fp_time", "lat", "lon"), marker.transpose([2,0,1]))})
+    
+    return coordinate_ds
+
+
+
+
 def _binary_centre(coordinate_ds):
     assert coordinate_ds.lat.size == coordinate_ds.lon.size, "_binary_centre function only works for square datasets!"
 
@@ -113,6 +170,8 @@ def _binary_centre(coordinate_ds):
     grid[centre, centre] = 1
     coord = np.dstack([grid]*coordinate_ds.fp_time.size).transpose([2,0,1])
     coordinate_ds = coordinate_ds.assign({"binary_centre":(("fp_time", "lat", "lon"), coord)})
+
+    return coordinate_ds
 
 def _xy_distance_centre(coordinate_ds):
     assert coordinate_ds.lat.size == coordinate_ds.lon.size, "_binary_centre function only works for square datasets!"
@@ -124,6 +183,7 @@ def _xy_distance_centre(coordinate_ds):
     coord = np.dstack([distance]*coordinate_ds.fp_time.size).transpose([2,0,1])
     coordinate_ds = coordinate_ds.assign({"xy_distance_centre":(("fp_time", "lat", "lon"), coord)})
 
+    return coordinate_ds
 
     
 def get_static_variables_functions():
@@ -161,8 +221,11 @@ def get_static_variables_functions():
                                 "landcover_disaggregated":
                                 _static_var_landcover_disaggregated,  
                                 "land_cover_disaggregated_binary":
-                                NotImplemented
+                                NotImplemented,
+                                "domain_binary_release":
+                                _domain_binary_release,
+                                "domain_distance_release":
+                                _domain_distance_release,
     }    
             
     return static_variables_functions
-
