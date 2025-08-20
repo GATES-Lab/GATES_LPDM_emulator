@@ -503,7 +503,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             pad_mode = "nans"
         if self.fill_outofdomain_with=="zeros":
             pad_mode = "edge"
-        self.met = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load)
+        self.met = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True)
 
         if rechunk>0:
             self.met.chunk({"time":rechunk})
@@ -1187,7 +1187,7 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
 
 
 
-def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None):
+def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None, interp_method="nearest"):
     """
     make into smaller functions!
     
@@ -1359,13 +1359,10 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         print("loading cropped met dataset into memory. If you only want to lazy-load, pass load=False")
         cropped_met.load()
 
-    if add_wind_direction:# and (relevant_variables is None or "wind_speed" in relevant_variables or "wind_angle" in relevant_variables):
+    if add_wind_direction and (relevant_variables is None or "wind_speed" in relevant_variables):
         try:
-            if relevant_variables is None or "wind_angle" in relevant_variables:
-                cropped_met["wind_angle"]=np.arctan2(-cropped_met.x_wind,-cropped_met.y_wind)
-            if relevant_variables is None or "wind_speed" in relevant_variables:
-                cropped_met["wind_speed"]=np.sqrt(cropped_met.x_wind**2 + cropped_met.y_wind**2)
-            print("calculated wind angle and/or speed from x_wind and y_wind")
+            met["wind_angle"]=np.arctan2(-met.x_wind,-met.y_wind)
+            met["wind_speed"]=np.sqrt(met.x_wind**2 + met.y_wind**2)
         except Exception as e:
             print(f"Error {e} happened when adding wind direction and speed to met. Could be a naming error!")
 
@@ -1453,9 +1450,9 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
                 if data.dataset_format == "square":
-                    met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False)
+                    met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False, add_wind_direction=True)
                 if data.dataset_format == "domain":
-                    met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed)
+                    met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, add_wind_direction=True)
 
                 met = met.swap_dims({"time":"fp_time"})
                 #met = met.reset_coords(["time"])

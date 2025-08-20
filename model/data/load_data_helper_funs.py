@@ -6,6 +6,17 @@ import dask
 import sys
 import os
 
+def haversine(lat1, lon1, lat2, lon2, radius=6371.0):
+    """
+    All inputs are in radians. Returns distance in kilometers.
+    Supports broadcasting.
+    """
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = np.sin(dlat / 2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0)**2
+    c = 2 * np.arcsin(np.sqrt(a))
+    return radius * c
     
 def select_met_levels(met, levels=None):
     # subset the right levels and variables, as specified in the inputs
@@ -25,7 +36,7 @@ def select_met_variables(met, variables=None):
     protected_coords = ["levels", "time", "time_delta", "lat", "lon"]
     if variables is not None:
         for v in variables:
-            if v not in met.data_vars:
+            if v not in met.data_vars and v != "wind_speed" and v != "wind_angle":
                 print("variable ", v, " not found in met file")
                 variables.remove(v)
         vars_to_drop = list(set(list(met.data_vars))- set(variables) - set(protected_variables))
