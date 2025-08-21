@@ -1018,7 +1018,7 @@ def get_binned_seasonal_scores(true_fps, predictions, dates, release_lats, relea
 
 
 
-def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], title_modifier="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title="top", return_cbar=False):
+def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], cut_lons=[0,0], title_modifier="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title="top", return_cbar=False, cbar_label=None):
     
     
     if domain_lats is None:
@@ -1026,8 +1026,8 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
     if domain_lons is None:
         print("need domain lons!")
 
-    extent = (domain_lons[0], domain_lons[-1], domain_lats[cut_lats[0]], domain_lats[-1-cut_lats[1]])
-    ax.set_extent(extent, crs=ccrs.PlateCarree())
+    extent = (domain_lons[cut_lons[0]], domain_lons[-1-cut_lons[1]], domain_lats[cut_lats[0]], domain_lats[-1-cut_lats[1]])
+    ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
 
 
     higher_or_lower = {"IoU":"Higher", 'MSE':"Lower", "Corr Coeff": "Higher", "Log CorrCoeff": "Higher"}
@@ -1058,9 +1058,10 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
         norm = TwoSlopeNorm(vmin=vmin_vmax[0], vcenter=0, vmax=vmin_vmax[1])
         cmap="PiYG"
     else:
+        
         norm = Normalize(vmin=vmin_vmax[0], vmax=vmin_vmax[1])
 
-    im = ax.pcolormesh(binned_lons, binned_lats, metric, transform=ccrs.PlateCarree(), cmap=cmap, norm=norm)
+    im = ax.pcolormesh(binned_lons, binned_lats, metric, transform=cartopy.crs.PlateCarree(),cmap=cmap, norm=norm) 
 
     if title=="top":    
         ax.set_title(metric_name)
@@ -1077,11 +1078,12 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
 
     if cbar:
         assert fig is not None, "fig cant be empty if you want a cbar in this axis!"
-        
-        if metric_name in higher_or_lower.keys():
-            cbar_label = f"{metric_name} \n {higher_or_lower[metric_name]} is better"
-        else:
-            cbar_label = f"{metric_name}" 
+
+        if cbar_label is None:
+            if metric_name in higher_or_lower.keys():
+                cbar_label = f"{metric_name} \n {higher_or_lower[metric_name]} is better"
+            else:
+                cbar_label = f"{metric_name}"
 
         if cbar_position == "bottom":
             cbar = fig.colorbar(im, ax=ax, orientation="horizontal", extend='both', shrink=0.7).set_label(cbar_label)
@@ -1090,14 +1092,15 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
             cbar = fig.colorbar(im, ax=ax, orientation="vertical", extend='both', shrink=0.7).set_label(cbar_label)
 
     ax.coastlines()
-    ax.add_feature(cfeature.BORDERS, linewidth=1.)
-    ax.add_feature(cfeature.LAND)
-    ax.add_feature(cfeature.OCEAN)
+    ax.add_feature(cartopy.feature.BORDERS,linewidth=1.)
+    ax.add_feature(cartopy.feature.LAND)
+    ax.add_feature(cartopy.feature.OCEAN)
 
     if return_cbar:
         return ax, im
     else:
         return ax
+
 
 
 def plot_massive_binned_map(season_results, domain_lats, domain_lons, vmin_vmax = None):
