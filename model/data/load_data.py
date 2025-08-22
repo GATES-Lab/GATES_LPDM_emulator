@@ -17,7 +17,93 @@ import copy
 
 from .load_data_helper_funs import *
 
+
 def load_fps(fp_datadir, verbose=False):
+    """
+    Load footprints from datadir, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
+    note that the list of problematic files is currently updated manually!
+
+    Args:
+        - fp_datadir (str): string pointing to the directory with footprints to load, 
+        including special characters (eg "/path/to/footprints/*.nc", or "/path/to/footprints/*2020*.nc")
+        Note that fp_datadir is passed directly to glob, so it needs to specify filetype (i.e. finish with .nc)
+    
+    Returns:
+        - fp_data_full: xarray dataset with the footprints specified in the fp_datadir, opened correctly
+    
+    Potential Improvements:
+        - Add capability to ignore any files that couldn't be opened, and return only the successful files 
+    """
+    try:           
+        time_chunk = 25
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            # attempt to load dataset of multiple files the standard way
+            fp_data_full = xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, parallel=True) 
+    except Exception as e:
+        # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
+        # the bad_files contains full paths, first the full path is checked 
+        if verbose: print("there was an error opening the dataset. checking if any of the files are in the bad files list")
+        fp_files = sorted(glob.glob(fp_datadir))
+        path = os.path.split(fp_datadir)[0] + "/"
+        filenames = [os.path.split(x)[1] for x in fp_files]
+
+        bad_files = ["GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
+            "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc", 
+            'GOSAT-SAHARA-column_NORTHAFRICA_201501.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201502.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201503.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201504.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201609.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201610.nc',
+            'GOSAT-SAHARA-column_NORTHAFRICA_201612.nc']
+        # remove any files from the list that were in the bad files list
+
+        
+        without_bad_files = list(set(filenames) - set(bad_files))
+        without_bad_files = [path+f for f in without_bad_files]
+        bad_files = [path+f for f in bad_files]
+
+        if len(without_bad_files) == len(fp_files):
+            print("There was a problem opening files!! compared against the list of known bad files and couldnt find a match")
+            print("check if there has been a problem, or maybe a new bad file needs to be added to the list!")
+
+        if len(without_bad_files) < len(fp_files):
+            if verbose: print("at least one of the files was in the bad files list, opening with workaround")
+            # error arises because fp file for Brazil Nov 2015 has non-monotonic timestamps, use workaround
+            # error arises because fp file for Sahara Nov 2014 has non-monotonic timestamps, use workaround
+            # also some Sahara 2015 files are missing mean_age_particles_ variable - drop and concat
+            # Add clauses here to catch other known exceptions
+            with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+                # load non-problematic arrays all together
+                most = xr.open_mfdataset(sorted(without_bad_files))
+
+                bad_arrays = []
+                for badfile in bad_files:
+                    if badfile in fp_files:
+                        # load each bad file separately
+                        f_bad = xr.open_mfdataset(badfile)
+                        #f_bad = xr.open_mfdataset(badfile)
+                        if "NORTHAFRICA_2015" in badfile:
+                            try:
+                                f_bad = f_bad.drop(["mean_age_particles_n", "mean_age_particles_e", "mean_age_particles_w", "mean_age_particles_s"])        
+                            except Exception as e:
+                                print("something went wrong trying to load the bad North Africa 2015 files")
+                                print(e)
+                        bad_arrays.append(f_bad)
+                # concatenate all the good files with the bad ones along the time dimension
+                fp_data_full = xr.concat([most]+bad_arrays, dim="time")
+        else:
+            print("there was a problem", e)
+
+    fp_data_full= fp_data_full.sortby('time')
+
+    return fp_data_full
+
+
+
+
+
+def load_fps_old(fp_datadir, verbose=False):
     """
     Load footprints from datadir, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
     note that the list of problematic files is currently updated manually!
@@ -925,10 +1011,129 @@ def load_default_brazil_emissions(year=2016, month_to_use=6):
     emissions = emissions.sel(time=emissions.time[month_to_use-1])
     return emissions.flux.values
 
-def load_default_sahara_emissions(year=2016, month_to_use=6):
+def load_default_sahara_emissions(year=2016, month_to_use=6, return_as="array"):
     emissions = xr.open_dataset(f"/group/chemistry/acrg/LPDM/emissions/NORTHAFRICA/ch4_NORTHAFRICA_{year}.nc")
-    emissions = emissions.sel(time=emissions.time[month_to_use-1])
-    return emissions.flux.values
+    if return_as == "array":
+        emissions = emissions.sel(time=emissions.time[month_to_use-1])
+        return emissions.flux.values
+    elif return_as == "dataset":
+        emissions = emissions.sel(time=emissions.time[month_to_use-1])
+        return emissions
+    elif return_as == "full_dataset":
+        return emissions
+
+def cut_emissions_data_v2(emissions, fp_full, size, fill_bads_with="zeros", return_as="array"):
+
+    emissions = emissions.reindex({"time":fp_full.time}, method="nearest")
+
+    domain_lats = np.copy(emissions.lat.values)
+    domain_lons = np.copy(emissions.lon.values)
+
+    delta_lat = domain_lats[1]-domain_lats[0]
+    delta_lat_fp = fp_full.lat.values[1]-fp_full.lat.values[0]
+    delta_lon = domain_lons[1]-domain_lons[0]
+    delta_lon_fp = fp_full.lon.values[1]-fp_full.lon.values[0]
+
+    fp_times = np.copy(fp_full.time.values) 
+
+    if abs(delta_lat - delta_lat_fp) > 0.01 or abs(delta_lon - delta_lon_fp)>0.01:
+        print("the resolution is different! this doesnt work yet?")
+
+    emissions_release_idxs = get_release_idxs(fp_full, domain_lats=domain_lats, domain_lons=domain_lons)
+
+    half = int(size/2)
+    padding_needed = False
+
+    if fill_bads_with == "nans":
+        constant_values = np.nan
+    if fill_bads_with == "zeros":
+        constant_values = 0
+
+    padding = {"lat":[0,0], "lon":[0,0]}
+
+    emissions_needed_padding_direction = {"N":0, "S":0, "E":0, "W":0}
+    # check if we need to pad in any direction
+    emissions_needed_padding_direction["S"] = np.sum(emissions_release_idxs[:,0] < half)
+    emissions_needed_padding_direction["N"] = np.sum((len(domain_lats) - emissions_release_idxs[:,0]) < half)
+    emissions_needed_padding_direction["E"] = np.sum(emissions_release_idxs[:,1] < half)
+    emissions_needed_padding_direction["W"] = np.sum((len(domain_lons) - emissions_release_idxs[:,1]) < half)
+
+    padding_needed = False
+
+
+    if emissions_needed_padding_direction["S"]>0  or emissions_needed_padding_direction["N"]>0:
+        delta_lat = domain_lats[1] - domain_lats[0]
+
+        to_pad = (np.max([0, half - np.min(emissions_release_idxs[:,0])]) , np.max([0, half - (len(domain_lats) - np.max(emissions_release_idxs[:,0]))]))
+        padding["lat"] = to_pad
+
+        print(f"careful! the emission file is smaller than the domain you are trying to extract along the latitude dimension.  We need to pad {to_pad[0]} and {to_pad[1]} idxs on either side! padding with {fill_bads_with}")
+        if fill_bads_with == "zeros":
+            emissions = emissions.pad(pad_width={"lat":to_pad}, constant_values=constant_values)
+
+        if fill_bads_with == "nans":
+            emissions = emissions.pad(pad_width={"lat":to_pad})
+
+        if fill_bads_with == "edge":
+            emissions = emissions.pad(pad_width={"lat":to_pad}, mode="edge")
+
+        padding_needed = True
+
+        # reassign coordinates to ensure that padded values have the right spacing
+        updated_lats = sorted([np.min(domain_lats)-(i+1)*delta_lat for i in range(to_pad[0])]) + list(domain_lats) + sorted([np.max(domain_lats)+(i+1)*delta_lat for i in range(to_pad[1])])
+        emissions = emissions.assign_coords({"lat":updated_lats})
+
+   
+
+    if emissions_needed_padding_direction["E"]>0  or emissions_needed_padding_direction["W"]>0:
+        delta_lon = domain_lons[1] - domain_lons[0]
+
+        to_pad = (np.max([0, half - np.min(emissions_release_idxs[:,1])]) , np.max([0, half - (len(domain_lons) - np.max(emissions_release_idxs[:,1]))]))
+
+
+        print(f"careful! the emissions file smaller than the domain you are trying to extract along the longitude dimension. We need to pad {to_pad[0]} and {to_pad[1]} idxs on either side! padding with {fill_bads_with}")
+
+        if fill_bads_with == "zeros":
+            emissions = emissions.pad(pad_width={"lon":to_pad}, constant_values=constant_values)
+
+        if fill_bads_with == "nans":
+            emissions = emissions.pad(pad_width={"lon":to_pad})
+
+        if fill_bads_with == "edge":
+            emissions = emissions.pad(pad_width={"lon":to_pad}, mode="edge")
+
+        padding_needed = True
+        # reassign coordinates to ensure that padded values have the right spacing
+        updated_lons = sorted([np.min(domain_lons)-(i+1)*delta_lon for i in range(to_pad[0])]) + list(domain_lons) + sorted([np.max(domain_lons)+(i+1)*delta_lon for i in range(to_pad[1])])
+        emissions = emissions.assign_coords({"lon":updated_lons})
+
+    if padding_needed:
+        # recalculate the release indeces to account for the new padding that was just added
+        domain_lats = np.copy(emissions.lat.values)
+        domain_lons = np.copy(emissions.lon.values)
+        emissions_release_idxs = get_release_idxs(fp_full, domain_lats = domain_lats, domain_lons = domain_lons)
+
+    cropped_emissions_arrays = []
+
+    coords_array = np.arange(size)
+
+    for rel_unique in np.unique(emissions_release_idxs, axis=0):
+        idxs = np.where((emissions_release_idxs == rel_unique).all(axis=1))[0]
+        cut_emissions = emissions.sel(time=fp_times[idxs])
+        cut_emissions = cut_emissions.interp({"lat":domain_lats[rel_unique[0]-half:rel_unique[0]+half], "lon":domain_lons[rel_unique[1]-half:rel_unique[1]+half]}, method="nearest")
+        with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+            cut_emissions = cut_emissions.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), domain_lats[rel_unique[0]-half:rel_unique[0]+half]), "lon_coords":(("lon"), domain_lons[rel_unique[1]-half:rel_unique[1]+half])})
+        cropped_emissions_arrays.append(cut_emissions)
+
+    cropped_emissions = xr.concat(cropped_emissions_arrays, dim="time")
+    cropped_emissions = cropped_emissions.sortby("time")
+
+    if return_as == "array":
+        # return as a 2D array of shape (time, size*size)
+        cropped_emissions = cropped_emissions.flux.values #.reshape(cropped_emissions.time.size, size*size)
+        
+    return cropped_emissions
+
 
 def cut_emissions_data(flux, fp_full, size):
     # this assumes flux is a 2D np array of the same resolution and size as the footprints! it also assumes that the data is cut to a square size
