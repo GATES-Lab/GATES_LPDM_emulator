@@ -31,7 +31,7 @@ import json
 import argparse
 
 import random
-
+import wandb
 
 #### 1 Set up
 
@@ -98,6 +98,13 @@ if "seed" in (parameters.keys()):
 else:
     seed = args.seed
 
+#### wandb
+wandb.init(
+        project="IsambardAI_Sahara",
+        name=os.environ.get("WANDB_NAME", "local-run"),
+        config=parameters
+    )
+    
 
 
 np.random.seed(seed)
@@ -252,19 +259,36 @@ NMAE_function = NMAE_nans
 print("saving grids etc")
 
 # save transform parameters, grid and training settings
-with open(os.path.join(args.output_dir, f"grid_{model_name}.pickle"), 'wb') as handle:
+grid_path = os.path.join(args.output_dir, f"grid_{model_name}.pickle")
+with open(grid_path, 'wb') as handle:
     pickle.dump(grid, handle)
 
-with open(os.path.join(args.output_dir, f"transform_parameters_{model_name}.pickle"), 'wb') as handle:
+artifact = wandb.Artifact(f"grid-{model_name}", type="pickle")
+artifact.add_file(grid_path)
+wandb.log_artifact(artifact)
+
+transform_path = os.path.join(args.output_dir, f"transform_parameters_{model_name}.pickle")
+with open(transform_path, 'wb') as handle:
     pickle.dump(train_dataset.transform_parameters, handle)
 
-with open(os.path.join(args.output_dir, f"training_settings_{model_name}.json"), 'w') as handle:
-    json.dump(parameters, handle)
+artifact = wandb.Artifact(f"transform-parameters-{model_name}", type="pickle")
+artifact.add_file(transform_path)
+wandb.log_artifact(artifact)
+
+settings_path = os.path.join(args.output_dir, f"training_settings_{model_name}.json")
+with open(settings_path, 'w') as handle:
+    json.dump(parameters, handle, indent=2)
+
+artifact = wandb.Artifact(f"training-settings-{model_name}", type="json")
+artifact.add_file(settings_path)
+wandb.log_artifact(artifact)
 
 
 epoch_so_far = 0
 if torch.cuda.is_available():
     model.cuda()
+
+wandb.watch(model, log="all", log_freq=500)  # 👈 Track gradients and weights
 
 num_epochs = parameters.get("epochs", 350)  # fallback to 350 if not set
 write_to_file(f"Training for {num_epochs} epochs")
@@ -331,6 +355,17 @@ for epoch in range(num_epochs):
 
     write_to_file(f"{epoch + 1}, loss: {running_loss/(i+1)}, test loss: {test_error/(i_test+1)}, NMAE test: {NMAE_nans(test_out,truths)}, NMAE test trasformed: {evaluation_metrics['NMAE']}, MSE test transformed: {evaluation_metrics['MSE']}, IoU {evaluation_metrics['IOU']}, flux metrics (checkerboard 5): {flux_metrics}")
     
+    wandb.log({
+        "epoch": epoch + 1,
+        "train/loss": running_loss / (i + 1),
+        "test/loss": test_error / (i_test + 1),
+        "test/NMAE": NMAE_nans(test_out, truths),
+        "test/NMAE_transformed": evaluation_metrics['NMAE'],
+        "test/MSE": evaluation_metrics['MSE'],
+        "test/IoU": evaluation_metrics['IOU'],
+        **{f"flux/{k}": v for k, v in flux_metrics.items()}
+    }, step=epoch)
+
 
     # every five epochs plot and save 
     if epoch % 5 == 0:
@@ -352,7 +387,10 @@ for epoch in range(num_epochs):
                 ax[a,axis].yaxis.set_ticks([])
 
         plt.tight_layout()
-        savename = os.path.join(training_img_dir, f"{model_name}_{epoch}.png")   
+        savename = os.path.join(training_img_dir, f"{model_name}_{epoch}.png")
+        wandb.log({
+            "overview": wandb.Image(fig, caption=f"{model_name} epoch {epoch + 1}")
+        }, step=epoch + 1)
         plt.savefig(savename, dpi=300, bbox_inches='tight')
         plt.close()
 
@@ -367,6 +405,12 @@ for epoch in range(num_epochs):
                     'loss': losses,
                     'learning_rate':lr,
                     }, checkpoint_path)
+        
+        # Log to W&B as a versioned artifact
+        artifact = wandb.Artifact(f"checkpoint-{model_name}", type="model")
+        artifact.add_file(checkpoint_path)
+        wandb.log_artifact(artifact)
+
 
     if epoch == num_epochs - 1:
         test_out = np.reshape(np.squeeze(test_out), (len(test_out), size[0],size[1]))
@@ -401,7 +445,16 @@ for epoch in range(num_epochs):
         ds.to_netcdf(netcdf_save_path)
 
         print(f"Saved sample_predictions_training.nc to {netcdf_save_path}")
-        
+
+        # Log as a versioned artifact so you can fetch it later
+        art = wandb.Artifact(f"predictions-{model_name}", type="dataset",
+                            description="Sample predictions from training run")
+        art.add_file(netcdf_save_path)
+        wandb.log_artifact(art, aliases=[f"run-{os.environ.get('SLURM_JOB_ID','local')}", "latest"])
+
+        wandb.finish()  # End wandb session
+
+
     if epoch == 102:
         ## replaced NMAE with NMAE_nans in the whole file!
         if NMAE_nans(test_out,truths) == 1:
