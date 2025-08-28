@@ -1,14 +1,10 @@
 #!/bin/bash
-# SBATCH --job-name=SAHARA_150GB_2014_1_test_2016_all_exc_fps_tdelta_6_12
-# SBATCH --output=logs/%j_SAHARA_150GB_2014_1_test_2016_all_exc_fps_tdelta_6_12.out
-#SBATCH --job-name=wandb_1
-
-#SBATCH --output=logs/%j_wandb_1.out
-
+#SBATCH --job-name=SAHARA_445GB_201415_test_2016
+#SBATCH --output=logs/%j_SAHARA_445GB_201415_test_2016.out
 #SBATCH --gpus=1
-#SBATCH --mem=150G
+#SBATCH --mem=445G
 # SBATCH --mem-per-gpu=1G
-#SBATCH --time=08:00:00
+#SBATCH --time=12:00:00
 
 echo "Running on host: $(hostname)"
 echo "Node info:"
@@ -36,6 +32,7 @@ fi
 
 # Construct a descriptive W&B run name: jobName_jobID
 export WANDB_NAME="${SLURM_JOB_ID}_${SLURM_JOB_NAME}"
+export WANDB_NOTES="Baseline performance, first full training loop"
 
 # Ensure pip user installs are on PATH (inside container this points to ~/.local/bin)
 export PATH="${HOME}/.local/bin:${PATH}"
@@ -50,12 +47,6 @@ singularity exec --bind=/projects/b5s:/projects/b5s:rw --nv "$SIF" \
 # (Optional) sanity print
 singularity exec --bind=/projects/b5s:/projects/b5s:rw --nv "$SIF" \
   python -c "import sys, site; print('[wandb] sys.executable:', sys.executable); print('[wandb] user site:', site.getusersitepackages()); import wandb; print('[wandb] version:', wandb.__version__)"
-
-
-
-
-
-
 
 # --- Training ---------------------------------------------------------------
 echo "training..."

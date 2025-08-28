@@ -102,7 +102,19 @@ else:
 wandb.init(
         project="IsambardAI_Sahara",
         name=os.environ.get("WANDB_NAME", "local-run"),
-        config=parameters
+        config=parameters,
+        notes=os.environ.get("WANDB_NOTES", ""),  # 👈 pull note from env
+        tags=[
+            #"experiment",
+            "baseline",
+            "reproducibility",
+            #"lr_0.01"
+            #"levels",
+            #"time_deltas",
+            "uncertainty",
+            #"grid_size",
+            ]
+
     )
     
 
@@ -263,32 +275,49 @@ grid_path = os.path.join(args.output_dir, f"grid_{model_name}.pickle")
 with open(grid_path, 'wb') as handle:
     pickle.dump(grid, handle)
 
-artifact = wandb.Artifact(f"grid-{model_name}", type="pickle")
-artifact.add_file(grid_path)
-wandb.log_artifact(artifact)
+grid_artifact = wandb.Artifact(
+    name=f"{model_name}-grid",           # e.g. myModel-grid:v0
+    type="pickle",
+    description="Grid object used during training"
+)
+grid_artifact.add_file(grid_path)
+wandb.log_artifact(grid_artifact)
+
+# -------------------------------------------------------------
 
 transform_path = os.path.join(args.output_dir, f"transform_parameters_{model_name}.pickle")
 with open(transform_path, 'wb') as handle:
     pickle.dump(train_dataset.transform_parameters, handle)
 
-artifact = wandb.Artifact(f"transform-parameters-{model_name}", type="pickle")
-artifact.add_file(transform_path)
-wandb.log_artifact(artifact)
+transform_artifact = wandb.Artifact(
+    name=f"{model_name}-transform-parameters",   # e.g. myModel-transform-parameters:v0
+    type="pickle",
+    description="Transform parameters used in training"
+)
+transform_artifact.add_file(transform_path)
+wandb.log_artifact(transform_artifact)
+
+# -------------------------------------------------------------
 
 settings_path = os.path.join(args.output_dir, f"training_settings_{model_name}.json")
 with open(settings_path, 'w') as handle:
     json.dump(parameters, handle, indent=2)
 
-artifact = wandb.Artifact(f"training-settings-{model_name}", type="json")
-artifact.add_file(settings_path)
-wandb.log_artifact(artifact)
+settings_artifact = wandb.Artifact(
+    name=f"{model_name}-training-settings",   # e.g. myModel-training-settings:v0
+    type="json",
+    description="Training settings and hyperparameters"
+)
+settings_artifact.add_file(settings_path)
+wandb.log_artifact(settings_artifact)
 
+# ------------
 
 epoch_so_far = 0
 if torch.cuda.is_available():
     model.cuda()
 
-wandb.watch(model, log="all", log_freq=500)  # 👈 Track gradients and weights
+wandb.watch(model, log="all", log_freq=100)  # 👈 Track gradients and weights
 
 num_epochs = parameters.get("epochs", 350)  # fallback to 350 if not set
 write_to_file(f"Training for {num_epochs} epochs")
@@ -407,9 +436,14 @@ for epoch in range(num_epochs):
                     }, checkpoint_path)
         
         # Log to W&B as a versioned artifact
-        artifact = wandb.Artifact(f"checkpoint-{model_name}", type="model")
-        artifact.add_file(checkpoint_path)
-        wandb.log_artifact(artifact)
+        checkpoint_artifact = wandb.Artifact(
+            name=f"{model_name}-checkpoint",   # e.g. myModel-checkpoint:v0
+            type="model",
+            description="Model checkpoint saved during training"
+        )
+        checkpoint_artifact.add_file(checkpoint_path)
+        wandb.log_artifact(checkpoint_artifact)
+            
 
 
     if epoch == num_epochs - 1:
@@ -446,11 +480,14 @@ for epoch in range(num_epochs):
 
         print(f"Saved sample_predictions_training.nc to {netcdf_save_path}")
 
-        # Log as a versioned artifact so you can fetch it later
-        art = wandb.Artifact(f"predictions-{model_name}", type="dataset",
-                            description="Sample predictions from training run")
-        art.add_file(netcdf_save_path)
-        wandb.log_artifact(art, aliases=[f"run-{os.environ.get('SLURM_JOB_ID','local')}", "latest"])
+        # Log to W&B as a versioned artifact with explicit name
+        preds_artifact = wandb.Artifact(
+            name=f"{model_name}-predictions",   # e.g. myModel-predictions:v0
+            type="dataset",
+            description="Sample predictions saved during training"
+        )
+        preds_artifact.add_file(netcdf_save_path)
+        wandb.log_artifact(preds_artifact)
 
         wandb.finish()  # End wandb session
 

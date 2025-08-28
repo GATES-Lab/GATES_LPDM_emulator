@@ -4,3 +4,4 @@
 /logs
 /uncertainty_runs
 /training_output
+/wandb
