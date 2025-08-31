@@ -487,7 +487,12 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             pad_mode = "nans"
         if self.fill_outofdomain_with=="zeros":
             pad_mode = "edge"
-        self.met = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True)
+        self.met, met_nan_idxs = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True, return_nan_idxs=True)
+
+        if len(met_nan_idxs)>0:
+            print(f"Removing {len(met_nan_idxs)} indeces where met data could not be extracted \n (e.g. if closest available met timestep was more than 4 hours away)")
+            self.remove_indeces(met_nan_idxs)
+
 
         if rechunk>0:
             self.met.chunk({"time":rechunk})
@@ -561,7 +566,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         # returning as a netcdf dataset
         return self.topog
 
-    def remove_indeces(self, nan_idxs):
+    def remove_indeces(self, nan_idxs, delete_from_met=True):
         """
         removes any set of indeces passed as nan_idxs from all the objects in the dataset
         """
@@ -573,7 +578,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             if self.verbose: print(f"current length: {len(self.release_idxs)}")
             self.release_idxs = np.delete(self.release_idxs, nan_idxs, axis=0)
             
-        if hasattr(self, "met"): 
+        if hasattr(self, "met") and delete_from_met: 
             self.met = self.met.sel(time=np.delete(self.met.time.values, nan_idxs))
         if hasattr(self, "topog"):
             self.topog = self.topog.sel(time=np.delete(self.topog.time.values, nan_idxs))
@@ -1167,7 +1172,7 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
 
 
 
-def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None, interp_method="nearest"):
+def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None, interp_method="nearest", return_nan_idxs=False):
     """
     make into smaller functions!
     
@@ -1211,9 +1216,28 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
     ###
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
 
+
+    """
+    if interp_method == "nearest":
+        met_idx = met.indexes["time"]  
+        fp_idx = pd.DatetimeIndex(fp_times)
+        # get_indexer sets index to -1 if no value is found within the tolerance
+        nearest = met_idx.get_indexer(fp_idx, method="nearest", tolerance=pd.Timedelta("4h"))
+        # nan_idxs contains the indeces for which meteorology couldnt be interpolated 
+        nan_idxs = np.nonzero(nearest == -1)[0]
+        print(len(nan_idxs), "footprints could not be matched to meteorology within the tolerance of 4h")
+    else:
+        nan_idxs = []
+    """
+    nan_idxs = []
+
+
     if time_delta==0:
         if interp_method == "nearest":
             # if we are not interpolating, we can just use the times of the footprints
+            # find first any idx that wont be able to be interpolated
+            nearest = met.indexes["time"].get_indexer(pd.DatetimeIndex(fp_times), method="nearest", tolerance=pd.Timedelta("4h")) 
+            nan_idxs = np.nonzero(nearest == -1)[0]
             met = met.reindex(time=fp_times, method=interp_method, tolerance="4h", fill_value = np.nan)
         else:
             met = met.interp(time=fp_times, method=interp_method)
@@ -1222,6 +1246,9 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
         # reindex and interp are the same when method="nearest", but reindex allows tol
         if interp_method == "nearest":
+            # find first any idx that wont be able to be interpolated
+            nearest = met.indexes["time"].get_indexer(pd.DatetimeIndex(fp_times), method="nearest", tolerance=pd.Timedelta("4h")) 
+            nan_idxs = np.nonzero(nearest == -1)[0]
             met = met.reindex(time=fp_times, method=interp_method, tolerance="4h", fill_value = np.nan)
         else:
             met = met.interp(time=fp_times, method=interp_method)
@@ -1376,8 +1403,11 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         cropped_met.to_netcdf(savepath)
         print("met saved")
 
-    # cropped met will have some nans!!!
-    return cropped_met
+    if not return_nan_idxs:
+        # cropped met will have some nans!!!
+        return cropped_met
+    else:
+        return cropped_met, nan_idxs
 
 
 
@@ -1426,6 +1456,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     if len(time_deltas)>0:
         print(f"extracting met at t-H for H in: {time_deltas}")
         # filename here 
+        met_nan_idxs = {}
         for delta in time_deltas:
             if delta==0:
                 met = data.met
@@ -1441,7 +1472,8 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
                 if data.dataset_format == "square":
-                    met = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False, add_wind_direction=True)
+                    met, nan_idxs = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False, add_wind_direction=True, return_nan_idxs=True)
+                    met_nan_idxs[delta] = nan_idxs
                 if data.dataset_format == "domain":
                     met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, add_wind_direction=True)
 
@@ -1471,7 +1503,14 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
     full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", ..., "time_delta")
 
-    # if the time_delta is large, cut met might have interpolated to t-time_delta outside of the known met. check and if so remove indeces
+    # if the time_delta is large, cut met might have interpolated to t-time_delta outside of the known met. this might also happen if there are any missing timepoints in the available meteorology. check and if so remove indeces
+    all_nan_idxs = np.unique(np.concatenate(list(met_nan_idxs.values())))
+    if len(all_nan_idxs)>0:
+        full_met = full_met.drop_isel(fp_time=all_nan_idxs)
+        print(f"removing {len(all_nan_idxs)} indeces due to problems with interpolating meteorology for the passed time_deltas")
+        data.remove_indeces(all_nan_idxs)
+
+    """
     if data.met.time.values[0] - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]:
         badly_interpolated = data.met.time.values - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]
         full_met = full_met.drop_sel(fp_time=full_met.fp_time.values[badly_interpolated])
@@ -1479,7 +1518,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
         # this updates any indeces that couldnt be interpolated
         # i think it updates data without needing to return it as a new object
         data.remove_indeces(np.where(badly_interpolated)[0])
-
+    """ 
 
     input_arrays = []
     varnames_dict = []

@@ -23,7 +23,7 @@ def launch_slurm_job(run_id, seed, output_dir):
 
 def main():
     base_dir = "uncertainty_runs"
-    seeds = [11, 23, 42, 87, 135
+    seeds = [3, 7, 13, 23, 31, 37, 47, 61, 73, 89
              ]
 
     for i, seed in enumerate(seeds, start=1):
