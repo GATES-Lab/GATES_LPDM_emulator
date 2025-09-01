@@ -946,7 +946,7 @@ class SatelliteDecoderConvClassifier(torch.nn.Module):
         #print("after scatter", processor_features.size(), processor_features.dtype)
         
         #print(np.shape(processor_features))
-        print('processor features rearranged',processor_features.shape,'batch size',batch_size,self.input_height,self.input_width)
+        #print('processor features rearranged',processor_features.shape,'batch size',batch_size,self.input_height,self.input_width)
         '''
         processor_features = processor_features.view(batch_size, 64,self.input_height, self.input_width)
         '''

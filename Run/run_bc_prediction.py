@@ -10,7 +10,7 @@ from new_graphnet.graphnet_LPDM_emulator.parameter_files.train_parameters import
 
 
 if __name__=="__main__":
-    practice = True
+    practice = False
     if practice:
         for practice_hparams in practice_hparams_list:
             #inference_only_pipeline(practice_hparams,practice)

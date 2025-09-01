@@ -47,9 +47,9 @@ hparams = {
     'normalization':'all',
     "learning_rate":5e-5,
     "seed":42,
-    "epochs":150,
+    "epochs":200,
     "num_classes":4,
-    "use_baselines":False,
+    "use_baselines":True,
     'network_decoder':'conv',
 
     "loss_functions" : {
@@ -223,5 +223,5 @@ sim_hparams_6['variables']["time_deltas"] = [6,12,24]
 #sim_hparams_2["model_name"] = "trainyear-2014_trainfreq-3_baselineyears-2014-2011_normalization-all_size-50-epochs-150_baselines_True_lr-5e-05_seed-31_date-Jan-17-2025"
 '''
 
-hparams_list = [sim_hparams_5, sim_hparams_6,sim_hparams, sim_hparams_2]
+hparams_list = [sim_hparams_5, sim_hparams_6]
 #hparams_list = [sim_hparams, sim_hparams_2,sim_hparams_3,sim_hparams_4, sim_hparams_5,sim_hparams_6]

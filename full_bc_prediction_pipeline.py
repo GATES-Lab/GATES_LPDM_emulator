@@ -715,8 +715,9 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     denormalized_test_truths_summed = np.sum(denormalized_test_truths, axis=1)
 
 
+    best_test_mae = float("inf")
     #best_test_loss = float("inf")
-    #best_epoch = -1
+    best_epoch = -1
 
     num_epochs = parameters["epochs"]
     n = 2  # Number of times to reload new data
@@ -816,10 +817,10 @@ def train_bc_prediction_pipeline(_hparams,_practice):
             "summed_test_MAE": test_mae
         })
         write_to_file(inference_path, model_name,f"{epoch + 1}, loss: {running_loss/(i_train+1)}, test loss: {test_error/(i_test+1)}, denormzalised summed test loss:{test_mae}")
-        '''
+        
         # Save best model and predictions
-        if test_loss < best_test_loss:
-            best_test_loss = test_loss
+        if test_mae < best_test_mae:
+            best_test_mae = test_mae
             best_epoch = epoch
 
             model_save_path = f"{inference_path}{model_name}/{model_name}_best.pt"
@@ -846,8 +847,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
                 inference_path, model_name,
                 f"Best model saved at epoch {epoch+1} with Test Loss: {best_test_loss:.6f}"
             )
-        '''
-
+        
         ## save checkpoint every 50 epochs
         if epoch % 50 ==0:
             checkpoint_path = f"{inference_path}{model_name}/{model_name}_{epoch}.pt"

@@ -554,8 +554,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         # needs a revision
         if np.sum(np.isnan(self.met[[list(self.met.data_vars)[0]]].values)) != 0:
             nan_idxs = np.unique(np.where(np.isnan(self.met[[list(self.met.data_vars)[0]]].values[0,0,0,:])))
-            print(f"There are {len(nan_idxs)} nans in the met data. finding and deleting from met and fp (only on axis time)")
-            
+            print(f"There are {len(nan_idxs)} nans in the met data. finding and deleting from met and fp (only on axis time)")            
             self.remove_indeces(nan_idxs)
             self.met_nan_idxs = nan_idxs
         else:
