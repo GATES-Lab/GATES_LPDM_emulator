@@ -733,8 +733,9 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     denormalized_test_truths_summed = np.sum(denormalized_test_truths, axis=1)
 
 
+    best_test_mae = float("inf")
     #best_test_loss = float("inf")
-    #best_epoch = -1
+    best_epoch = -1
 
     num_epochs = parameters["epochs"]
     n = 2  # Number of times to reload new data
@@ -742,7 +743,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     offset = 1
     # Nawid - need to use it earlier to make sure if runs correctly I believe before i reinitialise the data
     train_out = np.zeros((train_dataset.inputs.size()[0], num_classes))
-    import ipdb; ipdb.set_trace()
+    
     for epoch in range(num_epochs):
         epoch=epoch+epoch_so_far
         '''
@@ -777,13 +778,13 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
         #import ipdb; ipdb.set_trace()
         # Nawid - Looking at saving the outputs of the data
 
-        
+        #import ipdb; ipdb.set_trace()
         for i_train, batch in enumerate(train_loader):
             # get the inputs; data is a list of [inputs, labels]
             ins, labels = batch[0].to(device), batch[1].to(device)
             # zero the parameter gradients
             optimizer.zero_grad()
-
+            
             # forward + backward + optimize
             model_outputs = model(ins)
             loss = criterion(model_outputs, labels)
@@ -834,10 +835,10 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
             "summed_test_MAE": test_mae
         })
         write_to_file(inference_path, model_name,f"{epoch + 1}, loss: {running_loss/(i_train+1)}, test loss: {test_error/(i_test+1)}, denormzalised summed test loss:{test_mae}")
-        '''
+        
         # Save best model and predictions
-        if test_loss < best_test_loss:
-            best_test_loss = test_loss
+        if test_mae < best_test_mae:
+            best_test_mae = test_mae
             best_epoch = epoch
 
             model_save_path = f"{inference_path}{model_name}/{model_name}_best.pt"
@@ -864,8 +865,7 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
                 inference_path, model_name,
                 f"Best model saved at epoch {epoch+1} with Test Loss: {best_test_loss:.6f}"
             )
-        '''
-
+        
         ## save checkpoint every 50 epochs
         if epoch % 50 ==0:
             checkpoint_path = f"{inference_path}{model_name}/{model_name}_{epoch}.pt"

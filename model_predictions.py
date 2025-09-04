@@ -23,6 +23,7 @@ from model.layers.processor import *
 from model.layers.graph_net_block import *
 from model.data.dataloader_graphnet import *
 from model.data.load_data import *
+from model.utils import parse_years, baseline_mol_updated, write_to_file
 
 from model.forecast import GraphSatelliteForecaster, GraphSatelliteForecasterClassifier, GraphSatelliteForecasterConvClassifier
 from model.loss_functions import *
@@ -37,7 +38,7 @@ import argparse
 
 import random
 from datetime import date
-
+import wandb
 
 
 def getint_updated(filename):
@@ -100,7 +101,8 @@ def perform_inference(_run_path,_practice):
     '''
     run = api.run(f"your_entity/your_project/{run_id}")  # e.g. "username/projectname/runid"
     '''
-    run = api.run('nerdk312/BoundaryCondition-Prediction/7s441nbt')
+    run = api.run('nerdk312/BoundaryCondition-Prediction/yxwypg3s')
+
     # 3. Pull hyperparameters
     parameters = run.config  # this is a dict with your hparams
     folder_name = 'boundary_condition'
@@ -108,6 +110,7 @@ def perform_inference(_run_path,_practice):
     model_name = run.name #'num_classes-4_baselines-False_size-50_decoder-conv_normalization-all_trainyear-2014-5_trainfreq-3_epochs-150_lr-5e-05_seed-42_date-Aug-09-2025'
 
     inference_path=f"/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/graph_weather/{folder_name}/"
+    '''
     data_save_name = f"{inference_path}{model_name}/{model_name}_final_epoch_data.pkl"
 
     with open(f'{data_save_name}', 'rb') as f:
@@ -115,6 +118,7 @@ def perform_inference(_run_path,_practice):
     #loaded_filtered_data_dict = np.load(data_save_name)
     predictions = loaded_filtered_data_dict['test_dataset_predictions']
     truths = loaded_filtered_data_dict['test_dataset_truths']
+    '''
     # Nawid - Look at loading the best model
     checkpoint_to_load = get_checkpoint_to_load_updated(model_name,inference_path, prefer_best=False)
     # Nawid - Make sure it has the right location
