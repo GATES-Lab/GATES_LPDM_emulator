@@ -21,5 +21,6 @@ source ~/initConda.sh
 #conda activate /user/work/yl18410/miniconda3/envs/new_graphnet_v2
 conda activate /user/work/yl18410/graphnet_bp_220324_backup
 
-python Run/run_bc_prediction.py
+#python Run/run_bc_prediction.py
+python model_predictions.py
 echo "boxcox trained"

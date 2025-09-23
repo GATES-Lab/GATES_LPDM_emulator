@@ -4,3 +4,4 @@ graph_weather
 *.out
 wandb
 modloss
+*.nc
