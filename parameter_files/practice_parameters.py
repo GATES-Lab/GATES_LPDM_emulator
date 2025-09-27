@@ -73,7 +73,7 @@ hparams = {
 hparams = {
     "model_name" : "test_run",
     "train_load_data" : {
-        "year":"201[4-6]",
+        "year":"2014",
         "freq":100,
         "region":"BRAZIL",
         "verbose":True,
@@ -118,6 +118,7 @@ hparams = {
     "num_classes":4,
     "use_baselines":False,
     'network_decoder':'gnn',
+    'output_format':'corrected',
 
     "loss_functions" : {
         "criterion": "torch.nn.MSELoss()",

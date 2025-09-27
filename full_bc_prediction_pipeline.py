@@ -47,104 +47,7 @@ os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<--
 wandb.login()
 
 
-def baseline_mol(desired_data,months,desired_year):
-    '''
-    Function used to get the value for the input and output
-    '''
-    total_data_points = desired_data.fp_data_full.particle_locations_n.time.shape[-1]                                                                      
-    # Load the CSV file
-    #df = pd.read_csv('Analysis/CH4_Semihemispheric_modelled_mole_fractions.csv')
-    df = pd.read_csv('/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/CH4_Semihemispheric_modelled_mole_fractions.csv')
-    baseline_list = np.zeros((total_data_points,4))
 
-    '''
-    # Specify the year and month you're interested in
-    # Filter the data for the specific year and month
-    filtered_data = df[(df['Year'] == specific_year) & (df['Month'] == specific_month)]
-
-    # Extract the 4th, 5th, 6th, and 7th columns
-    selected_columns = filtered_data.iloc[:, [3, 4, 5, 6]].values
-
-    # Display the results
-    print(selected_columns)
-    '''
-
-    # Iterate through the different numbers 
-    #months = ['01','02','03','04','05','06','07','08','09','10','11','12']
-    #year = 2016
-    datetime_array = np.array(desired_data.fp_data_full.particle_locations_n.time)
-
-    total_data_points = desired_data.fp_data_full.particle_locations_n.time.shape[-1]
-    north_list = np.zeros(total_data_points) # Creates a list of size N with None values
-    south_list = np.zeros(total_data_points)
-    east_list = np.zeros(total_data_points)
-    west_list = np.zeros(total_data_points)
-
-    for month in months:
-        # Cams field for a particular month
-        if desired_year > 2017:
-            # Change made due to the naming of the data
-            cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{desired_year}{month}_CAMS-inversion_climatology.nc")
-        else:
-            cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{desired_year}{month}_CAMS-inversion.nc")    
-        # Extract year and month
-        #import ipdb; ipdb.set_trace()
-        years = np.array([np.datetime64(date, 'Y').astype(int) + 1970 for date in datetime_array])
-        months = np.array([np.datetime64(date, 'M').astype(int) % 12 + 1 for date in datetime_array])
-
-        # Desired year and month
-        #desired_year = 2016
-        desired_month = month
-        print('desired month',desired_month)
-        
-        '''
-        coarse_cams  = cams.coarsen(lon=desired_data.coarsening_factor, lat=desired_data.coarsening_factor, boundary="pad").mean()
-        '''
-        # Find the index of the first occurrence
-        indices = np.where((years == desired_year) & (months == int(desired_month)))[0]
-        print(indices)
-        if len(indices)>0:
-            # Get the inputs
-            filtered_data = df[(df['Year'] == desired_year) & (df['Month'] == int(desired_month))]
-            # Extract the 4th, 5th, 6th, and 7th columns
-            selected_columns = filtered_data.iloc[:, [3, 4, 5, 6]].values
-            baseline_list[indices] = selected_columns/1000 # Convert from parts per trillion to parts per million
-
-            print(indices[0])
-            # Multply the first value with all the other values of the array
-            print(cams.vmr_n.shape)
-            # CAMS field should be stationary over the period of a month
-            #import ipdb; ipdb.set_trace()
-
-            north_mol = np.sum(cams.vmr_n * desired_data.locs.particle_locations_n[:,:,indices], axis=(0,1))
-            south_mol = np.sum(cams.vmr_s * desired_data.locs.particle_locations_s[:,:,indices], axis=(0,1))
-            east_mol = np.sum(cams.vmr_e * desired_data.locs.particle_locations_e[:,:,indices], axis=(0,1))
-            west_mol = np.sum(cams.vmr_w * desired_data.locs.particle_locations_w[:,:,indices], axis=(0,1))
-            '''
-            north_mol = np.sum(coarse_cams.vmr_n * desired_data.locs.particle_locations_n[:,:,indices], axis=(0,1))
-            south_mol = np.sum(coarse_cams.vmr_s * desired_data.locs.particle_locations_s[:,:,indices], axis=(0,1))
-            east_mol = np.sum(coarse_cams.vmr_e * desired_data.locs.particle_locations_e[:,:,indices], axis=(0,1))
-            west_mol = np.sum(coarse_cams.vmr_w * desired_data.locs.particle_locations_w[:,:,indices], axis=(0,1))
-            '''
-            '''
-            north_mol = np.sum(cams.vmr_n * desired_data.fp_data_full.particle_locations_n[:,:,indices], axis=(0,1))
-            south_mol = np.sum(cams.vmr_s * desired_data.fp_data_full.particle_locations_s[:,:,indices], axis=(0,1))
-            east_mol = np.sum(cams.vmr_e * desired_data.fp_data_full.particle_locations_e[:,:,indices], axis=(0,1))
-            west_mol = np.sum(cams.vmr_w * desired_data.fp_data_full.particle_locations_w[:,:,indices], axis=(0,1))
-            '''
-            #import ipdb; ipdb.set_trace()
-            north_list[indices] = north_mol
-            south_list[indices] = south_mol
-            east_list[indices] = east_mol
-            west_list[indices] = west_mol
-
-
-        print(baseline_list)
-        #cams = xr.open_dataset("/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
-        # Making the assumption that the values in the month are not different, get the first value
-        # Multiple the different values
-    
-    return baseline_list, north_list, south_list, east_list, west_list
 
 def write_to_file(path, model_name,message):
     f = open(f"{path}{model_name}/{model_name}_updates.txt", "a")
@@ -152,7 +55,53 @@ def write_to_file(path, model_name,message):
     f.close()
 
 
+def normalize_boundary_data(
+    norm_type,
+    outputs,
+    baseline_list,
+    outputs_norm_vals=None,
+    baseline_norm_vals=None
+):
+    """
+    Normalize outputs and baseline_list using either 'separate' or 'all' mode.
+    If normalization values are provided, reuse them. Otherwise, compute new ones.
 
+    Parameters
+    ----------
+    norm_type : str
+        Either 'separate' or 'all'.
+    outputs, baseline_list : np.ndarray
+        Training arrays to normalize.
+    test_outputs, test_baseline_list : np.ndarray, optional
+        Test arrays to normalize with training statistics.
+    outputs_norm_vals, baseline_norm_vals : tuple(mean, std), optional
+        Precomputed normalization values.
+
+    Returns
+    -------
+    outputs, baseline_list, test_outputs, test_baseline_list, outputs_norm_vals, baseline_norm_vals
+    """
+
+    if norm_type == 'separate':
+        # if values are not given, compute them
+        if outputs_norm_vals is None:
+            outputs_norm_vals = (np.mean(outputs, axis=0), np.std(outputs, axis=0))
+        if baseline_norm_vals is None:
+            baseline_norm_vals = (np.mean(baseline_list, axis=0), np.std(baseline_list, axis=0))
+    
+    elif norm_type == 'all':
+        if outputs_norm_vals is None:
+            outputs_norm_vals = (np.mean(outputs), np.std(outputs))
+        if baseline_norm_vals is None:
+            baseline_norm_vals = (np.mean(baseline_list), np.std(baseline_list))
+
+    outputs_mean, outputs_std = outputs_norm_vals
+    baseline_mean, baseline_std = baseline_norm_vals
+
+    normalized_outputs = (outputs - outputs_mean) / outputs_std
+    normalized_baseline_list = (baseline_list - baseline_mean) / baseline_std
+
+    return normalized_outputs, normalized_baseline_list, outputs_norm_vals, baseline_norm_vals
 
 '''
 def train_bc_prediction_pipeline(_hparams,_practice):
@@ -487,34 +436,14 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     
     parameters = _hparams
     name_train_freq =parameters["train_load_data"]["freq"]
-    #name_output_transforms = parameters["dataloader_parameters"]["output_transforms"][0].replace('"', '').replace('[', '').replace(']', '')
+    
     name_train_data = str(parameters['train_load_data']['year'])
     name_lr = parameters['learning_rate']
-    #name_coarsening = str(parameters["train_load_data"]["coarsening_factor"])
     #name_alpha = parameters['loss_weight']
     name_normalization = parameters['normalization']
     name_decoder = parameters['network_decoder']
     today = date.today()
     d4 = today.strftime("%b-%d-%Y")
-
-    # Safely get the 'domain_to_cut' dictionary or None if missing
-    domain_to_cut = parameters["train_load_data"].get("domain_to_cut")
-
-    # Initialize size
-    name_size = 'full'
-
-    if isinstance(domain_to_cut, dict):
-        lat_domain = domain_to_cut.get("lat")
-        lon_domain = domain_to_cut.get("lon")
-
-        if lat_domain == [-29.5, -6] and lon_domain == [-60, -10]:
-            name_size = 100
-        elif lat_domain == [-35.5, -0.5] and lon_domain == [-77.5, 7.5]:
-            name_size = 150
-        elif lat_domain == [-39.7, 4.7] and lon_domain is None:
-            name_size = 190
-
-
 
     if "seed" in (parameters.keys()):
         print(parameters["seed"])
@@ -531,27 +460,26 @@ def train_bc_prediction_pipeline(_hparams,_practice):
         random.seed(34)
     
     name_train_data = name_train_data.replace("[", "").replace("]", "")    
-
     name_seed = parameters['seed']
     name_num_classes = str(parameters['num_classes'])
-    
     name_inference_epochs = parameters["epochs"]
     name_baselines = str(parameters['use_baselines'])
-    if "size" in (parameters["train_load_data"].keys()):
-        # Version where i use the square domain
-        name_size = str(parameters["train_load_data"]['size'])
-        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_size-{name_size}_decoder-{name_decoder}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
-    else:
-        # Version where I use the fixed domain
-        model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}__size-{name_size}_coarsening-{name_coarsening}_decoder-{name_decoder}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
-        
-    if _practice:
+    
+    name_size = str(parameters["train_load_data"]['size'])
+    name_output_format = parameters['output_format']
+    model_name = f"num_classes-{name_num_classes}_baselines-{name_baselines}_size-{name_size}_format-{name_output_format}_decoder-{name_decoder}_normalization-{name_normalization}_trainyear-{name_train_data}_trainfreq-{name_train_freq}_epochs-{name_inference_epochs}_lr-{name_lr}_seed-{name_seed}_date-{d4}"
+    
+    # Nawid - performing different things depending on the mode of practice
+    if _practice =='Full':
         model_name = 'practice_run'
         #import ipdb; ipdb.set_trace()
         #with open("practice_data_updated.pkl", "rb") as f:
         with open("practice_data_2014_6_updated.pkl", "rb") as f:
             loaded_data = pickle.load(f)
         data, test_data, grid, inputs, names, test_inputs =loaded_data["data"],loaded_data["test_data"],loaded_data["grid"], loaded_data["inputs"], loaded_data["names"], loaded_data["test_inputs"]
+        model_folder = f"{inference_path}{model_name}"
+    elif _practice =='Partial':
+        model_name = 'practice_run'
         model_folder = f"{inference_path}{model_name}"
     else:
         print('Not using practice')
@@ -592,7 +520,6 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     # Load the data
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(inference_path,model_name,f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"))
-    #write_to_file("loading data")
     write_to_file(inference_path,model_name,"loading data")
     write_to_file(inference_path,model_name,"setting up data")
 
@@ -601,33 +528,34 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     test_load_data = copy.deepcopy(parameters["train_load_data"])
     test_load_data.update(parameters["test_load_data"])
     
-
     # Nawid - Making it so that the different value can be used for the case where there is a single value for the approach
     print(train_load_data)
     print(test_load_data)
-    if not _practice:
-        if "size" in (parameters["train_load_data"].keys()):
-            print('Using square domain')
-            data = LoadSquareSatelliteData(**train_load_data)
-            test_data = LoadSquareSatelliteData(**test_load_data)    
-        else:    
-            print('Using fixed domain')
-            data = LoadDomainSatelliteData(**train_load_data)
-            test_data = LoadDomainSatelliteData(**test_load_data)
-        
+    if not _practice =='Full':
+        data = LoadSquareSatelliteData(**train_load_data)
+        test_data = LoadSquareSatelliteData(**test_load_data)    
+            
     train_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     # TODO: Nawid- get the train year and the test year from the trainload data 
     train_year = parse_years(train_load_data['year'])
     
     test_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     test_year = parse_years(test_load_data['year'])
-
-
+    print(name_output_format)
+    baseline_list, outputs = baseline_mol_correction(data,train_months, train_year,output_format=name_output_format)
+    test_baseline_list, test_outputs = baseline_mol_correction(test_data,test_months, test_year,output_format =name_output_format)
+    
+    '''
     baseline_list, north_list, south_list, east_list, west_list = baseline_mol_updated(data,train_months, train_year)
     test_baseline_list, test_north_list, test_south_list, test_east_list, test_west_list = baseline_mol_updated(test_data,test_months, test_year)
     outputs = np.stack((north_list,south_list, east_list,west_list),axis=1)
     test_outputs = np.stack((test_north_list,test_south_list, test_east_list,test_west_list),axis=1)
-
+    '''
+    normalization_type = parameters['normalization']
+    outputs, baseline_list, (outputs_mean_values,outputs_std_values), (baseline_mean_values,baseline_std_values) = normalize_boundary_data(normalization_type,outputs, baseline_list)
+    test_outputs, test_baseline_list,_,_ = normalize_boundary_data(normalization_type,test_outputs,test_baseline_list,outputs_norm_vals=(outputs_mean_values,outputs_std_values),baseline_norm_vals=(baseline_mean_values,baseline_std_values))
+    
+    '''
     if parameters['normalization'] =='separate':
         outputs_mean_values, outputs_std_values = np.mean(outputs,axis=0), np.std(outputs,axis=0)
         baseline_mean_values, baseline_std_values = np.mean(baseline_list,axis=0), np.std(baseline_list,axis=0)
@@ -645,10 +573,13 @@ def train_bc_prediction_pipeline(_hparams,_practice):
 
         test_outputs = (test_outputs-outputs_mean_values)/outputs_std_values
         test_baseline_list = (test_baseline_list-baseline_mean_values)/baseline_std_values
-
+    '''
     grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
     input_variables = parameters["variables"]
-    if not _practice:
+
+    if _practice =='Full':
+        pass
+    else:
         inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
         test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=True)
     
@@ -675,6 +606,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     feature_dim=np.shape(inputs)[-1]
     
     num_classes = parameters['num_classes']
+    #num_classes = 1
     # Should probably update the name!!
     num_lat, num_lon = len(data.met.lat.values), len(data.met.lon.values)
 
@@ -689,6 +621,8 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     lr = parameters["learning_rate"]
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     normalization_vals = {"outputs_mean":outputs_mean_values,"outputs_std": outputs_std_values}
+    baseline_normalization_vals = {"baselines_mean":baseline_mean_values,"baselines_std":baseline_std_values} 
+
     losses = {"train":[], "test":[],"individual_summed_test_MAE":[]}
     #losses = {"train":[], "test":[],"individual_mol_test_MAE":[],"individual_summed_test_MAE":[]}
     print("saving grids etc")
@@ -711,47 +645,23 @@ def train_bc_prediction_pipeline(_hparams,_practice):
 
 
     # Nawid- true outputs of the test data (not using the train valeus as the training data is shuffled)
+    #import ipdb; ipdb.set_trace()
     denormalized_test_truths = (test_outputs*outputs_std_values) + outputs_mean_values
     denormalized_test_truths_summed = np.sum(denormalized_test_truths, axis=1)
-
+    
 
     best_test_mae = float("inf")
-    #best_test_loss = float("inf")
+    best_test_loss = float("inf")
     best_epoch = -1
 
     num_epochs = parameters["epochs"]
-    n = 2  # Number of times to reload new data
-    interval = num_epochs // n
-    offset = 1
+    
     # Nawid - need to use it earlier to make sure if runs correctly I believe before i reinitialise the data
     train_out = np.zeros((train_dataset.inputs.size()[0], num_classes))
     
     for epoch in range(num_epochs):
         epoch=epoch+epoch_so_far
-        '''
-        # Skip reloading on first interval (i.e., epoch 0)
-        if epoch != 0 and epoch % interval == 0:
-            print(f"🔄 Reloading training data at epoch {epoch} with offset {offset}")
-            # Nawid - removing information to make it easier to load
-
-            del inputs
-            del data
-            del train_dataset
-            del train_loader
-            train_dataset, train_loader = additional_data(
-            parameters,
-            offset,
-            train_months,
-            train_year,
-            outputs_mean_values,
-            outputs_std_values,
-            input_variables,
-            use_baselines,
-            names,
-            train_batch_size
-        )
-        offset += 1  # Move to next chunk next time
-        '''
+        
         running_loss = 0.0
         #individual_mol_train_errors = np.zeros(output_num)
         
@@ -833,6 +743,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': losses,
                 "normalization": normalization_vals,
+                'baselines_normalization':baseline_normalization_vals,
                 'learning_rate': lr,
             }, model_save_path)
 
@@ -842,11 +753,12 @@ def train_bc_prediction_pipeline(_hparams,_practice):
                 predictions=test_out,
                 truths=test_outputs
             )
-
+            '''
             write_to_file(
                 inference_path, model_name,
                 f"Best model saved at epoch {epoch+1} with Test Loss: {best_test_loss:.6f}"
             )
+            '''
         
         ## save checkpoint every 50 epochs
         if epoch % 50 ==0:
@@ -857,6 +769,7 @@ def train_bc_prediction_pipeline(_hparams,_practice):
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': losses,
                         "normalization":normalization_vals, 
+                        'baselines_normalization':baseline_normalization_vals,
                         'learning_rate':lr,
                         }, checkpoint_path)
             wandb.save(checkpoint_path)  # 👈 Save to W&B
@@ -869,12 +782,10 @@ def train_bc_prediction_pipeline(_hparams,_practice):
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': losses,
                         "normalization":normalization_vals, 
+                        'baselines_normalization':baseline_normalization_vals,
                         'learning_rate':lr,
                         }, final_model_path)
-    wandb.save(final_model_path)
-
-    
-        
+    wandb.save(final_model_path)        
     # Nawid - Used to save the training outputs for the model at the end
     for i_det, batch in enumerate(deterministic_train_loader):
         # get the inputs; data is a list of [inputs, labels]
@@ -883,20 +794,14 @@ def train_bc_prediction_pipeline(_hparams,_practice):
 
         train_out[i_det*train_batch_size:(i_det+1)*train_batch_size,:] = det_outputs.detach().cpu().numpy()
             
-
     print("Finished Training")
     data_savename = f"{inference_path}{model_name}/{model_name}_final_epoch_data.pkl"
-    data_dict = {'test_dataset_predictions':test_out,'test_dataset_truths':test_outputs, 'train_dataset_predictions':train_out,'train_dataset_truths':outputs}
+    data_dict = {'test_dataset_predictions':test_out,'test_dataset_truths':test_outputs, 'train_dataset_predictions':train_out,'train_dataset_truths':outputs,'baselines':baseline_list,'test_baselines':test_baseline_list}
     with open(data_savename, 'wb') as f:
         pickle.dump(data_dict, f)
 
     wandb.save(data_savename)
     wandb.finish()  # 👈 End wandb session
-
-
-
-
-
 
 
 def additional_data(parameters,offset,train_months, train_year,outputs_mean_values, outputs_std_values, input_variables,use_baselines,names,train_batch_size):
@@ -941,9 +846,6 @@ def baseline_mol_updated(desired_data,months,years):
     print(selected_columns)
     '''
 
-    # Iterate through the different numbers 
-    #months = ['01','02','03','04','05','06','07','08','09','10','11','12']
-    #year = 2016
     datetime_array = np.array(desired_data.fp_data_full.particle_locations_n.time)
     specific_years = np.array([np.datetime64(date, 'Y').astype(int) + 1970 for date in datetime_array])
     specific_months = np.array([np.datetime64(date, 'M').astype(int) % 12 + 1 for date in datetime_array])
@@ -1021,6 +923,204 @@ def baseline_mol_updated(desired_data,months,years):
         # Multiple the different values
     
     return baseline_list, north_list, south_list, east_list, west_list
+
+
+
+def baseline_mol_correction(desired_data,months,years,output_format):
+    '''
+    Function used to get the value for the CAMS, including the inputs and the outputs.
+    '''
+    total_data_points = desired_data.fp_data_full.particle_locations_n.time.shape[-1]                                                                      
+    # Load the CSV file
+    df = pd.read_csv('/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/CH4_Semihemispheric_modelled_mole_fractions.csv')
+    baseline_list = np.zeros((total_data_points,4))
+
+    datetime_array = np.array(desired_data.fp_data_full.particle_locations_n.time)
+    specific_years = np.array([np.datetime64(date, 'Y').astype(int) + 1970 for date in datetime_array])
+    specific_months = np.array([np.datetime64(date, 'M').astype(int) % 12 + 1 for date in datetime_array])
+
+    total_data_points = desired_data.fp_data_full.particle_locations_n.time.shape[-1]
+    north_list = np.zeros(total_data_points) # Creates a list of size N with None values
+    south_list = np.zeros(total_data_points)
+    east_list = np.zeros(total_data_points)
+    west_list = np.zeros(total_data_points)
+    total_list = np.zeros(total_data_points)
+    for year in years:
+        print('year',year)
+        for month in months:
+            # Cams field for a particular month
+            if year > 2017:
+                # Change made due to the naming of the data
+                cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion_climatology.nc")
+            else:
+                cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion.nc")    
+            # Extract year and month
+            #desired_year = 2016
+            desired_year = year
+            desired_month = month
+            print('desired month',desired_month)
+            
+            '''
+            coarse_cams  = cams.coarsen(lon=desired_data.coarsening_factor, lat=desired_data.coarsening_factor, boundary="pad").mean()
+            '''
+            # Find the index of the first occurrence
+            indices = np.where((specific_years == desired_year) & (specific_months == int(desired_month)))[0]
+            print(indices)
+            if len(indices)>0:
+                # Get the inputs
+                filtered_data = df[(df['Year'] == desired_year) & (df['Month'] == int(desired_month))]
+                # Extract the 4th, 5th, 6th, and 7th columns
+                selected_columns = filtered_data.iloc[:, [3, 4, 5, 6]].values
+                baseline_list[indices] = selected_columns/1000 # Convert from parts per trillion to parts per million
+                print(indices[0])
+                # Multply the first value with all the other values of the array
+                print(cams.vmr_n.shape)
+                # CAMS field should be stationary over the period of a month
+                #import ipdb; ipdb.set_trace()
+                '''
+                north_mol = np.sum(cams.vmr_n * desired_data.locs.particle_locations_n[:,:,indices], axis=(0,1))
+                south_mol = np.sum(cams.vmr_s * desired_data.locs.particle_locations_s[:,:,indices], axis=(0,1))
+                east_mol = np.sum(cams.vmr_e * desired_data.locs.particle_locations_e[:,:,indices], axis=(0,1))
+                west_mol = np.sum(cams.vmr_w * desired_data.locs.particle_locations_w[:,:,indices], axis=(0,1))
+                '''
+                '''
+                north_mol = np.sum(coarse_cams.vmr_n * desired_data.locs.particle_locations_n[:,:,indices], axis=(0,1))
+                south_mol = np.sum(coarse_cams.vmr_s * desired_data.locs.particle_locations_s[:,:,indices], axis=(0,1))
+                east_mol = np.sum(coarse_cams.vmr_e * desired_data.locs.particle_locations_e[:,:,indices], axis=(0,1))
+                west_mol = np.sum(coarse_cams.vmr_w * desired_data.locs.particle_locations_w[:,:,indices], axis=(0,1))
+                '''
+                north_mol = np.sum(cams.vmr_n * desired_data.fp_data_full.particle_locations_n[:,:,indices], axis=(0,1))
+                south_mol = np.sum(cams.vmr_s * desired_data.fp_data_full.particle_locations_s[:,:,indices], axis=(0,1))
+                east_mol = np.sum(cams.vmr_e * desired_data.fp_data_full.particle_locations_e[:,:,indices], axis=(0,1))
+                west_mol = np.sum(cams.vmr_w * desired_data.fp_data_full.particle_locations_w[:,:,indices], axis=(0,1))
+                
+                #import ipdb; ipdb.set_trace()
+                north_list[indices] = north_mol
+                south_list[indices] = south_mol
+                east_list[indices] = east_mol
+                west_list[indices] = west_mol
+                '''
+                correction = np.mean(cams.vmr_s[1])
+                total_list[indices] = np.sum((north_mol,south_mol,east_mol,west_mol),keepdims=True)-correction
+                '''
+                correction = np.mean(cams.vmr_s[1].values)
+                total_list[indices] = (
+                north_mol + south_mol + east_mol + west_mol).values - correction
+                
+    outputs = np.stack((north_list,south_list, east_list,west_list),axis=1)
+
+    if output_format =='sum':
+        outputs = np.sum(outputs,axis=1,keepdims=True)
+    elif output_format =='corrected': 
+        outputs = np.array(total_list).reshape(-1, 1)
+
+        #print(baseline_list)
+        #cams = xr.open_dataset("/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
+        # Making the assumption that the values in the month are not different, get the first value
+        # Multiple the different values
+    return baseline_list, outputs
+
+
+
+def baseline_mol(desired_data,months,desired_year):
+    '''
+    Function used to get the value for the input and output
+    '''
+    total_data_points = desired_data.fp_data_full.particle_locations_n.time.shape[-1]                                                                      
+    # Load the CSV file
+    #df = pd.read_csv('Analysis/CH4_Semihemispheric_modelled_mole_fractions.csv')
+    df = pd.read_csv('/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/CH4_Semihemispheric_modelled_mole_fractions.csv')
+    baseline_list = np.zeros((total_data_points,4))
+
+    '''
+    # Specify the year and month you're interested in
+    # Filter the data for the specific year and month
+    filtered_data = df[(df['Year'] == specific_year) & (df['Month'] == specific_month)]
+
+    # Extract the 4th, 5th, 6th, and 7th columns
+    selected_columns = filtered_data.iloc[:, [3, 4, 5, 6]].values
+
+    # Display the results
+    print(selected_columns)
+    '''
+
+    # Iterate through the different numbers 
+    #months = ['01','02','03','04','05','06','07','08','09','10','11','12']
+    #year = 2016
+    datetime_array = np.array(desired_data.fp_data_full.particle_locations_n.time)
+
+    total_data_points = desired_data.fp_data_full.particle_locations_n.time.shape[-1]
+    north_list = np.zeros(total_data_points) # Creates a list of size N with None values
+    south_list = np.zeros(total_data_points)
+    east_list = np.zeros(total_data_points)
+    west_list = np.zeros(total_data_points)
+
+    for month in months:
+        # Cams field for a particular month
+        if desired_year > 2017:
+            # Change made due to the naming of the data
+            cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{desired_year}{month}_CAMS-inversion_climatology.nc")
+        else:
+            cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{desired_year}{month}_CAMS-inversion.nc")    
+        # Extract year and month
+        #import ipdb; ipdb.set_trace()
+        years = np.array([np.datetime64(date, 'Y').astype(int) + 1970 for date in datetime_array])
+        months = np.array([np.datetime64(date, 'M').astype(int) % 12 + 1 for date in datetime_array])
+
+        # Desired year and month
+        #desired_year = 2016
+        desired_month = month
+        print('desired month',desired_month)
+        
+        '''
+        coarse_cams  = cams.coarsen(lon=desired_data.coarsening_factor, lat=desired_data.coarsening_factor, boundary="pad").mean()
+        '''
+        # Find the index of the first occurrence
+        indices = np.where((years == desired_year) & (months == int(desired_month)))[0]
+        print(indices)
+        if len(indices)>0:
+            # Get the inputs
+            filtered_data = df[(df['Year'] == desired_year) & (df['Month'] == int(desired_month))]
+            # Extract the 4th, 5th, 6th, and 7th columns
+            selected_columns = filtered_data.iloc[:, [3, 4, 5, 6]].values
+            baseline_list[indices] = selected_columns/1000 # Convert from parts per trillion to parts per million
+
+            print(indices[0])
+            # Multply the first value with all the other values of the array
+            print(cams.vmr_n.shape)
+            # CAMS field should be stationary over the period of a month
+            #import ipdb; ipdb.set_trace()
+
+            north_mol = np.sum(cams.vmr_n * desired_data.locs.particle_locations_n[:,:,indices], axis=(0,1))
+            south_mol = np.sum(cams.vmr_s * desired_data.locs.particle_locations_s[:,:,indices], axis=(0,1))
+            east_mol = np.sum(cams.vmr_e * desired_data.locs.particle_locations_e[:,:,indices], axis=(0,1))
+            west_mol = np.sum(cams.vmr_w * desired_data.locs.particle_locations_w[:,:,indices], axis=(0,1))
+            '''
+            north_mol = np.sum(coarse_cams.vmr_n * desired_data.locs.particle_locations_n[:,:,indices], axis=(0,1))
+            south_mol = np.sum(coarse_cams.vmr_s * desired_data.locs.particle_locations_s[:,:,indices], axis=(0,1))
+            east_mol = np.sum(coarse_cams.vmr_e * desired_data.locs.particle_locations_e[:,:,indices], axis=(0,1))
+            west_mol = np.sum(coarse_cams.vmr_w * desired_data.locs.particle_locations_w[:,:,indices], axis=(0,1))
+            '''
+            '''
+            north_mol = np.sum(cams.vmr_n * desired_data.fp_data_full.particle_locations_n[:,:,indices], axis=(0,1))
+            south_mol = np.sum(cams.vmr_s * desired_data.fp_data_full.particle_locations_s[:,:,indices], axis=(0,1))
+            east_mol = np.sum(cams.vmr_e * desired_data.fp_data_full.particle_locations_e[:,:,indices], axis=(0,1))
+            west_mol = np.sum(cams.vmr_w * desired_data.fp_data_full.particle_locations_w[:,:,indices], axis=(0,1))
+            '''
+            #import ipdb; ipdb.set_trace()
+            north_list[indices] = north_mol
+            south_list[indices] = south_mol
+            east_list[indices] = east_mol
+            west_list[indices] = west_mol
+
+
+        print(baseline_list)
+        #cams = xr.open_dataset("/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
+        # Making the assumption that the values in the month are not different, get the first value
+        # Multiple the different values
+    
+    return baseline_list, north_list, south_list, east_list, west_list
+
 
 
 

@@ -10,14 +10,17 @@ from new_graphnet.graphnet_LPDM_emulator.parameter_files.train_parameters import
 
 
 if __name__=="__main__":
-    practice = False
-    if practice:
+    practice = 'Complete'
+    #practice = 'Partial'
+    if practice =='Full' or practice =='Partial':
+        print('Using Practice')
         for practice_hparams in practice_hparams_list:
             #inference_only_pipeline(practice_hparams,practice)
             #bc_prediction_pipeline_practice(practice_hparams,practice)
             #bc_prediction_pipeline(practice_hparams,practice)
             train_bc_prediction_pipeline(practice_hparams,practice)
     else:
+        print('Using the full dataset')
         for hparams in hparams_list:
             #inference_only_pipeline(hparams,practice)
             #bc_prediction_pipeline_practice(hparams,practice)

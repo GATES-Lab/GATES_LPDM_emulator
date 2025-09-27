@@ -103,7 +103,7 @@ def baseline_mol_updated_times(desired_data,months,years):
                 print(cams.vmr_n.shape)
                 # CAMS field should be stationary over the period of a month
                 #import ipdb; ipdb.set_trace()
-                import ipdb; ipdb.set_trace()
+                
                 north_mol = np.sum(cams.vmr_n * desired_data.fp_data_full.particle_locations_n[:,:,indices], axis=(0,1))
                 south_mol = np.sum(cams.vmr_s * desired_data.fp_data_full.particle_locations_s[:,:,indices], axis=(0,1))
                 east_mol = np.sum(cams.vmr_e * desired_data.fp_data_full.particle_locations_e[:,:,indices], axis=(0,1))
