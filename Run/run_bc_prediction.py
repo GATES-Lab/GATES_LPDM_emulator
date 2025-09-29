@@ -10,8 +10,9 @@ from new_graphnet.graphnet_LPDM_emulator.parameter_files.train_parameters import
 
 
 if __name__=="__main__":
-    practice = 'Complete'
+    #practice = 'Complete'
     #practice = 'Partial'
+    practice = 'Complete'
     if practice =='Full' or practice =='Partial':
         print('Using Practice')
         for practice_hparams in practice_hparams_list:

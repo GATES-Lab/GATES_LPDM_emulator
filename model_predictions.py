@@ -154,19 +154,15 @@ def perform_inference(_run_path,_practice):
     input_variables = parameters["variables"]
     num_classes = parameters['num_classes']
     collated_test_maes = []
+    '''
     criterion = eval(parameters["loss_functions"]["criterion"])
     criterion_test = eval(parameters["loss_functions"]["criterion_test"])
+    '''
     all_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     all_predictions = []
     all_truths = []
     for month in all_months:
-        if "size" in (parameters["train_load_data"].keys()):
-            print('Using square domain')
-            
-            test_data = LoadSquareSatelliteData(month = month, **test_load_data)    
-        else:    
-            print('Using fixed domain')
-            test_data = LoadDomainSatelliteData(month = month, **test_load_data)   
+        test_data = LoadSquareSatelliteData(month = month, **test_load_data)     
         
         test_year = parse_years(test_load_data['year'])
         test_baseline_list, test_north_list, test_south_list, test_east_list, test_west_list = baseline_mol_updated(test_data,[month], test_year)

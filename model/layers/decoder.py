@@ -939,8 +939,8 @@ class SatelliteDecoderConvClassifier(torch.nn.Module):
             #processor_features_by_node = np.zeros((processor_features.size()[0], #start_features.size()[1], processor_features.size()[-1]))
             #for n in np.unique(self.edge_index[1,:]): 
             #    processor_features_by_node = np.where(self.edge_index[1,:]==n)
-
-        processor_features = einops.rearrange(processor_features, "b f n -> (b n) f", b=batch_size)
+        
+        
 
         #print('processor features',processor_features.shape)
         #print("after scatter", processor_features.size(), processor_features.dtype)
@@ -950,7 +950,14 @@ class SatelliteDecoderConvClassifier(torch.nn.Module):
         '''
         processor_features = processor_features.view(batch_size, 64,self.input_height, self.input_width)
         '''
+        
+        '''
+        processor_features = einops.rearrange(processor_features, "b f n -> (b n) f", b=batch_size)
         processor_features = processor_features.reshape(batch_size, 64, self.input_height, self.input_width)
+        '''
+        processor_features = einops.rearrange(processor_features, "b f (h w) -> b f h w", b=batch_size, h=self.input_height, w=self.input_width)
+
+
 
         #print('Before conv block',processor_features.shape)
         #print('before conv block',processor_features.shape)
