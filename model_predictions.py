@@ -38,6 +38,7 @@ import argparse
 import random
 from datetime import date
 import wandb
+from full_bc_prediction_pipeline import baseline_mol_correction
 
 
 def getint_updated(filename):
@@ -102,7 +103,14 @@ def perform_inference(_run_path,_practice):
     '''
     #run = api.run('nerdk312/BoundaryCondition-Prediction/yxwypg3s')
     #run = api.run('nerdk312/BoundaryCondition-Prediction/8b5jglg6')
+    '''
     run = api.run('nerdk312/BoundaryCondition-Prediction/608nfpxb')   # Nawid - Current best model
+    '''
+    '''
+    run = api.run('nerdk312/BoundaryCondition-Prediction/n4np3705')
+    '''
+    run = api.run('nerdk312/BoundaryCondition-Prediction/edmv4frt')
+    
     # num_classes-4_baselines-False_size-50_decoder-conv_normalization-all_trainyear-2014-6_trainfreq-3_epochs-200_lr-5e-06_seed-42_date-Aug-17-2025
     # 3. Pull hyperparameters
     parameters = run.config  # this is a dict with your hparams
@@ -115,13 +123,14 @@ def perform_inference(_run_path,_practice):
     with open(f"{inference_path}{model_name}/transform_parameters_{model_name}.pickle", 'rb') as f:
         test_mode = pickle.load(f)
         
-
     # Nawid - Look at loading the best model
     checkpoint_to_load = get_checkpoint_to_load_updated(model_name,inference_path, prefer_best=True)
     # Nawid - Make sure it has the right location
     checkpoint = torch.load(checkpoint_to_load, map_location=device)
 
     output_mean, output_std = checkpoint['normalization']['outputs_mean'], checkpoint['normalization']['outputs_std']
+    baselines_mean, baselines_std = checkpoint['baselines_normalization']['baselines_mean'], checkpoint['baselines_normalization']['baselines_std']
+    
     # Nawid - data loading
     '''
     if _practice:
@@ -139,41 +148,47 @@ def perform_inference(_run_path,_practice):
     # load train parameters and upload with any changes to test data
     test_load_data = copy.deepcopy(parameters["train_load_data"])
     test_load_data.update(parameters["test_load_data"])
-    test_load_data['year'] = '2018' 
+    test_load_data['year'] = '2013' 
     test_year = copy.deepcopy(test_load_data["year"])
-    test_load_data["freq"] = 2
+    test_load_data["freq"] = 10
     test_batch_size=5
     # Nawid - Making it so that the different value can be used for the case where there is a single value for the approach
     print(test_load_data)
     # Nawid - decide to use baseline or not
     use_baselines = parameters['use_baselines']
+    print('USE BASELINES',use_baselines)
     if use_baselines:
         aux_index= 4
     else:
         aux_index = 0
     input_variables = parameters["variables"]
     num_classes = parameters['num_classes']
+    print('NUM CLASSES',num_classes)
     collated_test_maes = []
     '''
     criterion = eval(parameters["loss_functions"]["criterion"])
     criterion_test = eval(parameters["loss_functions"]["criterion_test"])
     '''
+    name_output_format = parameters['output_format']
+    print('name output format',name_output_format)
     all_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     all_predictions = []
     all_truths = []
     for month in all_months:
-        test_data = LoadSquareSatelliteData(month = month, **test_load_data)     
-        
+        test_data = LoadSquareSatelliteData(month = month, **test_load_data)             
         test_year = parse_years(test_load_data['year'])
-        test_baseline_list, test_north_list, test_south_list, test_east_list, test_west_list = baseline_mol_updated(test_data,[month], test_year)
         grid, _ = get_grid(test_data, parameters.get("grid_reference_fp"))
 
-        
+        test_baseline_list, test_outputs = baseline_mol_correction(test_data,[month], test_year,output_format=name_output_format)
+        '''
+        test_baseline_list, test_north_list, test_south_list, test_east_list, test_west_list = baseline_mol_updated(test_data,[month], test_year)
         test_outputs = np.stack((test_north_list,test_south_list, test_east_list,test_west_list),axis=1)
+        '''
         has_nan_outputs = np.isnan(test_outputs).any()
         print("Contains NaNs outputs:", has_nan_outputs)
         # Nawid - Normalizing the outputs
-        test_outputs = (test_outputs - output_mean)/output_std   
+        test_outputs = (test_outputs - output_mean)/output_std  
+        test_baseline_list = (test_baseline_list - baselines_mean)/baselines_std 
         # Nawid- true outputs of the test data (not using the train valeus as the training data is shuffled)
         denormalized_test_truths = (test_outputs*output_std) + output_mean
         denormalized_test_truths_summed = np.sum(denormalized_test_truths, axis=1)
@@ -201,7 +216,7 @@ def perform_inference(_run_path,_practice):
         # 4. Put in eval mode
         model.eval()
 
-        test_error = 0.0
+        #test_error = 0.0
         test_out = np.zeros((len(test_dataset), num_classes))
         for i_test, batch in enumerate(test_loader):
             # get the inputs; data is a list of [inputs, labels]
@@ -239,32 +254,5 @@ def perform_inference(_run_path,_practice):
         "avg_monthly_mae": np.mean(collated_test_maes),
         "overall_mae": overall_mae
     })
-
-    '''
-    # --- Compute and log average MAE ---
-    avg_test_mae = np.mean(collated_test_maes)
-    print(f"Average MAE across months = {avg_test_mae:.4f}")
-
-    # Log into wandb
-    wandb.init(project=run.project, entity=run.entity, name=f"{run.name}_inference_eval")
-    wandb.log({
-        "monthly_mae": {m: mae for m, mae in zip(all_months, collated_test_maes)},
-        "avg_test_mae": avg_test_mae
-    })
-    wandb.finish()
-    '''
-
-    '''
-        # 👇 Log to W&B
-        wandb.log({
-            "epoch": epoch + 1,
-            "train_loss": running_loss / (i_train + 1),
-            "test_loss": test_loss,
-            "summed_test_MAE": test_mae
-        })
-    wandb.finish()  # 👈 End wandb session
-    '''
-
-
 
 perform_inference(True, True)
