@@ -56,11 +56,8 @@ def write_to_file(path, model_name,message):
 
 
 def normalize_boundary_data(
-    norm_type,
     outputs,
-    baseline_list,
     outputs_norm_vals=None,
-    baseline_norm_vals=None
 ):
     """
     Normalize outputs and baseline_list using either 'separate' or 'all' mode.
@@ -81,27 +78,14 @@ def normalize_boundary_data(
     -------
     outputs, baseline_list, test_outputs, test_baseline_list, outputs_norm_vals, baseline_norm_vals
     """
-
-    if norm_type == 'separate':
-        # if values are not given, compute them
-        if outputs_norm_vals is None:
-            outputs_norm_vals = (np.mean(outputs, axis=0), np.std(outputs, axis=0))
-        if baseline_norm_vals is None:
-            baseline_norm_vals = (np.mean(baseline_list, axis=0), np.std(baseline_list, axis=0))
     
-    elif norm_type == 'all':
-        if outputs_norm_vals is None:
-            outputs_norm_vals = (np.mean(outputs), np.std(outputs))
-        if baseline_norm_vals is None:
-            baseline_norm_vals = (np.mean(baseline_list), np.std(baseline_list))
+    if outputs_norm_vals is None:
+        outputs_norm_vals = (np.mean(outputs), np.std(outputs))
 
     outputs_mean, outputs_std = outputs_norm_vals
-    baseline_mean, baseline_std = baseline_norm_vals
-
     normalized_outputs = (outputs - outputs_mean) / outputs_std
-    normalized_baseline_list = (baseline_list - baseline_mean) / baseline_std
 
-    return normalized_outputs, normalized_baseline_list, outputs_norm_vals, baseline_norm_vals
+    return normalized_outputs, outputs_norm_vals
 
 '''
 def train_bc_prediction_pipeline(_hparams,_practice):
@@ -527,7 +511,6 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     # load train parameters and upload with any changes to test data
     test_load_data = copy.deepcopy(parameters["train_load_data"])
     test_load_data.update(parameters["test_load_data"])
-    
     # Nawid - Making it so that the different value can be used for the case where there is a single value for the approach
     print(train_load_data)
     print(test_load_data)
@@ -542,8 +525,8 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     test_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     test_year = parse_years(test_load_data['year'])
     print(name_output_format)
-    baseline_list, outputs = baseline_mol_correction(data,train_months, train_year,output_format=name_output_format)
-    test_baseline_list, test_outputs = baseline_mol_correction(test_data,test_months, test_year,output_format =name_output_format)
+    baseline_list, outputs, auxiliary_cams = baseline_mol_correction(data,train_months, train_year,output_format=name_output_format)
+    test_baseline_list, test_outputs, test_auxiliary_cams = baseline_mol_correction(test_data,test_months, test_year,output_format =name_output_format)
     
     '''
     baseline_list, north_list, south_list, east_list, west_list = baseline_mol_updated(data,train_months, train_year)
@@ -552,9 +535,15 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     test_outputs = np.stack((test_north_list,test_south_list, test_east_list,test_west_list),axis=1)
     '''
     normalization_type = parameters['normalization']
-    outputs, baseline_list, (outputs_mean_values,outputs_std_values), (baseline_mean_values,baseline_std_values) = normalize_boundary_data(normalization_type,outputs, baseline_list)
-    test_outputs, test_baseline_list,_,_ = normalize_boundary_data(normalization_type,test_outputs,test_baseline_list,outputs_norm_vals=(outputs_mean_values,outputs_std_values),baseline_norm_vals=(baseline_mean_values,baseline_std_values))
+
     
+    outputs,(outputs_mean_values,outputs_std_values) = normalize_boundary_data(outputs)
+    baseline_list, (baseline_mean_values,baseline_std_values) = normalize_boundary_data(baseline_list)
+    auxiliary_cams, (auxiliary_mean_values,auxiliary_std_values) = normalize_boundary_data(auxiliary_cams)
+
+    test_outputs, _ = normalize_boundary_data(test_outputs,outputs_norm_vals=(outputs_mean_values,outputs_std_values))
+    test_baseline_list, _ = normalize_boundary_data(test_outputs,outputs_norm_vals=(baseline_mean_values,baseline_std_values))
+    test_auxiliary_cams, _ = normalize_boundary_data(test_auxiliary_cams,outputs_norm_vals=((auxiliary_mean_values,auxiliary_std_values)))
     '''
     if parameters['normalization'] =='separate':
         outputs_mean_values, outputs_std_values = np.mean(outputs,axis=0), np.std(outputs,axis=0)
@@ -596,10 +585,10 @@ def train_bc_prediction_pipeline(_hparams,_practice):
     write_to_file(inference_path,model_name,"Before loading data")
     #grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
     #dummy_dataset = BoundaryDatasetXR(dummy_inputs,dummy_outputs,input_names=names, **parameters["dataloader_parameters"])
-    train_dataset = BoundaryDataset(inputs,baseline_list,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
+    train_dataset = BoundaryDataset(inputs,auxiliary_cams,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
     deterministic_train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=False)
-    test_dataset = BoundaryDataset(test_inputs,test_baseline_list,test_outputs,use_baselines= use_baselines,input_names=names,test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
+    test_dataset = BoundaryDataset(test_inputs,test_auxiliary_cams,test_outputs,use_baselines= use_baselines,input_names=names,test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
     test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
     
     #aux_dim = len(input_variables["static_variables"]) 
@@ -861,9 +850,9 @@ def baseline_mol_updated(desired_data,months,years):
             # Cams field for a particular month
             if year > 2017:
                 # Change made due to the naming of the data
-                cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion_climatology.nc")
+                cams = xr.open_dataset(f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion_climatology.nc")
             else:
-                cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion.nc")    
+                cams = xr.open_dataset(f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion.nc")    
             # Extract year and month
             #import ipdb; ipdb.set_trace()
             
@@ -918,7 +907,7 @@ def baseline_mol_updated(desired_data,months,years):
 
 
         #print(baseline_list)
-        #cams = xr.open_dataset("/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
+        #cams = xr.open_dataset("/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
         # Making the assumption that the values in the month are not different, get the first value
         # Multiple the different values
     
@@ -945,15 +934,17 @@ def baseline_mol_correction(desired_data,months,years,output_format):
     east_list = np.zeros(total_data_points)
     west_list = np.zeros(total_data_points)
     total_list = np.zeros(total_data_points)
+
+    auxiliary_cams = np.zeros((total_data_points,4))
     for year in years:
         print('year',year)
         for month in months:
             # Cams field for a particular month
             if year > 2017:
                 # Change made due to the naming of the data
-                cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion_climatology.nc")
+                cams = xr.open_dataset(f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion_climatology.nc")
             else:
-                cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion.nc")    
+                cams = xr.open_dataset(f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion.nc")    
             # Extract year and month
             #desired_year = 2016
             desired_year = year
@@ -999,6 +990,22 @@ def baseline_mol_correction(desired_data,months,years,output_format):
                 south_list[indices] = south_mol
                 east_list[indices] = east_mol
                 west_list[indices] = west_mol
+
+                # ---- Extract the midpoint along the dimension ---
+                mid_n_index = cams.vmr_n.shape[1] // 2
+                mid_e_index = cams.vmr_e.shape[1] // 2
+
+                n_val = cams.vmr_n.values[4, mid_n_index]
+                s_val = cams.vmr_s.values[4, mid_n_index]
+                e_val = cams.vmr_e.values[4, mid_e_index]
+                w_val = cams.vmr_w.values[4, mid_e_index]
+
+                # Store values for each CAMS direction
+                auxiliary_cams[indices, 0] = n_val
+                auxiliary_cams[indices, 1] = s_val
+                auxiliary_cams[indices, 2] = e_val
+                auxiliary_cams[indices, 3] = w_val
+
                 '''
                 correction = np.mean(cams.vmr_s[1])
                 total_list[indices] = np.sum((north_mol,south_mol,east_mol,west_mol),keepdims=True)-correction
@@ -1015,10 +1022,10 @@ def baseline_mol_correction(desired_data,months,years,output_format):
         outputs = np.array(total_list).reshape(-1, 1)
 
         #print(baseline_list)
-        #cams = xr.open_dataset("/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
+        #cams = xr.open_dataset("/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
         # Making the assumption that the values in the month are not different, get the first value
         # Multiple the different values
-    return baseline_list, outputs
+    return baseline_list, outputs, auxiliary_cams
 
 
 
@@ -1059,9 +1066,9 @@ def baseline_mol(desired_data,months,desired_year):
         # Cams field for a particular month
         if desired_year > 2017:
             # Change made due to the naming of the data
-            cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{desired_year}{month}_CAMS-inversion_climatology.nc")
+            cams = xr.open_dataset(f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{desired_year}{month}_CAMS-inversion_climatology.nc")
         else:
-            cams = xr.open_dataset(f"/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{desired_year}{month}_CAMS-inversion.nc")    
+            cams = xr.open_dataset(f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{desired_year}{month}_CAMS-inversion.nc")    
         # Extract year and month
         #import ipdb; ipdb.set_trace()
         years = np.array([np.datetime64(date, 'Y').astype(int) + 1970 for date in datetime_array])
@@ -1115,7 +1122,7 @@ def baseline_mol(desired_data,months,desired_year):
 
 
         print(baseline_list)
-        #cams = xr.open_dataset("/group/chemistry/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
+        #cams = xr.open_dataset("/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_201611_CAMS-inversion.nc")
         # Making the assumption that the values in the month are not different, get the first value
         # Multiple the different values
     

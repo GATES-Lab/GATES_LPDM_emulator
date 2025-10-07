@@ -222,13 +222,13 @@ class LoadBaseSatelliteData:
         #### load topography
         print("\n---- LOADING TOPOG")
         if topog_path=="default":
-            topog_path="/group/chemistry/acrg/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+            topog_path="/group/chem/acrg/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
         print(f"trying to load topography from {topog_path}")
         with xr.load_dataset(topog_path) as topog_dataset:
             topog_file = topog_dataset.copy()
 
         if landcover_path=="default":
-            landcover_path = "/group/chemistry/acrg/LPDM/topog_NAME/land_cover.nc"
+            landcover_path = "/group/chem/acrg/LPDM/topog_NAME/land_cover.nc"
         with xr.load_dataset(landcover_path) as landcover_dataset:
             landcover_file = landcover_dataset.copy()
             
@@ -241,7 +241,7 @@ class LoadBaseSatelliteData:
 
     def _get_meteorology_file(self, met_datadir, lazy_load=True):
         if met_datadir==None:
-            met_datadir = "/group/chemistry/acrg/met_archive/UM/"+self.domain+"/"+self.domain+"_Met_"+str(self.date)+"*.nc"
+            met_datadir = "/group/chem/acrg/met_archive/UM/"+self.domain+"/"+self.domain+"_Met_"+str(self.date)+"*.nc"
         else:
             met_datadir = met_datadir+str(self.date)+"*.nc"
         if self.verbose: print("Loading meteorology from " + met_datadir)
@@ -273,7 +273,7 @@ class LoadBaseSatelliteData:
     def _load_footprints(self, fp_datadir):
         #### load footprint (fp) data from file
         if fp_datadir is None:
-            fp_datadir = "/group/chemistry/acrg/LPDM/fp_NAME_pre20210701/"+self.domain+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc"
+            fp_datadir = "/group/chem/acrg/LPDM/fp_NAME_pre20210701/"+self.domain+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc"
         else:
             fp_datadir=fp_datadir+str(self.date)+"*.nc"
             #fp_datadir = f"{fp_datadir}{self.domain}/*{self.region}*{self.domain}_{str(self.date)}*.nc"
@@ -898,12 +898,12 @@ def get_release_idxs(fp_full, domain_lats=None, domain_lons=None):
 
 
 def load_default_brazil_emissions(year=2016, month_to_use=6):
-    emissions = xr.open_dataset("/group/chemistry/acrg/LPDM/emissions/SOUTHAMERICA/ch4_SOUTHAMERICA_2016_SWAMPS-v32-5_Saunois-Annual-Mean.nc")
+    emissions = xr.open_dataset("/group/chem/acrg/LPDM/emissions/SOUTHAMERICA/ch4_SOUTHAMERICA_2016_SWAMPS-v32-5_Saunois-Annual-Mean.nc")
     emissions = emissions.sel(time=emissions.time[month_to_use-1])
     return emissions.flux.values
 
 def load_default_sahara_emissions(year=2016, month_to_use=6):
-    emissions = xr.open_dataset(f"/group/chemistry/acrg/LPDM/emissions/NORTHAFRICA/ch4_NORTHAFRICA_{year}.nc")
+    emissions = xr.open_dataset(f"/group/chem/acrg/LPDM/emissions/NORTHAFRICA/ch4_NORTHAFRICA_{year}.nc")
     emissions = emissions.sel(time=emissions.time[month_to_use-1])
     return emissions.flux.values
 

@@ -116,7 +116,7 @@ hparams = {
     "seed":42,
     "epochs":2,
     "num_classes":4,
-    "use_baselines":False,
+    "use_baselines":True,
     'network_decoder':'gnn',
     'output_format':'corrected',
 

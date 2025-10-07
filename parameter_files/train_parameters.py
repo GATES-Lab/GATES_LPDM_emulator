@@ -49,7 +49,7 @@ hparams = {
     "seed":42,
     "epochs":200,
     "num_classes":1,
-    "use_baselines":False,
+    "use_baselines":True,
     'network_decoder':'conv',
     'output_format':'corrected',
 
