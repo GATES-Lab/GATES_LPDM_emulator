@@ -20,6 +20,7 @@ def create_data_directories(region):
         os.makedirs(dir, exist_ok=True)
 
 def populate_data_directories(region):
+    print("populate")
 
 def empty_folder(folder_path):
     for filename in os.listdir(folder_path):
