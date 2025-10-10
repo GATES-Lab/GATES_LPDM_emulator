@@ -268,7 +268,7 @@ class LoadBaseSatelliteData:
 
     def _get_meteorology_file(self, met_datadir, lazy_load=True):
         
-        met_datadir = f"{met_datadir}/UM/{self.region}/{self.domain}_Met_{self.date}*.nc"
+        met_datadir = f"{met_datadir}/{self.domain}/{self.domain}_Met_{self.date}*.nc"
         if self.verbose: print("Loading meteorology from " + met_datadir)
 
         # each chunk should have around 1mill values,  - chunk per level and by time, rounded to the nearest hundred, 100MB-1GB
@@ -301,7 +301,7 @@ class LoadBaseSatelliteData:
     def _load_footprints(self, fp_datadir):
         #### load footprint (fp) data from file
         #fp_datadir = fp_datadir+"/"+self.region+"/*"+self.region+"*"+self.domain+"_"+str(self.date)+"*.nc" 
-        fp_datadir = f"{fp_datadir}/{self.region}/*{self.region}*{self.date}*.nc"
+        fp_datadir = f"{fp_datadir}/{self.domain}/*{self.region}*{self.date}*.nc"
         #fp_datadir = os.path.join(fp_datadir, self.region, f"*{self.domain}_{self.date}*.nc") 
 
         
