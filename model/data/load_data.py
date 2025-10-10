@@ -9,6 +9,7 @@ import copy
 #import warning
 import yaml
 import json
+import shutil
 
 from .load_data_helper_funs import *
 
@@ -1763,6 +1764,7 @@ def empty_folder(folder_path):
                 os.unlink(file_path)  # remove file or symlink
             elif os.path.isdir(file_path):
                 shutil.rmtree(file_path)  # remove subdirectory
+            print("Deleted:", file_path)
         except Exception as e:
             print(f"Failed to delete {file_path}. Reason: {e}")
 
