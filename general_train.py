@@ -47,7 +47,6 @@ file_path = args.file_path
 
 print(file_name, file_path)
 
-
 def write_to_file(message):
     with open(log_file_path, "a") as f:
         f.write(datetime.now().strftime("%d/%m/%y %H:%M:%S") + " " + message + "\n")
@@ -91,7 +90,6 @@ log_file_path = os.path.join(args.output_dir, f"{model_name}_updates.txt")
 with open(log_file_path, "a") as f:
     pass
 
-
 if "seed" in (parameters.keys()):
     seed = parameters["seed"]
 
@@ -100,18 +98,18 @@ else:
 
 #### wandb
 wandb.init(
-        project="IsambardAI_Sahara",
+        project="Oracle",
         name=os.environ.get("WANDB_NAME", "local-run"),
         config=parameters,
-        notes=os.environ.get("WANDB_NOTES", ""),  # 👈 pull note from env
+        notes=os.environ.get("WANDB_NOTES", ""),
         tags=[
             #"experiment",
-            "baseline",
-            "reproducibility",
+            #"baseline",
+            #"reproducibility",
             #"lr_0.01"
             #"levels",
             #"time_deltas",
-            "uncertainty",
+            #"uncertainty",
             #"grid_size",
             ]
 
@@ -138,8 +136,8 @@ print("Random check:", random.randint(0, 10000), np.random.randint(0, 10000), to
 with open("config.yml", "r") as f:
     config = yaml.safe_load(f)
 
-# Select the environment you're using
-env = "isambard_ai"
+# Select the HPC environment you're using
+env = "oracle"
 env_paths = config["data_paths"][env]
 
 # Join paths
