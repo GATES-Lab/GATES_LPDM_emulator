@@ -53,25 +53,6 @@ def write_to_file(message):
         f.flush()
         os.fsync(f.fileno())
 
-def load_file(file_name, file_path):
-    # file_path=False if no argument was passed to the parser
-    if not file_path:
-       file_path ="/user/work/ef17148/GCN/graphnet/graph_weather/train_satellite_files/"
-    file_path = f"{file_path}{file_name}"
-    try:
-        with open(file_path, 'r') as file:
-            if file_path.endswith('.json'):
-                data = json.load(file)
-            else:
-                data = file.read()
-                data = json.loads(data)
-        return data
-    except FileNotFoundError:
-        print(f"File not found: {file_path}")
-        return None
-    except Exception as e:
-        print(f"An error occurred while loading the file: {str(e)}")
-        return None
 
 parameters = load_file(file_name, file_path) 
 

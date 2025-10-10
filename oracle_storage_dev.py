@@ -3,11 +3,18 @@ import shutil
 import glob
 from model.data.load_data import *
 
-# 1. Select region to process
-region = "NORTHAFRICA"
-period = "20160[1-3]"
+# 1. Select region and time period to process, using parameter file
 source_dir = "/mnt/data/"
 dest_dir = "data/"
+
+file_name = "./parameter_files/parameter_file_paper.json"
+parameters = load_file("", file_name) 
+
+domain = parameters["train_load_data"]["region"]
+domains = {"BRAZIL":"SOUTHAMERICA", "SOUTHAMERICA":"SOUTHAMERICA", "SAHARA":"NORTHAFRICA", "INDIA":"INDIA"} 
+
+region = domains[domain]   
+period = parameters["train_load_data"]["year"]
 
 # 2. Create data directories if they don't already exist
 create_data_directories(region)

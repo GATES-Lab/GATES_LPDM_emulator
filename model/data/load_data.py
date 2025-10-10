@@ -8,6 +8,7 @@ import os
 import copy
 #import warning
 import yaml
+import json
 
 from .load_data_helper_funs import *
 
@@ -1764,3 +1765,23 @@ def empty_folder(folder_path):
                 shutil.rmtree(file_path)  # remove subdirectory
         except Exception as e:
             print(f"Failed to delete {file_path}. Reason: {e}")
+
+def load_file(file_name, file_path):
+    # file_path=False if no argument was passed to the parser
+    if not file_path:
+       file_path ="/user/work/ef17148/GCN/graphnet/graph_weather/train_satellite_files/"
+    file_path = f"{file_path}{file_name}"
+    try:
+        with open(file_path, 'r') as file:
+            if file_path.endswith('.json'):
+                data = json.load(file)
+            else:
+                data = file.read()
+                data = json.loads(data)
+        return data
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+        return None
+    except Exception as e:
+        print(f"An error occurred while loading the file: {str(e)}")
+        return None

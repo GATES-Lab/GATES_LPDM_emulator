@@ -35,8 +35,6 @@ export WANDB_NOTES=""
 # Ensure pip user installs are on PATH (inside container this points to ~/.local/bin)
 export PATH="${HOME}/.local/bin:${PATH}"
 
-echo "[wandb] Checking/installing wandb in the container user site-packages..."
-
 
 # --- Training ---------------------------------------------------------------
 echo "training..."
