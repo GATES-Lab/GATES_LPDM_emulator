@@ -110,8 +110,10 @@ class FPModel():
         true_fp = cut_satellite_data(true_fp, size=size, fill_bads_with="nans", return_as="netcdf")
 
         self.all_fps = xr.merge([true_fp.rename({"fp":"fp_true"}), pred_fp.rename({"fp":"fp_pred"})])
-        
-        self.all_fps = self.all_fps.rename({"lat_coords":"release_lat", "lon_coords":"release_lon"})
+
+        self.all_fps = self.all_fps.rename({"lat_coords":"fp_lat", "lon_coords":"fp_lon"})
+
+        self.all_fps = self.all_fps.transpose("time", "lat", "lon")
 
         if remove_val:
             self.remove_val_set()
@@ -131,7 +133,8 @@ class FPModel():
 
     
     def load_emissions(self, same_month=True):
-        true_fp = xr.open_mfdataset(glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{self.fp_folder}/{self.true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{self.year}*.nc"))
+        #true_fp = xr.open_mfdataset(glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{self.fp_folder}/{self.true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{self.year}*.nc"))
+        true_fp = load_fps(f"/group/chemistry/acrg/LPDM/fp_Elena/{self.fp_folder}/{self.true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{self.year}*.nc")
         shared_times = np.intersect1d(true_fp.time.values, self.all_fps.time)
         true_fp = true_fp.sel(time=shared_times)
         self.all_fps = self.all_fps.sel(time=shared_times)
@@ -144,7 +147,10 @@ class FPModel():
                 flux = load_default_sahara_emissions()
 
             emissions = cut_emissions_data(flux, true_fp, self.size)
+            #emissions = cut_emissions_data_v2(flux, true_fp, self.size)
             self.emissions = np.transpose(emissions, [2, 0,1])
+            
+
 
         else:
             c = 0
@@ -153,7 +159,13 @@ class FPModel():
             for y in np.unique(pd.DatetimeIndex(true_fp.time).year):
                 for m in np.unique(pd.DatetimeIndex(true_fp.time).month):
                     where_month = np.where(np.bitwise_and(pd.DatetimeIndex(true_fp.time).month ==m, pd.DatetimeIndex(true_fp.time).year ==y))[0]
-                    flux = load_default_brazil_emissions(month_to_use=m)
+
+                    #flux = load_default_brazil_emissions(month_to_use=m)
+                    if self.region=="BRAZIL":
+                        flux = load_default_brazil_emissions(month_to_use=m) 
+                    if self.region=="SAHARA":
+                        flux = load_default_sahara_emissions(month_to_use=m)
+                    #flux = load_default_sahara_emissions(month_to_use=m)
                     emissions = cut_emissions_data(flux, true_fp.sel(time=true_fp.time.values[where_month]), self.size) 
                     emissions = np.transpose(emissions, [2, 0,1])
                     monthly_ems[c:c+len(where_month)] = emissions
@@ -164,6 +176,8 @@ class FPModel():
         self.emissions_loaded = True
 
     def get_fluxes(self):
+        
+
         if not self.emissions_loaded:
             self.load_emissions()
 
@@ -657,7 +671,7 @@ def plot_footprint_ax(ax_true, ax_pred, model, idx, lon_squeeze=0, vmin=None, vm
 
     np.seterr(divide='ignore')
 
-    extent = (model.all_fps.release_lon[idx,lon_squeeze], model.all_fps.release_lon[idx,-1-lon_squeeze], model.all_fps.release_lat[idx,0], model.all_fps.release_lat[idx,-1])
+    extent = (model.all_fps.fp_lon[idx,lon_squeeze], model.all_fps.fp_lon[idx,-1-lon_squeeze], model.all_fps.fp_lat[idx,0], model.all_fps.fp_lat[idx,-1])
     ax_true.set_extent(extent, crs=cartopy.crs.PlateCarree())
     ax_true.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
     ax_true.add_feature(cfeature.LAND)
@@ -681,9 +695,9 @@ def plot_footprint_ax(ax_true, ax_pred, model, idx, lon_squeeze=0, vmin=None, vm
     plot_params = {"transform":cartopy.crs.PlateCarree(), "cmap":cmap, "vmin":vmin, "vmax":vmax}
 
     if contour:
-        cb = ax_true.contourf(model.all_fps.release_lon.values[idx], model.all_fps.release_lat.values[idx],np.log10(f), **plot_params, levels=nlevels, extend="both", alpha=alpha)
+        cb = ax_true.contourf(model.all_fps.fp_lon.values[idx], model.all_fps.fp_lat.values[idx],np.log10(f), **plot_params, levels=nlevels, extend="both", alpha=alpha)
         f[f<thres] = 0
-        cb = ax_true.contourf(model.all_fps.release_lon.values[idx], model.all_fps.release_lat.values[idx],np.log10(f), **plot_params, levels=nlevels, extend="both")
+        cb = ax_true.contourf(model.all_fps.fp_lon.values[idx], model.all_fps.fp_lat.values[idx],np.log10(f), **plot_params, levels=nlevels, extend="both")
 
 
     else:
@@ -748,11 +762,11 @@ def plot_footprint_ax(ax_true, ax_pred, model, idx, lon_squeeze=0, vmin=None, vm
         ha="center", va="top", fontsize=12)    
 
     if contour:
-        cb = ax_pred.contourf(model.all_fps.release_lon.values[idx], model.all_fps.release_lat.values[idx],np.log10(f), **plot_params, levels=nlevels, extend="both",alpha=alpha)
+        cb = ax_pred.contourf(model.all_fps.fp_lon.values[idx], model.all_fps.fp_lat.values[idx],np.log10(f), **plot_params, levels=nlevels, extend="both",alpha=alpha)
 
         f[f<thres] = 0
 
-        cb = ax_pred.contourf(model.all_fps.release_lon.values[idx], model.all_fps.release_lat.values[idx],np.log10(f), **plot_params, levels=nlevels, extend="both")
+        cb = ax_pred.contourf(model.all_fps.fp_lon.values[idx], model.all_fps.fp_lat.values[idx],np.log10(f), **plot_params, levels=nlevels, extend="both")
     else:
         cb = ax_pred.imshow(np.log10(f), extent=extent, origin="lower", **plot_params, zorder=5)
     
@@ -767,7 +781,7 @@ def plot_emissions_ax(ax_ems, ax_true, ax_pred, model, idx, lon_squeeze=0, vmin=
 
     np.seterr(divide='ignore')
 
-    extent = (model.all_fps.release_lon[idx,lon_squeeze], model.all_fps.release_lon[idx,-1-lon_squeeze], model.all_fps.release_lat[idx,0], model.all_fps.release_lat[idx,-1])
+    extent = (model.all_fps.fp_lon[idx,lon_squeeze], model.all_fps.fp_lon[idx,-1-lon_squeeze], model.all_fps.fp_lat[idx,0], model.all_fps.fp_lat[idx,-1])
     ax_true.set_extent(extent, crs=cartopy.crs.PlateCarree())
     ax_true.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
     ax_true.add_feature(cfeature.LAND)
@@ -958,6 +972,8 @@ def get_gosat(site, species,
 
 
 from scipy.stats import binned_statistic_2d
+
+
 def bin_data(data, lats, lons, degree_bins=1):
     lat_bins = range(int(np.floor(lats.min())), int(np.ceil(lats.max())) + 1, degree_bins) 
     lon_bins = range(int(np.floor(lons.min())), int(np.ceil(lons.max())) + 1, degree_bins) 
@@ -1100,9 +1116,16 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
         return ax
 
 
-def plot_massive_binned_map(season_results, domain_lats, domain_lons, vmin_vmax = None):
+def plot_massive_binned_map(season_results, domain_lats, domain_lons, vmin_vmax = None, region="SOUTHAMERICA", figsize=None):
     rows = 4
-    fig = plt.figure(figsize=(17,15),  dpi=400, constrained_layout=True)
+    if region == "SOUTHAMERICA":
+        figsize= (17, 15)
+        cut_domain = {"lats":(40,20), "lons":(0,0)}
+    elif region=="NORTHAFRICA":
+        figsize= (15, 10)
+        cut_domain = {"lats":(0,0), "lons":(0,0)}
+
+    fig = plt.figure(figsize=figsize,  dpi=400, constrained_layout=True)
     gs = fig.add_gridspec(rows, 5, figure=fig, width_ratios=[1, 1, 1,1,0.05])
 
     vmin_vmax_default = {"ious_binned":[100*0.1,100*0.5], "mses_binned":[0,1e-6], "corrcoeffs_binned":[0.4,0.7], "logged_corrcoeffs_binned":[0.2,0.5]}
@@ -1127,13 +1150,13 @@ def plot_massive_binned_map(season_results, domain_lats, domain_lons, vmin_vmax 
 
     for season_n, seas in enumerate(seasons.keys()):
         #season_results[seas] = {"mean_mfs":mean_mfs, "mean_mfs_emulated":mean_mfs_emulated}
-        ax[0, season_n], cbar_iou = plot_binned_map(ax[0, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], 100*season_results[seas]["ious_binned"], cut_lats=(40,20), cmap="metrics", metric_name="IoU", vmin_vmax=vmin_vmax["ious_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
+        ax[0, season_n], cbar_iou = plot_binned_map(ax[0, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], 100*season_results[seas]["ious_binned"], cut_lats=cut_domain["lats"], cmap="metrics", metric_name="IoU", vmin_vmax=vmin_vmax["ious_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
 
-        ax[1, season_n], cbar_mses = plot_binned_map(ax[1, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], season_results[seas]["mses_binned"], cut_lats=(40,20), cmap="metrics", metric_name="MSE", vmin_vmax=vmin_vmax["mses_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
+        ax[1, season_n], cbar_mses = plot_binned_map(ax[1, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], season_results[seas]["mses_binned"], cut_lats=cut_domain["lats"], cmap="metrics", metric_name="MSE", vmin_vmax=vmin_vmax["mses_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
 
-        ax[2, season_n], cbar_corrcoeff = plot_binned_map(ax[2, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], season_results[seas]["corrcoeffs_binned"], cut_lats=(40,20), cmap="metrics", metric_name="Corr Coeff", vmin_vmax=vmin_vmax["corrcoeffs_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
+        ax[2, season_n], cbar_corrcoeff = plot_binned_map(ax[2, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], season_results[seas]["corrcoeffs_binned"], cut_lats=cut_domain["lats"], cmap="metrics", metric_name="Corr Coeff", vmin_vmax=vmin_vmax["corrcoeffs_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
 
-        ax[3, season_n], cbar_logged_corrcoeff = plot_binned_map(ax[3, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], season_results[seas]["logged_corrcoeffs_binned"], cut_lats=(40,20), cmap="metrics", metric_name="Logged Corr Coeff", vmin_vmax=vmin_vmax["logged_corrcoeffs_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
+        ax[3, season_n], cbar_logged_corrcoeff = plot_binned_map(ax[3, season_n], season_results[seas]["lon_edges"], season_results[seas]["lat_edges"], season_results[seas]["logged_corrcoeffs_binned"], cut_lats=cut_domain["lats"], cmap="metrics", metric_name="Logged Corr Coeff", vmin_vmax=vmin_vmax["logged_corrcoeffs_binned"], cbar=False, cbar_position="right", title=None, return_cbar=True, domain_lats=domain_lats, domain_lons=domain_lons)
 
         ax[0,season_n].set_title(seas, fontsize=15) 
 
@@ -1158,3 +1181,200 @@ def plot_massive_binned_map(season_results, domain_lats, domain_lons, vmin_vmax 
 
     #gs.tight_layout(fig)
     gs.update(top=0.95)
+
+
+    
+def evaluate_model_v2(model, emissions, print_metrics=True, evaluate_fluxes=True):
+    """
+    FOR A GIVEN FPModel, EVALUATE THE FOOTPRINTS! YOU SHOULD HAVE LOADED THE FLUXES BEFOREHAND
+    """
+
+    if evaluate_fluxes:
+        truef_here, predf_here = model.all_fps.true_flux.values, model.all_fps.pred_flux.values
+
+        truef_here_ones, predf_here_ones = predict_fluxes(np.nan_to_num(model.all_fps.fp_true.values), np.nan_to_num(model.all_fps.fp_pred.values), np.ones_like(emissions), units_transform=None)
+
+    print(f"METRICS {model.year}")
+
+    metric_list = {}
+    #corcoeff = np.corrcoef(model.all_fps.fp_true.values.flatten()[~np.isnan(model.all_fps.fp_true.values.flatten())], model.all_fps.fp_pred.values.flatten()[~np.isnan(model.all_fps.fp_pred.values.flatten())])[0][1]
+    corcoeff = vcorrcoef(model.all_fps.fp_true.values, model.all_fps.fp_pred.values, return_mean=True)
+    if print_metrics: print("Correlation coefficient of footprints: ", f'{corcoeff:.4f}' )
+    corcoeff_log = vcorrcoef(np.log10(model.all_fps.fp_true.values),np.log10(model.all_fps.fp_pred.values), return_mean=True)
+    if print_metrics: print("Correlation coefficient of log(footprints: ", f'{corcoeff_log:.4f}' )
+    iou=IoU(model.all_fps.fp_true.values, model.all_fps.fp_pred.values)
+    if print_metrics: print("IOU: ", f'{iou:.4f}' )
+    nan_mask = np.isnan(model.all_fps.fp_true.values.flatten()) | np.isnan(model.all_fps.fp_pred.values.flatten())
+    mse = mean_squared_error(model.all_fps.fp_true.values.flatten()[~nan_mask], model.all_fps.fp_pred.values.flatten()[~nan_mask])
+    if print_metrics: print("MSE (1e8): ", f'{1e8*mse:.4f}' )
+
+    if evaluate_fluxes:
+        r2_ems = r2_score(truef_here, predf_here)
+        if print_metrics: print("R2 w emissions: ", r2_ems)
+        mae_ems =  MAE(truef_here, predf_here)
+        if print_metrics: print("MAE w emissions (1e9): ", f'{1e9*mae_ems:.4f}' )
+        rmse_ems = np.sqrt(mean_squared_error(truef_here, predf_here))
+        if print_metrics: print("RMSE w emissions (1e9): ", f'{1e9*rmse_ems:.4f}' )
+        ccoeff_ems = np.corrcoef(truef_here, predf_here)[0][1]
+        if print_metrics: print("CORRCOEFF w emissions: ",f'{ccoeff_ems:.4f}' )
+        bias_ems = np.mean(predf_here-truef_here)
+        if print_metrics: print("bias w emissions (1e9): ",f'{1e9*bias_ems:.4f}' )
+
+
+        r2_ones = r2_score(truef_here_ones, predf_here_ones)
+        if print_metrics: print("R2 w ones: ", r2_ones)
+        mae_ones = MAE(truef_here_ones, predf_here_ones)
+        if print_metrics: print("MAE w ones: ", mae_ones)
+        ccoeff_ones = np.corrcoef(truef_here_ones, predf_here_ones)[0][1]
+        if print_metrics: print("CORRCOEFF w ones: ",  f'{ccoeff_ones:.4f}' )
+        bias_ones = np.mean(predf_here_ones-truef_here_ones)
+        if print_metrics: print("bias w ones: ",f'{bias_ones:.4f}' )
+
+
+    #metric_list = [corcoeff, iou, 1e8*mse, r2_ems, 1e9*mae_ems, 1e9*rmse_ems, ccoeff_ems, r2_ones, mae_ones, ccoeff_ones, 1e9*bias_ems, bias_ones]
+
+    return metric_list
+
+    print_metric_list = ["|", model.model_name] + ["|"+f'{i:.4f}' for i in metric_list] +["|"]
+    print_metric_list_bias = ["|", model.model_name + "corrected"] + ["|"+f'{i:.4f}' for i in metric_list_bias] +["|"]
+    
+
+    print(' '.join(print_metric_list))
+    print(' '.join(print_metric_list_bias))
+
+    if return_data:
+        return corrected, {"true flux":truef_here, "pred flux":predf_here, "true ones flux":truef_here_ones, "pred ones flux":predf_here_ones, "pred flux corrected":predf_here_corrected, "pred ones flux corrected":predf_here_ones_corrected}
+
+# import gridspec
+import matplotlib.gridspec as gridspec
+import matplotlib.dates as mdates
+
+def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_plot=7, ylim=35):
+    end_date = pd.to_datetime(start_date) + pd.DateOffset(days=days_to_plot)
+
+    fp_selected = model.all_fps.sel(time=slice(start_date, end_date))
+    fp_selected['time'] = pd.to_datetime(fp_selected['time'].values)
+
+    grouped = fp_selected.groupby('time.date')
+
+    gap_threshold = pd.Timedelta('30min')
+
+
+    fig = plt.figure(figsize=(20, 5), dpi=300)
+
+    valid_dates = []
+    ignore_dates = ["2018-10-20"]
+    for n, (date, group) in enumerate(grouped):
+        times = group['time'].values
+        if len(times)>min_length and date not in ignore_dates:
+            valid_dates.append(date)
+        else:
+            print(f"removing date {date}")
+
+    print(len(valid_dates))
+    outer_gs = gridspec.GridSpec(1,len(valid_dates), figure=fig, wspace=0.15)
+
+    first_axis = True
+    legend=False
+
+    name_col = "#768732"
+    em_col = "#D79706"
+    name_col = "orange"
+    em_col = "green"
+    
+    n=0
+    #for n, (date, group) in enumerate(grouped):
+    for date, group in grouped:
+        if date in valid_dates:
+            times = group['time'].values
+            time_diffs = np.diff(times)
+            split_indices = np.where(time_diffs > gap_threshold)[0] + 1
+
+            indices = np.concatenate(([0], split_indices, [len(times)]))
+            
+            # Filter out chunks with <= 4 time steps
+            start_indices = []
+            end_indices = []
+            for start, end in zip(indices[:-1], indices[1:]):
+
+                if end - start > 4 and np.mean(group.isel(time=slice(start, end)).true_flux.values/1e-9)>2:
+                    start_indices.append(start)
+                    end_indices.append(end)
+            n_chunks = len(start_indices)
+            
+            
+            inner_gs = gridspec.GridSpecFromSubplotSpec(
+                1, n_chunks, subplot_spec=outer_gs[n], wspace=0.1
+            )
+
+            date_label = date.strftime('%d/%m')  # Format date as DD/MM/YYYY
+            outer_ax = fig.add_subplot(outer_gs[n])  # Get the whole subplot
+            outer_ax.set_xlabel(date_label, fontsize=12, labelpad=30)  # Set the label
+            outer_ax.spines['left'].set_visible(False)  # Hide the left spine of the outer axis
+            outer_ax.spines['right'].set_visible(False)  # Hide the right spine
+            outer_ax.spines['top'].set_visible(False)  # Hide the top spine
+            outer_ax.spines['bottom'].set_visible(False)  # Hide the bottom spine
+            outer_ax.set_xticks([])  # Hide x-ticks for the outer axis
+            outer_ax.set_yticks([])  # Hide y-ticks for the outer axis
+
+            #for i, (start, end) in enumerate(zip(indices[:-1], indices[1:])):
+            for i, (start, end) in enumerate(zip(start_indices, end_indices)):
+                chunk = group.isel(time=slice(start, end))
+                if n_chunks==1:
+                    mini_ax = fig.add_subplot(inner_gs[0])
+                else:
+                    mini_ax = fig.add_subplot(inner_gs[0, i])
+
+                mini_ax.plot(chunk["time"], chunk.true_flux.values/1e-9, c=name_col, label="with NAME footprints", lw=2)
+                mini_ax.plot(chunk["time"], chunk.pred_flux.values/1e-9, c=em_col, label="with GATES footprints", lw=2)
+            
+                mini_ax.set_ylim(0,ylim)
+                if not first_axis:
+                    mini_ax.yaxis.set_visible(False)
+                    mini_ax.spines['left'].set_visible(False)
+                    mini_ax.spines['right'].set_visible(False)
+                else:
+                    first_axis=False
+                    mini_ax.set_ylabel("ppb", fontsize=20)
+                    mini_ax.spines['right'].set_visible(False)
+                    
+
+                mini_ax.spines['top'].set_visible(False)
+            
+                # Set x-ticks at 10-minute intervals
+                time_range = chunk["time"].values
+                tick_interval = np.timedelta64(5, 'm')  # 10-minute interval
+                tick_times = np.arange(time_range[0], time_range[-1], tick_interval)
+
+                # Format ticks
+                try:
+                    mini_ax.set_xticks([tick_times[0]])
+                    mini_ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))  
+                except:
+                    continue  
+
+                mini_ax.set_xticks(np.arange(time_range[0], time_range[-1], np.timedelta64(2, 'm')), minor=True)
+                mini_ax.tick_params(axis='x', which='minor', length=3, width=1)  # Minor ticks without labels
+
+            if not legend:
+                mini_ax.legend(bbox_to_anchor=(3, 1), fontsize=12)
+                mini_ax.set_zorder(1)
+                legend=True
+
+            n=n+1
+        else:
+            print(f"ignoring date {date}")
+
+
+
+    fig.suptitle(f"Modelled above-baseline methane concentration - {start_date[:4]}",fontsize=20)
+    
+    #plt.yticks(fontsize=14)
+    #plt.xticks(fontsize=14)
+
+    
+
+    #if print_stats:
+    #    plt.text(292, 48, f"Correlation Coefficient: {np.corrcoef(fp_selected.true_flux.values/1e-9, fp_selected.pred_flux.values/1e-9)[0][1]:.2f} \nMean Absolute Error: {np.mean(abs(fp_selected.true_flux.values/1e-9 - fp_selected.pred_flux.values/1e-9)):.2f} ppb", fontsize=14)
+
+    plt.show()
