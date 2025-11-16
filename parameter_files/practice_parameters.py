@@ -115,10 +115,11 @@ hparams = {
     "learning_rate":5e-5,
     "seed":42,
     "epochs":2,
-    "num_classes":4,
+    "num_classes":1,
     "use_baselines":True,
     'network_decoder':'gnn',
     'output_format':'corrected',
+    'auxiliary':'multiple',
 
     "loss_functions" : {
         "criterion": "torch.nn.MSELoss()",
