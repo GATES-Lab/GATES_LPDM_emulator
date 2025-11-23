@@ -934,13 +934,17 @@ import matplotlib.gridspec as gridspec
 import matplotlib.dates as mdates
 
 def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_plot=7, ylim=35):
+
+    #. Nawid - define the time window
     end_date = pd.to_datetime(start_date) + pd.DateOffset(days=days_to_plot)
 
     fp_selected = model.all_fps.sel(time=slice(start_date, end_date))
+    # Nawid - Convert times to pandas datetime
     fp_selected['time'] = pd.to_datetime(fp_selected['time'].values)
-
+    # Nawid - Group data by day
     grouped = fp_selected.groupby('time.date')
 
+    # Nawid -Filter valid days
     gap_threshold = pd.Timedelta('30min')
 
 
@@ -948,6 +952,7 @@ def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_
 
     valid_dates = []
     ignore_dates = ["2018-10-20"]
+    
     for n, (date, group) in enumerate(grouped):
         times = group['time'].values
         if len(times)>min_length and date not in ignore_dates:
@@ -968,6 +973,7 @@ def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_
     
     n=0
     #for n, (date, group) in enumerate(grouped):
+    # Nawid = loop pver each valid day
     for date, group in grouped:
         if date in valid_dates:
             times = group['time'].values
@@ -1008,7 +1014,7 @@ def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_
                     mini_ax = fig.add_subplot(inner_gs[0])
                 else:
                     mini_ax = fig.add_subplot(inner_gs[0, i])
-
+                # Nawid - Plot the fluxes
                 mini_ax.plot(chunk["time"], chunk.true_flux.values/1e-9, c=name_col, label="with NAME footprints", lw=2)
                 mini_ax.plot(chunk["time"], chunk.pred_flux.values/1e-9, c=em_col, label="with GATES footprints", lw=2)
             
@@ -1061,4 +1067,282 @@ def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_
     #if print_stats:
     #    plt.text(292, 48, f"Correlation Coefficient: {np.corrcoef(fp_selected.true_flux.values/1e-9, fp_selected.pred_flux.values/1e-9)[0][1]:.2f} \nMean Absolute Error: {np.mean(abs(fp_selected.true_flux.values/1e-9 - fp_selected.pred_flux.values/1e-9)):.2f} ppb", fontsize=14)
 
+
     plt.show()
+
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+import cartopy.crs as ccrs
+
+def plot_seasonal_truth_pred_mse(season_results, ground_truth_results, prediction_results, domain_lats, domain_lons, region="SOUTHAMERICA", figsize=None):
+    """
+    Plot 3 rows per season:
+        Row 1: Ground truth
+        Row 2: Predictions
+        Row 3: MSE
+    Columns = seasons (JFM, AMJ, JAS, OND)
+    
+    ground_truth_results and prediction_results are dictionaries structured like season_results,
+    containing the binned values.
+    """
+    seasons = ["JFM", "AMJ", "JAS", "OND"]
+    rows = 3
+    cols = 4
+    
+    if region == "SOUTHAMERICA":
+        figsize = (17, 12)
+        cut_domain = {"lats": (40, 20), "lons": (0, 0)}
+    elif region == "NORTHAFRICA":
+        figsize = (15, 10)
+        cut_domain = {"lats": (0, 0), "lons": (0, 0)}
+    
+    fig = plt.figure(figsize=figsize, dpi=400, constrained_layout=True)
+    gs = fig.add_gridspec(rows, cols + 1, width_ratios=[1]*cols + [0.05])
+    
+    ax = np.empty((rows, cols), dtype=object)
+    
+    # Create subplots for each row and column
+    for i in range(rows):
+        for j in range(cols):
+            ax[i, j] = fig.add_subplot(gs[i, j], projection=ccrs.PlateCarree())
+    
+    # Determine global vmin and vmax for MSE for consistent colormap
+    all_mses = np.concatenate([season_results[seas]["mses_binned"].ravel() for seas in seasons])
+    mse_vmin, mse_vmax = np.nanmin(all_mses), np.nanmax(all_mses)
+    
+    for season_idx, seas in enumerate(seasons):
+        # Row 0: Ground truth
+        plot_binned_map(
+            ax[0, season_idx],
+            season_results[seas]["lon_edges"],
+            season_results[seas]["lat_edges"],
+            ground_truth_results[seas],
+            cut_lats=cut_domain["lats"],
+            metric_name="Ground Truth",
+            domain_lats=domain_lats,
+            domain_lons=domain_lons,
+            cbar=False
+        )
+        if season_idx == 0:
+            ax[0, season_idx].text(-0.1, 0.5, "Ground Truth", rotation="vertical",
+                                   va="center", ha="center", fontsize=14,
+                                   transform=ax[0, season_idx].transAxes)
+        
+        # Row 1: Prediction
+        plot_binned_map(
+            ax[1, season_idx],
+            season_results[seas]["lon_edges"],
+            season_results[seas]["lat_edges"],
+            prediction_results[seas],
+            cut_lats=cut_domain["lats"],
+            metric_name="Prediction",
+            domain_lats=domain_lats,
+            domain_lons=domain_lons,
+            cbar=False
+        )
+        if season_idx == 0:
+            ax[1, season_idx].text(-0.1, 0.5, "Prediction", rotation="vertical",
+                                   va="center", ha="center", fontsize=14,
+                                   transform=ax[1, season_idx].transAxes)
+        
+        # Row 2: MSE
+        _, cbar_mse = plot_binned_map(
+            ax[2, season_idx],
+            season_results[seas]["lon_edges"],
+            season_results[seas]["lat_edges"],
+            season_results[seas]["mses_binned"],
+            cut_lats=cut_domain["lats"],
+            metric_name="MSE",
+            vmin_vmax=[mse_vmin, mse_vmax],
+            domain_lats=domain_lats,
+            domain_lons=domain_lons,
+            return_cbar=True,
+            cbar=False
+        )
+        if season_idx == 0:
+            ax[2, season_idx].text(-0.1, 0.5, "MSE", rotation="vertical",
+                                   va="center", ha="center", fontsize=14,
+                                   transform=ax[2, season_idx].transAxes)
+        
+        # Add season title at top row
+        ax[0, season_idx].set_title(seas, fontsize=15)
+    
+    # Add single colorbar for MSE on the right
+    gs_cb = gs[2, -1].subgridspec(3, 1, height_ratios=[1, 50, 1])
+    cbar_ax = fig.add_subplot(gs_cb[1, 0])
+    plt.colorbar(cbar_mse, cax=cbar_ax, location='right', extend="both").set_label(label="MSE", size=12)
+    
+    fig.suptitle("Ground Truth, Prediction, and MSE by Season", fontsize=16)
+    gs.update(top=0.95)
+
+
+
+import numpy as np
+
+def compute_binned_truth_pred(true_values, pred_values, dates, release_lats, release_lons, degree_bins=2):
+    """
+    Compute binned ground truth, predictions, and MSE per season.
+    
+    Returns:
+        season_truths: dict of binned ground truth arrays per season
+        season_preds: dict of binned prediction arrays per season
+        season_mses: dict of binned MSE arrays per season
+        lat_edges, lon_edges: edges of the lat/lon bins
+    """
+    seasons = {"JFM": ["01","02","03"], "AMJ": ["04","05","06"], 
+               "JAS": ["07","08","09"], "OND": ["10","11","12"]}
+    
+    season_truths = {}
+    season_preds = {}
+    season_mses = {}
+    
+    # Flatten spatial dimensions if needed
+    true_flat = true_values.reshape(true_values.shape[0], -1)
+    pred_flat = pred_values.reshape(pred_values.shape[0], -1)
+    
+    all_mses = (true_flat - pred_flat) ** 2
+    
+    for seas in seasons:
+        # Select indices for this season
+        seasonal_idxs = np.where(
+            np.bitwise_and(dates.dt.month >= int(seasons[seas][0]),
+                           dates.dt.month <= int(seasons[seas][-1]))
+        )[0]
+        
+        # Average over spatial dimensions for each time step
+        seasonal_truth = np.nanmean(true_flat[seasonal_idxs], axis=1)
+        seasonal_pred  = np.nanmean(pred_flat[seasonal_idxs], axis=1)
+        seasonal_mse   = np.nanmean(all_mses[seasonal_idxs], axis=1)
+        
+        # Bin in lat/lon space
+        binned_truth, lat_edges, lon_edges = bin_data(seasonal_truth, release_lats[seasonal_idxs], release_lons[seasonal_idxs], degree_bins=degree_bins)
+        binned_pred, _, _ = bin_data(seasonal_pred, release_lats[seasonal_idxs], release_lons[seasonal_idxs], degree_bins=degree_bins)
+        binned_mse, _, _  = bin_data(seasonal_mse, release_lats[seasonal_idxs], release_lons[seasonal_idxs], degree_bins=degree_bins)
+        
+        season_truths[seas] = binned_truth
+        season_preds[seas]  = binned_pred
+        season_mses[seas]   = binned_mse
+    
+    return season_truths, season_preds, season_mses, lat_edges, lon_edges
+
+import matplotlib as mpl
+
+import matplotlib.pyplot as plt
+import numpy as np
+import cartopy.crs as ccrs
+
+def plot_seasonal_truth_pred_mse_shared_cbar(season_results, ground_truth_results, prediction_results, domain_lats, domain_lons, region="SOUTHAMERICA", figsize=None):
+    """
+    Plot 3 rows per season:
+        Row 1: Ground truth
+        Row 2: Predictions
+        Row 3: MSE
+
+    One shared colorbar for Ground Truth & Prediction rows, and one colorbar for MSE row.
+    """
+    seasons = ["JFM", "AMJ", "JAS", "OND"]
+    rows = 3
+    cols = 4
+    
+    if region == "SOUTHAMERICA":
+        figsize = (17, 12)
+        cut_domain = {"lats": (40, 20), "lons": (0, 0)}
+    elif region == "NORTHAFRICA":
+        figsize = (15, 10)
+        cut_domain = {"lats": (0, 0), "lons": (0, 0)}
+    
+    fig = plt.figure(figsize=figsize, dpi=400, constrained_layout=True)
+    gs = fig.add_gridspec(rows, cols + 1, width_ratios=[1]*cols + [0.05])
+    
+    ax = np.empty((rows, cols), dtype=object)
+    for i in range(rows):
+        for j in range(cols):
+            ax[i, j] = fig.add_subplot(gs[i, j], projection=ccrs.PlateCarree())
+    
+    # Compute shared vmin/vmax for Ground Truth and Predictions
+    all_vals = np.concatenate([ground_truth_results[s].ravel() for s in seasons] +
+                              [prediction_results[s].ravel() for s in seasons])
+    vmin_vmax_shared = [np.nanmin(all_vals), np.nanmax(all_vals)]
+    
+    # Compute vmin/vmax for MSE
+    all_mses = np.concatenate([season_results[s]["mses_binned"].ravel() for s in seasons])
+    vmin_vmax_mse = [np.nanmin(all_mses), np.nanmax(all_mses)]
+    
+    for season_idx, seas in enumerate(seasons):
+        # Row 0: Ground Truth
+        plot_binned_map(
+            ax[0, season_idx],
+            season_results[seas]["lon_edges"],
+            season_results[seas]["lat_edges"],
+            ground_truth_results[seas],
+            cut_lats=cut_domain["lats"],
+            metric_name="Ground Truth",
+            domain_lats=domain_lats,
+            domain_lons=domain_lons,
+            vmin_vmax=vmin_vmax_shared,
+            cmap="viridis",
+            cbar=False
+        )
+        if season_idx == 0:
+            ax[0, season_idx].text(-0.1, 0.5, "Ground Truth", rotation="vertical",
+                                   va="center", ha="center", fontsize=14,
+                                   transform=ax[0, season_idx].transAxes)
+        
+        # Row 1: Predictions
+        plot_binned_map(
+            ax[1, season_idx],
+            season_results[seas]["lon_edges"],
+            season_results[seas]["lat_edges"],
+            prediction_results[seas],
+            cut_lats=cut_domain["lats"],
+            metric_name="Prediction",
+            domain_lats=domain_lats,
+            domain_lons=domain_lons,
+            vmin_vmax=vmin_vmax_shared,
+            cmap="viridis",
+            cbar=False
+        )
+        if season_idx == 0:
+            ax[1, season_idx].text(-0.1, 0.5, "Prediction", rotation="vertical",
+                                   va="center", ha="center", fontsize=14,
+                                   transform=ax[1, season_idx].transAxes)
+        
+        # Row 2: MSE
+        plot_binned_map(
+            ax[2, season_idx],
+            season_results[seas]["lon_edges"],
+            season_results[seas]["lat_edges"],
+            season_results[seas]["mses_binned"],
+            cut_lats=cut_domain["lats"],
+            metric_name="MSE",
+            domain_lats=domain_lats,
+            domain_lons=domain_lons,
+            vmin_vmax=vmin_vmax_mse,
+            cmap="Reds",
+            cbar=False
+        )
+        if season_idx == 0:
+            ax[2, season_idx].text(-0.1, 0.5, "MSE", rotation="vertical",
+                                   va="center", ha="center", fontsize=14,
+                                   transform=ax[2, season_idx].transAxes)
+        
+        ax[0, season_idx].set_title(seas, fontsize=15)
+    
+    # Shared colorbar for Ground Truth & Prediction
+    gs_cb_truth = gs[0, -1].subgridspec(2, 1, height_ratios=[50, 1])
+    cbar_ax_truth = fig.add_subplot(gs_cb_truth[0, 0])
+    sm = plt.cm.ScalarMappable(cmap="viridis", norm=plt.Normalize(*vmin_vmax_shared))
+    sm.set_array([])
+    plt.colorbar(sm, cax=cbar_ax_truth, orientation='vertical').set_label(label="Ground Truth / Prediction", size=12)
+    
+    # Colorbar for MSE
+    gs_cb_mse = gs[2, -1].subgridspec(2, 1, height_ratios=[50, 1])
+    cbar_ax_mse = fig.add_subplot(gs_cb_mse[0, 0])
+    sm_mse = plt.cm.ScalarMappable(cmap="Reds", norm=plt.Normalize(*vmin_vmax_mse))
+    sm_mse.set_array([])
+    plt.colorbar(sm_mse, cax=cbar_ax_mse, orientation='vertical').set_label(label="MSE", size=12)
+    
+    fig.suptitle("Ground Truth, Prediction, and MSE by Season", fontsize=16)
+    gs.update(top=0.95)
