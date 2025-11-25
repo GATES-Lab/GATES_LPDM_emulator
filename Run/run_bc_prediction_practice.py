@@ -13,6 +13,7 @@ if __name__=="__main__":
     #practice = 'Complete'
     #practice = 'Partial'
     practice = 'Complete'
+    #practice = 'Partial'
     if practice =='Full' or practice =='Partial':
         print('Using Practice')
         for practice_hparams in practice_hparams_list:

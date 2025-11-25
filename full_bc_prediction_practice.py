@@ -40,6 +40,7 @@ from datetime import date
 
 import wandb
 import re
+import pickle
 
 # Set your W&B API key to log in automatically
 os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<-- REPLACE THIS
@@ -928,7 +929,7 @@ def train_bc_prediction_pipeline_data_saving(_hparams,_practice):
     
     data = LoadSquareSatelliteData(**train_load_data)
     test_data = LoadSquareSatelliteData(**test_load_data) 
-
+    
     train_subset = data.fp_data_full[["release_lon", "release_lat"]].assign_coords(
     lat=data.fp_data_full["lat"],
     lon=data.fp_data_full["lon"])
@@ -937,11 +938,29 @@ def train_bc_prediction_pipeline_data_saving(_hparams,_practice):
     lat=test_data.fp_data_full["lat"],
     lon=test_data.fp_data_full["lon"])
 
-    train_subset.to_netcdf("train_subset.nc")   
+    #train_subset.to_netcdf("train_subset.nc")   
 
-    test_subset.to_netcdf("test_subset.nc")   
-            
-        
+    test_subset.to_netcdf("test_subset_full.nc")   
+         
+    train_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
+    # TODO: Nawid- get the train year and the test year from the trainload data 
+    train_year = parse_years(train_load_data['year'])
+    
+    test_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
+    test_year = parse_years(test_load_data['year'])
+    print(name_output_format)
+    height_indices = [4,5,6,7] if name_auxiliary == 'multiple' else [4]
+
+    baseline_list, outputs, auxiliary_cams,train_correction_values = baseline_mol_correction(data,train_months, train_year,output_format=name_output_format,height_indices=height_indices)
+    test_baseline_list, test_outputs, test_auxiliary_cams, test_correction_values = baseline_mol_correction(test_data,test_months, test_year,output_format =name_output_format,height_indices=height_indices)
+    
+    data_to_save = {
+    "train_correction_values": train_correction_values,
+    "test_correction_values": test_correction_values
+}
+
+    with open("correction_values_full.pkl", "wb") as f:
+        pickle.dump(data_to_save, f)
 
     wandb.finish()  # 👈 End wandb session
 
@@ -985,7 +1004,8 @@ def baseline_mol_correction(desired_data, months, years, output_format, height_i
     # Auxiliary CAMS columns = 4 (directions) × number of height levels
     num_heights = len(height_indices)
     auxiliary_cams = np.zeros((total_data_points, 4 * num_heights))
-
+    # Nawid - This is all the correction for the purpose of saving it
+    collated_corrections = np.zeros(total_data_points)
     for year in years:
         print("year", year)
         for month in months:
@@ -1043,6 +1063,8 @@ def baseline_mol_correction(desired_data, months, years, output_format, height_i
                     north_mol + south_mol + east_mol + west_mol
                 ).values - correction
 
+                # nawid -  add the correction value to the list
+                collated_corrections[indices] = correction
     # Combine direction-wise outputs
     outputs = np.stack((north_list, south_list, east_list, west_list), axis=1)
 
@@ -1050,5 +1072,5 @@ def baseline_mol_correction(desired_data, months, years, output_format, height_i
         outputs = np.sum(outputs, axis=1, keepdims=True)
     elif output_format == "corrected":
         outputs = np.array(total_list).reshape(-1, 1)
-
-    return baseline_list, outputs, auxiliary_cams
+    # Nawid - Added the collated corrections to the data
+    return baseline_list, outputs, auxiliary_cams, collated_corrections
