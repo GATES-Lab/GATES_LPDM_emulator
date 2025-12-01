@@ -5,3 +5,4 @@ graph_weather
 wandb
 modloss
 *.nc
+*.err

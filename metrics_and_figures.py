@@ -1346,3 +1346,7 @@ def plot_seasonal_truth_pred_mse_shared_cbar(season_results, ground_truth_result
     
     fig.suptitle("Ground Truth, Prediction, and MSE by Season", fontsize=16)
     gs.update(top=0.95)
+
+
+# NAWID - CALCULATING THE DENSITY SPATIALLY 
+import numpy as np

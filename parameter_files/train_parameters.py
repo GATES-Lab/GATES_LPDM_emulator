@@ -15,7 +15,7 @@ hparams = {
 
     "test_load_data" : {
         "year":"2017",
-        "freq":10
+        "freq":1
     },
 
     "variables" : {
@@ -49,7 +49,7 @@ hparams = {
     "seed":42,
     "epochs":200,
     "num_classes":1,
-    "use_baselines":False,
+    "use_baselines":True,
     'network_decoder':'conv',
     'output_format':'corrected',
     'auxiliary':'multiple',
@@ -132,7 +132,7 @@ sim_hparams_4['test_load_data']['year'] = "2017"
 sim_hparams_4['network_decoder']='conv' 
 sim_hparams_4["train_load_data"]['size'] = 50
 sim_hparams_4['seed'] = 42 
-sim_hparams_4['output_format']='sum'
+sim_hparams_4['output_format']='corrected'
 
 sim_hparams_5 = copy.deepcopy(hparams)
 sim_hparams_5['normalization'] = 'all'
@@ -144,7 +144,7 @@ sim_hparams_5['test_load_data']['year'] = "2017"
 sim_hparams_5['network_decoder']='conv' 
 sim_hparams_5["train_load_data"]['size'] = 50
 sim_hparams_5['seed'] = 31
-sim_hparams_5['output_format']='sum'
+sim_hparams_5['output_format']='corrected'
 
 #sim_hparams_5["train_load_data"]["domain_to_cut"]= {"lat":[-39.7,4.7]} # Lat 190 lon 190
 #sim_hparams_5["train_load_data"]['coarsening_factor'] = 2
@@ -161,7 +161,7 @@ sim_hparams_6['test_load_data']['year'] = "2017"
 sim_hparams_6['network_decoder']='conv'
 sim_hparams_6["train_load_data"]['size'] = 50
 sim_hparams_6['seed'] = 28
-sim_hparams_6['output_format']='sum'
+sim_hparams_6['output_format']='corrected'
 #sim_hparams_2["train_load_data"]["coarsening_factor"] = 1
 #sim_hparams_2["model_name"] = "trainyear-2014_trainfreq-3_baselineyears-2014-2011_normalization-all_size-50-epochs-150_baselines_True_lr-5e-05_seed-31_date-Jan-17-2025"
 '''
@@ -243,7 +243,8 @@ sim_hparams_6['variables']["time_deltas"] = [6,12,24]
 '''
 
 hparams_list = [sim_hparams_4]
-'''
-hparams_list = [sim_hparams_4,sim_hparams_5, sim_hparams_6]
-'''
+
+#hparams_list = [sim_hparams_4,sim_hparams_5, sim_hparams_6]
+
+
 #hparams_list = [sim_hparams, sim_hparams_2,sim_hparams_3,sim_hparams_4, sim_hparams_5,sim_hparams_6]

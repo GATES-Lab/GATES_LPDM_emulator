@@ -2,8 +2,8 @@
 #SBATCH --partition=gpu
 #SBATCH --mem=400GB
 #SBATCH --gres=gpu:1
-#SBATCH --job-name=modloss
-#SBATCH --output=modloss
+#SBATCH --job-name=bcpred
+#SBATCH --output=bcpred
 #SBATCH --time=48:00:00
 #SBATCH --account=semt030444
 #SBATCH --exclude=bp1-gpu030,bp1-gpu035

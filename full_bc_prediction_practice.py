@@ -554,9 +554,35 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     print(name_output_format)
     height_indices = [4,5,6,7] if name_auxiliary == 'multiple' else [4]
 
+    '''
     baseline_list, outputs, auxiliary_cams = baseline_mol_correction(data,train_months, train_year,output_format=name_output_format,height_indices=height_indices)
     test_baseline_list, test_outputs, test_auxiliary_cams = baseline_mol_correction(test_data,test_months, test_year,output_format =name_output_format,height_indices=height_indices)
-    
+    '''
+    # NAWID - SAVING RETREND INFO
+    baseline_list, outputs, auxiliary_cams,train_correction_values = baseline_mol_correction(data,train_months, train_year,output_format=name_output_format,height_indices=height_indices)
+    test_baseline_list, test_outputs, test_auxiliary_cams, test_correction_values = baseline_mol_correction(test_data,test_months, test_year,output_format =name_output_format,height_indices=height_indices)
+    '''
+    data_to_save = {
+    "train_correction_values": train_correction_values,
+    "test_correction_values": test_correction_values
+}
+
+    with open("correction_values_full.pkl", "wb") as f:
+        pickle.dump(data_to_save, f)
+
+    train_subset = data.fp_data_full[["release_lon", "release_lat"]].assign_coords(
+    lat=data.fp_data_full["lat"],
+    lon=data.fp_data_full["lon"])
+
+    test_subset = test_data.fp_data_full[["release_lon", "release_lat"]].assign_coords(
+    lat=test_data.fp_data_full["lat"],
+    lon=test_data.fp_data_full["lon"])
+
+    #train_subset.to_netcdf("train_subset.nc")   
+    # Nawid - Saving the code the information for the data
+    test_subset.to_netcdf("test_subset_full.nc")
+    '''
+
     '''
     baseline_list, north_list, south_list, east_list, west_list = baseline_mol_updated(data,train_months, train_year)
     test_baseline_list, test_north_list, test_south_list, test_east_list, test_west_list = baseline_mol_updated(test_data,test_months, test_year)
