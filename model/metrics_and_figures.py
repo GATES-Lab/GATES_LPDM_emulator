@@ -1249,12 +1249,26 @@ def evaluate_model_v2(model, emissions, print_metrics=True, evaluate_fluxes=True
 import matplotlib.gridspec as gridspec
 import matplotlib.dates as mdates
 
-def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_plot=7, ylim=35):
+def plot_new_period(model, start_date, min_length=30, days_to_plot=7, ylim=35):
+    print("DEPRECATED, USE plot_fp_flux_period INSTEAD")
+
+def plot_fp_flux_period(model, start_date, min_length=30, days_to_plot=7, ylim=35,print_stats=False):
+    """
+    Plot modelled above-baseline fluxes over a given period from a ModelEv object, splitting days into subplots
+    model - model object, with loaded fluxes
+    start_date - string, e.g. "2018-10-01" of the first day
+    min_length - minimum number of observations in a day to be included
+    days_to_plot - number of days to plot from start date
+    ylim - upper y axis limit
+
+    the figure is built by creating a series of subplots with GridSpec, one for each valid date.
+    For each valid date, the subplot is split into chunks (n_overpasses) based on time gaps larger than 30 minutes.
+    Each chunk is plotted in its own mini-axis within the date's subplot.
+    """
     end_date = pd.to_datetime(start_date) + pd.DateOffset(days=days_to_plot)
 
     fp_selected = model.all_fps.sel(time=slice(start_date, end_date))
     fp_selected['time'] = pd.to_datetime(fp_selected['time'].values)
-
     grouped = fp_selected.groupby('time.date')
 
     gap_threshold = pd.Timedelta('30min')
@@ -1262,6 +1276,7 @@ def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_
 
     fig = plt.figure(figsize=(20, 5), dpi=300)
 
+    ## search for valid dates and create gridspec of plots
     valid_dates = []
     ignore_dates = ["2018-10-20"]
     for n, (date, group) in enumerate(grouped):
@@ -1283,7 +1298,8 @@ def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_
     em_col = "green"
     
     n=0
-    #for n, (date, group) in enumerate(grouped):
+
+    # for each day, calculate the number of overpasses based on time gaps >30min
     for date, group in grouped:
         if date in valid_dates:
             times = group['time'].values
@@ -1300,13 +1316,14 @@ def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_
                 if end - start > 4 and np.mean(group.isel(time=slice(start, end)).true_flux.values/1e-9)>2:
                     start_indices.append(start)
                     end_indices.append(end)
-            n_chunks = len(start_indices)
+            n_overpasses = len(start_indices)
             
-            
+            # make the inner gridspec for the overpasses that day
             inner_gs = gridspec.GridSpecFromSubplotSpec(
-                1, n_chunks, subplot_spec=outer_gs[n], wspace=0.1
+                1, n_overpasses, subplot_spec=outer_gs[n], wspace=0.1
             )
 
+            # set up the axes for the whole day's subplot 
             date_label = date.strftime('%d/%m')  # Format date as DD/MM/YYYY
             outer_ax = fig.add_subplot(outer_gs[n])  # Get the whole subplot
             outer_ax.set_xlabel(date_label, fontsize=12, labelpad=30)  # Set the label
@@ -1317,10 +1334,10 @@ def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_
             outer_ax.set_xticks([])  # Hide x-ticks for the outer axis
             outer_ax.set_yticks([])  # Hide y-ticks for the outer axis
 
-            #for i, (start, end) in enumerate(zip(indices[:-1], indices[1:])):
+            # for each overpass chunk, create a mini-axis and plot
             for i, (start, end) in enumerate(zip(start_indices, end_indices)):
                 chunk = group.isel(time=slice(start, end))
-                if n_chunks==1:
+                if n_overpasses==1:
                     mini_ax = fig.add_subplot(inner_gs[0])
                 else:
                     mini_ax = fig.add_subplot(inner_gs[0, i])
@@ -1372,9 +1389,8 @@ def plot_new_period(model, start_date, min_length=30, print_stats=True, days_to_
     #plt.yticks(fontsize=14)
     #plt.xticks(fontsize=14)
 
-    
 
-    #if print_stats:
-    #    plt.text(292, 48, f"Correlation Coefficient: {np.corrcoef(fp_selected.true_flux.values/1e-9, fp_selected.pred_flux.values/1e-9)[0][1]:.2f} \nMean Absolute Error: {np.mean(abs(fp_selected.true_flux.values/1e-9 - fp_selected.pred_flux.values/1e-9)):.2f} ppb", fontsize=14)
+    if print_stats:
+        print(f"Correlation Coefficient: {np.corrcoef(fp_selected.true_flux.values/1e-9, fp_selected.pred_flux.values/1e-9)[0][1]:.2f} \nMean Absolute Error: {np.mean(abs(fp_selected.true_flux.values/1e-9 - fp_selected.pred_flux.values/1e-9)):.2f} ppb")
 
     plt.show()
