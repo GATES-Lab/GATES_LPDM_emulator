@@ -231,7 +231,7 @@ def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=
     plt.show()
 
 
-def plot_fp_and_bcs(fp_dataset, idx=0, timestamp=None, levels=None, bc_minmax=(-4, -1)):
+def plot_fp_and_bcs(fp_dataset, idx=0, timestamp=None, levels=None, bc_minmax=(-4, -1), figsize=6):
     """
     Plot a full footprint and the corresponding boundary condition footprints on each direction.
     Parameters:
@@ -240,6 +240,7 @@ def plot_fp_and_bcs(fp_dataset, idx=0, timestamp=None, levels=None, bc_minmax=(-
     timestamp: specific timestamp to plot (overrides idx if provided)
     levels: contour levels for the footprint plot
     bc_minmax: min and max values for boundary condition plots, logged
+    figsize: size of the figure
     
     todo - add colorbar!
     """
@@ -259,7 +260,7 @@ def plot_fp_and_bcs(fp_dataset, idx=0, timestamp=None, levels=None, bc_minmax=(-
 
     width_ratios=[1, 6, 1]
     height_ratios=[1, 12, 1]
-    figsize = (6, 6)
+    figsize = (figsize, figsize)
     # create figure and subplots
     fig = plt.figure(figsize=figsize)
     gs = fig.add_gridspec(3, 3, width_ratios=width_ratios, height_ratios=height_ratios)
@@ -290,29 +291,32 @@ def plot_fp_and_bcs(fp_dataset, idx=0, timestamp=None, levels=None, bc_minmax=(-
 
     ## plot the four sides
     bc_min, bc_max = bc_minmax
+    bc_cmap = plt.cm.hot
+    bc_cmap.set_over("yellow")
+    bc_cmap.set_under("k")
 
     ax_north = fig.add_subplot(gs[0, 1])
-    c_north = ax_north.contourf(np.where(f.particle_locations_n==0, np.nan, np.log10(f.particle_locations_n)), origin="lower", extend="both", cmap="hot", vmin=bc_min, vmax=bc_max)
+    c_north = ax_north.contourf(np.where(f.particle_locations_n==0, np.nan, np.log10(f.particle_locations_n)), origin="lower", extend="both", cmap=bc_cmap, vmin=bc_min, vmax=bc_max)
     ax_north.set_xticks([])
     ax_north.set_yticks([0,15])
 
     ax_north.set_title(f"FP at {timestamp.strftime('%Y-%m-%d %H:%M UTC')}", fontsize=12)
 
     ax_south = fig.add_subplot(gs[2, 1])
-    c_south = ax_south.contourf(np.where(f.particle_locations_s==0, np.nan, np.log10(f.particle_locations_s)), origin="lower", extend="both", cmap="hot", vmin=bc_min, vmax=bc_max)
+    c_south = ax_south.contourf(np.where(f.particle_locations_s==0, np.nan, np.log10(f.particle_locations_s)), origin="lower", extend="both", cmap=bc_cmap, vmin=bc_min, vmax=bc_max)
     ax_south.set_xticks([])
     ax_south.set_yticks([0,15])
     ax_south.invert_yaxis()
 
     ax_west = fig.add_subplot(gs[1, 0])
-    c_west = ax_west.contourf(np.where(f.particle_locations_w==0, np.nan, np.log10(f.particle_locations_w)).T, origin="lower",  cmap="hot", vmin=bc_min, vmax=bc_max)
+    c_west = ax_west.contourf(np.where(f.particle_locations_w==0, np.nan, np.log10(f.particle_locations_w)).T, origin="lower",  cmap=bc_cmap, vmin=bc_min, vmax=bc_max)
     ax_west.invert_xaxis()
     ax_west.set_yticks([])
     ax_west.set_xticks([0,15])
 
     ax_east = fig.add_subplot(gs[1, 2])
-    c_east = ax_east.contourf(np.where(f.particle_locations_e==0, np.nan, np.log10(f.particle_locations_e)).T, origin="lower", extend="both", cmap="hot", vmin=bc_min, vmax=bc_max)
+    c_east = ax_east.contourf(np.where(f.particle_locations_e==0, np.nan, np.log10(f.particle_locations_e)).T, origin="lower", extend="both", cmap=bc_cmap, vmin=bc_min, vmax=bc_max)
     ax_east.set_yticks([])
     ax_east.set_xticks([0,15])
 
-    #return fig    
+    #return fig
