@@ -28,6 +28,17 @@ import matplotlib.dates as mdates
 import cartopy.crs as ccrs
 
 def retrend_predictions_cams(dataset, cams_file = None, trend_height=1500, detrended_attr_name = "detrended", retrended_attr_name = "flux", cams_units_multiplier=1e9):
+    """
+    Retrend modelled and true background concentrations using CAMS data. 
+    Takes the monthly average of the CAMS data along the southern boundary of the domain at the specified height, and and adds the monthly mean back to the detrended data.
+
+    dataset - xarray dataset object, with the detrended molefractions saved under true_ and pred_ attributes (e.g. true_bc_detrended)
+    cams_file - path to CAMS netCDF file(s), cut to the same domain as the footprints. If None, will use default path based on year in dataset for SOUTHAMERICA domain.
+    trend_height - height (in meters) at which to extract CAMS data for correction. Default is 1500m.
+    detrended_attr_name - string, suffix of the detrended attributes in the dataset
+    retrended_attr_name - string, suffix for the retrended attributes to be created in the dataset
+    cams_units_multiplier - multiplier to convert CAMS units to dataset units (default assumes CAMS in mol/mol and dataset in ppb, so multiplier is 1e9. Use cams_units_multiplier=1 if the detrended mf is also in mol/mol)
+    """
     if cams_file is None:
         year = np.unique(dataset.time.dt.year.values)
         if len(year)>1:
