@@ -524,6 +524,53 @@ def bin_data(data, lats, lons, degree_bins=1):
     return binned_data, lat_edges, lon_edges
 
 
+from scipy.stats import binned_statistic_2d
+import numpy as np
+# Nawid.- version just to get the density
+def bin_density(lats, lons, degree_bins=1):
+    """
+    Bin data point density into a lat/lon grid.
+    Returns a 2D array of point counts.
+    """
+    lat_bins = range(int(np.floor(lats.min())), int(np.ceil(lats.max())) + 1, degree_bins)
+    lon_bins = range(int(np.floor(lons.min())), int(np.ceil(lons.max())) + 1, degree_bins)
+
+    density, lat_edges, lon_edges, binnumber = binned_statistic_2d(
+        lats, lons, None, statistic='count', bins=[lat_bins, lon_bins]
+    )
+
+    return density, lat_edges, lon_edges
+
+def get_binned_seasonal_density(dates, release_lats, release_lons, degree_bins=2):
+    seasons = {"JFM":[1,2,3], "AMJ":[4,5,6], "JAS":[7,8,9], "OND":[10,11,12]}
+    
+    season_results = {}
+
+    for seas, months in seasons.items():
+        # seasonal time indices
+        idxs = np.where(np.isin(dates.dt.month, months))[0]
+
+        print(f"{seas} | {len(idxs)} points")
+
+        # get seasonal subset
+        s_lats = release_lats[idxs]
+        s_lons = release_lons[idxs]
+
+        # compute density map
+        density_binned, lat_edges, lon_edges = bin_density(
+            s_lats, s_lons,
+            degree_bins=degree_bins
+        )
+
+        season_results[seas] = {
+            "lat_edges": lat_edges,
+            "lon_edges": lon_edges,
+            "density_binned": density_binned,
+        }
+
+    return season_results
+
+
 def vcorrcoef(fp, pred, threshold = None, return_mean=False):
     # Nawid - reshape to 2d
     X = fp.reshape(fp.shape[0], -1)
@@ -860,6 +907,74 @@ def plot_massive_binned_map_mse_only(season_results, domain_lats, domain_lons, v
                   transform=ax[0, 0].transAxes, multialignment="center")
 
     fig.suptitle("Spatial MSE by season", fontsize=16)
+    gs.update(top=0.95)
+
+def plot_massive_binned_map_density_only(season_results, domain_lats, domain_lons,
+                                         vmin_vmax=None, region="SOUTHAMERICA", figsize=None):
+    """
+    Plot seasonal spatial *density* maps (JFM, AMJ, JAS, OND).
+    Each column = a season.
+    One row only (density).
+    """
+
+    rows = 1   # only density
+
+    # Region-dependent cropping
+    if region == "SOUTHAMERICA":
+        figsize = (17, 5)
+        cut_domain = {"lats": (40, 20), "lons": (0, 0)}
+    elif region == "NORTHAFRICA":
+        figsize = (15, 5)
+        cut_domain = {"lats": (0, 0), "lons": (0, 0)}
+
+    fig = plt.figure(figsize=figsize, dpi=400, constrained_layout=True)
+    gs = fig.add_gridspec(rows, 5, figure=fig, width_ratios=[1, 1, 1, 1, 0.05])
+
+    # Default range for density
+    vmin_vmax_default = {"density_binned": [0, np.nanmax(
+        np.array([season_results[s]["density_binned"] for s in season_results])
+    )]}
+    if vmin_vmax is not None:
+        vmin_vmax_default.update(vmin_vmax)
+    vmin_vmax = vmin_vmax_default
+
+    # Season order
+    seasons = ["JFM", "AMJ", "JAS", "OND"]
+
+    # Allocate axes
+    ax = np.empty((rows, 4), dtype=object)
+    for i in range(rows):
+        for j in range(4):
+            ax[i, j] = fig.add_subplot(gs[i, j], projection=ccrs.PlateCarree())
+
+    # Plot seasonal density
+    for j, seas in enumerate(seasons):
+
+        ax[0, j], cbar_density = plot_binned_map(
+            ax[0, j],
+            season_results[seas]["lon_edges"],
+            season_results[seas]["lat_edges"],
+            season_results[seas]["density_binned"],
+            cut_lats=cut_domain["lats"],
+            cmap="viridis",
+            metric_name="Density",
+            vmin_vmax=vmin_vmax["density_binned"],
+            cbar=False,
+            cbar_position="right",
+            title=None,
+            return_cbar=True,
+            domain_lats=domain_lats,
+            domain_lons=domain_lons
+        )
+        ax[0, j].set_title(seas, fontsize=15)
+
+    # Shared colorbar
+    gs_cb = gs[0, -1].subgridspec(3, 1, height_ratios=[1, 50, 1])
+    cbar_ax = fig.add_subplot(gs_cb[1, 0])
+    plt.colorbar(cbar_density, cax=cbar_ax, location='right') \
+        .set_label(label='Point Density', size=12)
+
+    fig.suptitle("Spatial Point Density by Season", fontsize=16)
     gs.update(top=0.95)
 
 def plot_massive_binned_map(season_results, domain_lats, domain_lons, vmin_vmax = None, region="SOUTHAMERICA", figsize=None):

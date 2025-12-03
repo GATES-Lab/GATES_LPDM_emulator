@@ -348,6 +348,121 @@ class LoadBaseSatelliteData:
     
 
 
+# NAWID - USED TO GENERATE ONLY THE PARTICUALR FOOTPRINTS FOR THE TASK, Used to get the footprints 
+class LoadSquareSatelliteFp(LoadBaseSatelliteData):
+    """
+    Load footprint and meteorological data for a particular domain and time period, outputting all data cut to a square centered around the measurement point for each timestamp. 
+
+    Inherites the loading functions from the general LoadBaseSatelliteData
+
+    main inputs:
+        - year: can be an int (eg 2016) or a string, including combinations of years (eg "2016", "201[4-5]")
+        - month: str in format "01" for January etc, None if loading a whole year
+        - region: region identifyer, as a string. Default is Brazil. Current set-up has regions "BRAZIL", "SOUTHAMERICA", "SAHARA" and "INDIA"
+        (note - Brazil is a subset of South America!)
+        - domain: Domain related to the region, used for file search (due to existing filenaming conventions). Set-up regions ("BRAZIL", "SOUTHAMERICA", "SAHARA" and "INDIA") have a default domain, all others need domain passed
+        - size: size for footprint to be cut to, as an int. Resolution of the footprint is maintained, cut to a sizexsize square around the release point. 
+    - 
+
+    other inputs
+        - freq: int, frequency of the data to load. freq=1 will load all the datapoints, freq=2 will load one in every two etc. Useful to reduce memory usage. Many datapoints are very close in time and space (and therefore very similar) so using freq particularly in low values (<10) does not affect much the quality of the dataset
+        - sampling_mode: if "regular", subsamples footprints regularly (e.g. one in every two, sequentially with freq=2). if random, subsamples N/freq footprints randomly (where N is the total number of footprints). default is "regular"
+        - freq_offset: if using sampling_mode="regular", offsets the start of the regular sampling, e.g. freq=2 and freq_offset=0 will sample even footprints, and freq_offset=1 will sample uneven footprints
+        - select_time_index: list or 1D np array of timestamps to be selected as datapoints. Applied after sampling with freq (or pass freq=1 to load all footprints)
+        - fp_datadir: str, directory for footprints. default directs to ACRG folder. If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
+        - fill_outofdomain_with: str, out of "all_nans", "nans" and "zeros". Determines what to do if any part of the square cut around the footprint is outside of the domain. "nans" and "zeros" fill only the out of domain areas with nans and zeros respectively. 
+        - delete_outofdomain: bool, if True delete all footprints (and associated datapoints) where the extracted area size x size escapes the domain
+
+
+        - verbose: if True, prints out the steps throughout the data loading process
+    
+    met_args:
+        see load_meteorology()
+    topog_args:
+        see load_topog()
+    """
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=True, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}):
+
+        self.dataset_format = "square" 
+        #### check domains
+        self.region = region
+        if domain is None:
+            self.domain = self._get_domain(region)
+        else:
+            self.domain=domain
+
+        self.size = size
+
+        self.fill_outofdomain_with = fill_outofdomain_with
+        self.delete_outofdomain = delete_outofdomain
+
+        self.year = year
+        self.date = self.year
+        self.verbose=verbose
+
+
+        if month != None:
+            self.month = month
+            self.date = str(self.year)+month
+
+        self.subsample_parameters = {"freq":freq, "sampling_mode":sampling_mode, "freq_offset":freq_offset}
+        
+        #### load footprint (fp) data    
+        if verbose: print("---- LOADING FOOTPRINTS") 
+        self._load_footprints(fp_datadir)
+        self._process_footprints(lazy_load)
+
+        self.met_args = met_args
+        self.met_processed = False
+
+        if check_for_nans:
+            print("\n Checking if there are any nans in the data")
+            self._remove_fp_nans()    
+        
+        if verbose: print("---- All done!")       
+
+    def _process_footprints(self, lazy_load):
+        """
+        cut data around release point
+        fp data returned is array of shape (time, size*size) with each footprint centered around its release point
+        """
+        if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
+
+        # if self.fill_outofdomain_with == "all_nans":
+            # remove here all indeces from self.idxs_out_of_domain! so we only keep the footprints that were fully inside the domain
+
+    def remove_indeces(self, nan_idxs):
+        """
+        removes any set of indeces passed as nan_idxs from all the objects in the dataset
+        """
+        self.fp_data_full = self.fp_data_full.sel(time=np.delete(self.fp_data_full.time.values, nan_idxs))
+        if hasattr(self, "fp_data"):
+            self.fp_lats = np.delete(self.fp_lats, nan_idxs, axis=0)
+            self.fp_lons = np.delete(self.fp_lons, nan_idxs, axis=0)
+            self.fp_data = np.delete(self.fp_data, nan_idxs, axis=0)
+            if self.verbose: print(f"current length: {len(self.release_idxs)}")
+            self.release_idxs = np.delete(self.release_idxs, nan_idxs, axis=0)
+            
+        if hasattr(self, "met"): 
+            self.met = self.met.sel(time=np.delete(self.met.time.values, nan_idxs))
+        if hasattr(self, "topog"):
+            self.topog = self.topog.sel(time=np.delete(self.topog.time.values, nan_idxs))
+
+        if self.verbose: print(f"Length after removing indeces: {self.fp_data_full.time.size}")
+
+    def _remove_fp_nans(self):
+        ## check if any of the fp entries are nans, and if so remove from met and others
+        if np.sum(np.isnan(self.fp_data_full.fp.values)) != 0:
+            nan_idxs = np.unique(np.where(np.isnan(self.fp_data_full.fp.values))[2])
+            print(f"There are {len(nan_idxs)} nans in the fp data. finding and deleting from met and fp (only on axis time)")
+            self.remove_indeces(nan_idxs)
+            self.fp_nan_idxs = nan_idxs
+        else:
+            self.fp_nan_idxs = []
+    
+    
+
 class LoadSquareSatelliteData(LoadBaseSatelliteData):
     """
     Load footprint and meteorological data for a particular domain and time period, outputting all data cut to a square centered around the measurement point for each timestamp. 
