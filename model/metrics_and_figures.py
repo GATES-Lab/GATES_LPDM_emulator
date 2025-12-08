@@ -1086,6 +1086,8 @@ def plot_seasonal_density_histogram(ds, degree_bins=2, vmin_vmax=None):
         cbar = True if season_n == 3 else False
 
         ax[0, season_n], cbar_hist = plot_binned_map(ax[0, season_n], lon_edges, lat_edges, binned_fps, cut_lats=(40,20), cmap="Greens", metric_name="Observation count", vmin_vmax=vmin_vmax, fig=fig, cbar=cbar, cbar_position="right", title_str=seas, return_cbar=True, domain_lats=dom_lats, domain_lons=dom_lons)
+    
+    return fig
 
 
 
