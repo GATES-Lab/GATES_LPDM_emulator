@@ -1032,6 +1032,62 @@ def get_binned_seasonal_scores(true_fps, predictions, dates, release_lats, relea
 
     return season_results
 
+def plot_seasonal_density_histogram(ds, degree_bins=2, vmin_vmax=None):
+    """
+    Plot density histograms of release locations, as four panels in a row, one for each season.
+    Parameters:
+    ds: xarray.Dataset containing 'release_lon', 'release_lat', 'time', 'lat' and 'lon' variables
+    degree_bins: size of the latitude/longitude bins in degrees
+    vmin_vmax: color scale limits for the histograms, as a list [vmin, vmax] e.g. [0, 10]
+    """
+    release_lons = ds.release_lon.values
+    release_lats = ds.release_lat.values
+
+    dom_lons = ds.lon.values
+    dom_lats = ds.lat.values
+
+    dates = pd.DatetimeIndex(ds.time)
+
+    seasons = {"JFM":["01", "02", "03"], "AMJ":["04", "05", "06"], "JAS":["07", "08", "09"], "OND":["10", "11", "12"]}
+
+
+    # create the bins for the data
+    lat_bins = range(int(np.floor(release_lats.min())- degree_bins/2), int(np.ceil(release_lats.max())+ degree_bins/2) + 1, degree_bins) 
+    lon_bins = range(int(np.floor(release_lons.min())- degree_bins/2), int(np.ceil(release_lons.max())+ degree_bins/2) + 1, degree_bins) 
+
+    # set up the figure and axis
+    fig = plt.figure(figsize=(12,5),  dpi=400, constrained_layout=True)
+    gs = fig.add_gridspec(1, 5, figure=fig, width_ratios=[1, 1, 1,1,0.05])
+
+    ax = np.empty((1, 4), dtype=object)
+
+    for i in range(1):  
+        for j in range(4):
+            ax[i, j] = fig.add_subplot(gs[i, j], projection=ccrs.PlateCarree()) 
+
+
+    for season_n, seas in enumerate(seasons.keys()):
+        #season_results[seas] = {"mean_mfs":mean_mfs, "mean_mfs_emulated":mean_mfs_emulated}
+        seasonal_idxs = np.where(np.bitwise_and(dates.month>=int(seasons[seas][0]), dates.month<=int(seasons[seas][-1])))[0]
+        print(season_n, seas)
+
+        # extract 2D-bins
+        binned_fps,  lat_edges, lon_edges, binnumber = binned_statistic_2d(
+                release_lats[seasonal_idxs],
+                release_lons[seasonal_idxs],
+                None,
+                bins=[lat_bins, lon_bins],
+                statistic='count',
+                expand_binnumbers=True
+                )
+        
+        binned_fps[binned_fps==0] = np.nan
+
+        cbar = True if season_n == 3 else False
+
+        ax[0, season_n], cbar_hist = plot_binned_map(ax[0, season_n], lon_edges, lat_edges, binned_fps, cut_lats=(40,20), cmap="Greens", metric_name="Observation count", vmin_vmax=vmin_vmax, fig=fig, cbar=cbar, cbar_position="right", title_str=seas, return_cbar=True, domain_lats=dom_lats, domain_lons=dom_lons)
+
+
 
 
 def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], title_str="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title_loc="top", return_cbar=False):
