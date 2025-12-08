@@ -1034,7 +1034,7 @@ def get_binned_seasonal_scores(true_fps, predictions, dates, release_lats, relea
 
 
 
-def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], title_modifier="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title="top", return_cbar=False):
+def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], title_str="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title_loc="top", return_cbar=False):
     
     
     if domain_lats is None:
@@ -1066,7 +1066,7 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
     """
 
     if vmin_vmax is None:
-        print("repla")
+        print("calculating vmin and vmax from data")
         vmin_vmax = [np.nanmin(metric), np.nanmax(metric)]
         
     
@@ -1078,13 +1078,13 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
 
     im = ax.pcolormesh(binned_lons, binned_lats, metric, transform=ccrs.PlateCarree(),cmap=cmap, norm=norm) 
 
-    if title=="top":    
-        ax.set_title(metric_name)
-    if title=="left":
+    if title_loc=="top":    
+        ax.set_title(title_str)
+    if title_loc=="left":
         coord = -0.1
-        if "\n" in metric_name:
+        if "\n" in title_str:
             coord = -0.2
-        ax.text(coord, 0.5, metric_name,  
+        ax.text(coord, 0.5, title_str,  
               va="center", ha="center",  
               rotation="vertical", fontsize=15,  
               transform=ax.transAxes, multialignment="center")
@@ -1102,7 +1102,7 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
         if cbar_position == "bottom":
             cbar = fig.colorbar(im, ax=ax, orientation="horizontal", extend='both', shrink=0.7).set_label(cbar_label)
         if cbar_position == "right":
-            cbar_label = "ppb"
+            if metric_name is None: cbar_label = "ppb"
             cbar = fig.colorbar(im, ax=ax, orientation="vertical", extend='both', shrink=0.7).set_label(cbar_label)
 
     ax.coastlines()
@@ -1394,3 +1394,5 @@ def plot_fp_flux_period(model, start_date, min_length=30, days_to_plot=7, ylim=3
         print(f"Correlation Coefficient: {np.corrcoef(fp_selected.true_flux.values/1e-9, fp_selected.pred_flux.values/1e-9)[0][1]:.2f} \nMean Absolute Error: {np.mean(abs(fp_selected.true_flux.values/1e-9 - fp_selected.pred_flux.values/1e-9)):.2f} ppb")
 
     plt.show()
+
+
