@@ -1372,8 +1372,8 @@ def compute_binned_truth_pred(true_values, pred_values, dates, release_lats, rel
     # Flatten spatial dimensions if needed
     true_flat = true_values.reshape(true_values.shape[0], -1)
     pred_flat = pred_values.reshape(pred_values.shape[0], -1)
-    
-    all_mses = (true_flat - pred_flat) ** 2
+    # Nawid - used a sqrt to make it from MSE to RMSE
+    all_mses = np.sqrt((true_flat - pred_flat) ** 2)
     
     for seas in seasons:
         # Select indices for this season
@@ -1468,7 +1468,7 @@ def plot_seasonal_truth_pred_mse_shared_cbar(season_results, ground_truth_result
             season_results[seas]["lat_edges"],
             prediction_results[seas],
             cut_lats=cut_domain["lats"],
-            metric_name="Prediction",
+            metric_name="", # Nawid = giving an empy name this is the name of the inidivual subplot
             domain_lats=domain_lats,
             domain_lons=domain_lons,
             vmin_vmax=vmin_vmax_shared,
@@ -1487,7 +1487,7 @@ def plot_seasonal_truth_pred_mse_shared_cbar(season_results, ground_truth_result
             season_results[seas]["lat_edges"],
             season_results[seas]["mses_binned"],
             cut_lats=cut_domain["lats"],
-            metric_name="MSE",
+            metric_name="", # Nawid - giving an empty name since this is the name of the individual subplot
             domain_lats=domain_lats,
             domain_lons=domain_lons,
             vmin_vmax=vmin_vmax_mse,
@@ -1495,7 +1495,7 @@ def plot_seasonal_truth_pred_mse_shared_cbar(season_results, ground_truth_result
             cbar=False
         )
         if season_idx == 0:
-            ax[2, season_idx].text(-0.1, 0.5, "MSE", rotation="vertical",
+            ax[2, season_idx].text(-0.1, 0.5, "RMSE", rotation="vertical",
                                    va="center", ha="center", fontsize=14,
                                    transform=ax[2, season_idx].transAxes)
         
@@ -1513,9 +1513,9 @@ def plot_seasonal_truth_pred_mse_shared_cbar(season_results, ground_truth_result
     cbar_ax_mse = fig.add_subplot(gs_cb_mse[0, 0])
     sm_mse = plt.cm.ScalarMappable(cmap="Reds", norm=plt.Normalize(*vmin_vmax_mse))
     sm_mse.set_array([])
-    plt.colorbar(sm_mse, cax=cbar_ax_mse, orientation='vertical').set_label(label="MSE", size=12)
+    plt.colorbar(sm_mse, cax=cbar_ax_mse, orientation='vertical').set_label(label="RMSE", size=12)
     
-    fig.suptitle("Ground Truth, Prediction, and MSE by Season", fontsize=16)
+    fig.suptitle("Ground Truth, Prediction, and RMSE by Season", fontsize=16)
     gs.update(top=0.95)
 
 
