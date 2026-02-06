@@ -37,8 +37,8 @@ def load_fps(fp_datadir, verbose=False):
         time_chunk = 25
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             # attempt to load dataset of multiple files the standard way
-            with xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, parallel=True) as ds:
-                fp_data_full = ds.copy()
+            fp_data_full = xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, parallel=True) 
+
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
         # the bad_files contains full paths, first the full path is checked 
@@ -75,20 +75,19 @@ def load_fps(fp_datadir, verbose=False):
             # Add clauses here to catch other known exceptions
             with dask.config.set(**{'array.slicing.split_large_chunks': True}):
                 # load non-problematic arrays all together
-                with xr.open_mfdataset(sorted(without_bad_files)) as ds:
-                    most = ds.copy()
+                most = xr.open_mfdataset(sorted(without_bad_files))
                 bad_arrays = []
                 for badfile in bad_files:
                     if badfile in fp_files:
                         # load each bad file separately
-                        with xr.open_mfdataset(badfile) as f_bad:
-                            #f_bad = xr.open_mfdataset(badfile)
-                            if "NORTHAFRICA_2015" in badfile:
-                                try:
-                                    f_bad = f_bad.drop(["mean_age_particles_n", "mean_age_particles_e", "mean_age_particles_w", "mean_age_particles_s"])        
-                                except Exception as e:
-                                    print("something went wrong trying to load the bad North Africa 2015 files")
-                                    print(e)
+                        f_bad = xr.open_mfdataset(badfile)
+                        #f_bad = xr.open_mfdataset(badfile)
+                        if "NORTHAFRICA_2015" in badfile:
+                            try:
+                                f_bad = f_bad.drop(["mean_age_particles_n", "mean_age_particles_e", "mean_age_particles_w", "mean_age_particles_s"])        
+                            except Exception as e:
+                                print("something went wrong trying to load the bad North Africa 2015 files")
+                                print(e)
                             bad_arrays.append(f_bad)
                 # concatenate all the good files with the bad ones along the time dimension
                 fp_data_full = xr.concat([most]+bad_arrays, dim="time")
