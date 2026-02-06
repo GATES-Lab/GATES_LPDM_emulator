@@ -1,26 +1,11 @@
 """Encoders to encode from the input graph to the latent graph
 
-In the original paper the encoder is described as
-
-The Encoder maps from physical data defined on a latitude/longitude grid to abstract latent features
-defined on an icosahedron grid.  The Encoder GNN uses a bipartite graph(lat/lon→icosahedron) with
-edges only between nodes in the lat/lon grid and nodes in the icosahedron grid. Put another way,
-spatial and channel information in the local neighborhood of each icosahedron node is
-gathered using connections to nearby lat/lon nodes.
-
-The initial node features are the 78 atmospheric variables described in Section 2.1, plus solar
-radiation, orography, land-sea mask, the day-of-year,sin(lat),cos(lat),sin(lon), and cos(lon).
-The initial edge features are the positions of the lat/lon nodes connected to each icosahedron node.
-These positions are provided in a local coordinate system that is defined relative
-to each icosahedron node.
-
-In further notes, they notice that there is some hexagon instabilities in long rollouts
-One possible way to change that is to do the additative noise as in the original MeshGraphNet
-or mildly randomize graph connectivity in encoder, as a kind of edge Dropout
-
-
+author: Elena Fillola @elenafillo
 
 """
+
+
+
 from typing import Tuple
 
 import einops
