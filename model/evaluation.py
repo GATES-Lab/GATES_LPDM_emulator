@@ -106,6 +106,10 @@ class LOCI():
             # Step 3: Perform LOCI adjustment to obtain the adjusted precipitation series
             self.adjusted_precip = np.maximum(self.wet_day_threshold_model + self.scaling_factor * (model_precip - self.wet_day_threshold_model), 0) 
 
+            self.adjusted_precip = np.copy(model_precip)
+            self.adjusted_precip[self.adjusted_precip <= self.wet_day_threshold_model] = 0
+            self.adjusted_precip[self.adjusted_precip > self.wet_day_threshold_model] =self.scaling_factor * model_precip[self.adjusted_precip > self.wet_day_threshold_model]
+
         if self.mode=="3D" or self.mode=="mix":
             assert (observed_precip.shape[1], observed_precip.shape[2]) == (self.scaling_factor.shape), "arrays passed to adjust dont have the same lat/lon shape as arrays passed to train on. either used mode 2D or pass arrays with same domain"
 
@@ -204,7 +208,9 @@ def apply_threshold(observed_precip, model_precip, to_correct=None, thr=0, repla
     """
     wet_day_frequency_observed = mult_factor*np.sum(observed_precip > thr)
     wet_day_threshold_model = np.percentile(model_precip, 100-((100.0 * wet_day_frequency_observed) /  np.prod(np.shape(model_precip))))
-    #print(wet_day_threshold_model)
+
+
+    print(f"Threshold: {wet_day_threshold_model}")
     if to_correct is not None:
         corrected=np.copy(to_correct)
         corrected[corrected<=wet_day_threshold_model] = replacement_val
@@ -340,14 +346,20 @@ def nmae(y_true, predictions):
     return np.mean(np.abs(y_true - predictions))/np.mean(y_true)
 
 
-def get_loss(model_name, directory=None):
+def get_loss(model_name, directory=None, checkpoint="last"):
     print(f"loading last checkpoint for {model_name}")
+    # adapt so you can load any checkpoint by the number of epochs
     if directory is None:
         # change to default directory!
         directory="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/"
     files = sorted(glob.glob(glob.escape(f"{directory}{model_name}/{model_name}_")+"*.pt"), key=getint)
     assert len(files)>0, f"no files found for model name {model_name} at {directory}{model_name}/{model_name}"
-    checkpoint_to_load = files[-1] 
+    if checkpoint!="last":
+        files_here = [f for f in files if f"_{checkpoint}." in f]
+        assert len(files_here)==1, f"checkpoint {checkpoint} not found for model name {model_name} at {directory}{model_name}/{model_name}"
+        checkpoint_to_load = files_here[0]
+    else:
+        checkpoint_to_load = files[-1] 
         
     checkpoint = torch.load(checkpoint_to_load, map_location=torch.device('cpu'))
     loss = checkpoint["loss"]
@@ -673,7 +685,7 @@ def quantile_mapping_interp(truths, preds, to_correct, n_quantiles=100, mode="re
     
     return corrected
 
-
+"""
 def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], cut_lons=[0,0], title_modifier="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title="top", return_cbar=False):
     
     
@@ -696,14 +708,14 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
                 cmap="autumn_r"
         else:
             cmap="autumn"
-    """ 
-        if metric_name== "IoU":
-            cmap="Reds_r"
-            cmap="autumn"
-        else:
-            cmap = "Reds"
-            cmap="autumn_r"
-    """
+    # 
+    #     if metric_name== "IoU":
+    #         cmap="Reds_r"
+    #         cmap="autumn"
+    #     else:
+    #         cmap = "Reds"
+    #         cmap="autumn_r"
+    # 
 
     if vmin_vmax is None:
         print("repla")
@@ -757,4 +769,4 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
         return ax
 
 
-
+"""
