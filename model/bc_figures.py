@@ -72,7 +72,7 @@ def retrend_predictions_cams(dataset, cams_file = None, trend_height=1500, detre
 
 
 
-def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=None, unit_multiplier=1, attribute_name = "bc_detrended"):
+def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=None, unit_multiplier=1, attribute_name = "bc_detrended", scatter=False, flux=None):
     """
     Plot modelled background fluxes over a given period from a dataset, splitting days into subplots
     dataset - xarray dataset object, with true_ and pred_ attributes
@@ -94,6 +94,10 @@ def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=
     bc_selected['time'] = pd.to_datetime(bc_selected['time'].values)
 
     grouped = bc_selected.groupby('time.date')
+    
+    if flux is not None:
+        flux_selected = flux.sel(time=slice(start_date, end_date))
+        flux_selected['time'] = pd.to_datetime(flux_selected['time'].values)
 
     gap_threshold = pd.Timedelta('30min')
 
@@ -149,9 +153,9 @@ def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=
             for start, end in zip(indices[:-1], indices[1:]):
                 
                 # remove this condition for now
-                #if end - start > 4:# and np.mean(group.isel(time=slice(start, end)).true_flux.values/1e-9)>2:
-                start_indices.append(start)
-                end_indices.append(end)
+                if end - start > 4:# and np.mean(group.isel(time=slice(start, end)).true_flux.values/1e-9)>2:
+                    start_indices.append(start)
+                    end_indices.append(end)
             
             
             n_chunks = len(start_indices)
@@ -173,15 +177,25 @@ def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=
             #for i, (start, end) in enumerate(zip(indices[:-1], indices[1:])):
             for i, (start, end) in enumerate(zip(start_indices, end_indices)):
                 chunk = group.isel(time=slice(start, end))
+                if flux is not None:
+                    chunk_flux = flux_selected.sel(time=chunk.time)
                 if n_chunks==1:
                     mini_ax = fig.add_subplot(inner_gs[0])
                 else:
                     mini_ax = fig.add_subplot(inner_gs[0, i])
 
                 mini_ax.plot(chunk["time"], chunk[attribute_names["true"]].values*unit_multiplier, c=name_col, lw=2)
-                mini_ax.scatter(chunk["time"], chunk[attribute_names["true"]].values*unit_multiplier, c=name_col, label="with NAME bc", lw=2)
+                mini_ax.scatter(chunk["time"], chunk[attribute_names["true"]].values*unit_multiplier, c=name_col, label="with NAME bc", lw=2, s=5)
                 mini_ax.plot(chunk["time"], chunk[attribute_names["pred"]].values*unit_multiplier, c=em_col, lw=2)
-                mini_ax.scatter(chunk["time"], chunk[attribute_names["pred"]].values*unit_multiplier, c=em_col, label="with GATES bc", lw=2)
+                mini_ax.scatter(chunk["time"], chunk[attribute_names["pred"]].values*unit_multiplier, c=em_col, label="with GATES bc", lw=2, s=5)
+
+                if flux is not None:
+                    mini_ax.plot(chunk["time"], chunk[attribute_names["true"]].values*unit_multiplier + chunk_flux["flux"].values*unit_multiplier, c=name_col, ls="--", lw=2)
+
+                    #mini_ax.scatter(chunk["time"], chunk[attribute_names["true"]].values*unit_multiplier, c=name_col, ls="--", label="with NAME bc", lw=2, s=5)
+                    mini_ax.plot(chunk["time"], chunk[attribute_names["pred"]].values*unit_multiplier + chunk_flux["flux"].values*unit_multiplier, c=em_col, ls="--", lw=2)
+                    #mini_ax.plot(chunk["time"], chunk[attribute_names["pred"]].values*unit_multiplier, c=em_col, lw=2)
+                    #mini_ax.scatter(chunk["time"], chunk[attribute_names["pred"]].values*unit_multiplier, c=em_col, ls="--", label="with GATES bc", lw=2, s=5)                    
 
                 mini_ax.set_ylim(ylim[0],ylim[1])
                 
@@ -225,8 +239,10 @@ def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=
             print(f"ignoring date {date}")
 
 
-
-    fig.suptitle(f"Modelled background concentration - {start_date[:4]}",fontsize=20)
+    if flux is None:
+        fig.suptitle(f"Modelled background concentration - {start_date[:4]}",fontsize=20)
+    else:
+        fig.suptitle(f"Modelled background concentration (-) and background + flux (--) - {start_date[:4]}",fontsize=20)
 
     plt.show()
 
