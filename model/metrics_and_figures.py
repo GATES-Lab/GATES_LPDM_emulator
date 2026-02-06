@@ -78,16 +78,16 @@ class FPModel():
             print("adding a different domain doesnt work yet!")
 
         print("loading footprints")
-        print(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
+        print(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
         if months is None:
-            true_fp = load_fps(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
+            true_fp = load_fps(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
             #true_fp = xr.open_mfdataset(glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc"))
-            pred_fp = load_fps(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
+            pred_fp = load_fps(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
             #pred_fp = xr.open_mfdataset(glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc"))
         else:
-            true_files = [x for x in glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}{"*"}.nc") if np.any([mo in x for mo in months])]
+            true_files = [x for x in glob.glob(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}{"*"}.nc") if np.any([mo in x for mo in months])]
             true_fp = xr.open_mfdataset(true_files)
-            em_files = [x for x in glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}{"*"}.nc") if np.any([mo in x for mo in months])]
+            em_files = [x for x in glob.glob(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}{"*"}.nc") if np.any([mo in x for mo in months])]
             pred_fp = xr.open_mfdataset(em_files)
 
 
@@ -131,7 +131,7 @@ class FPModel():
 
     
     def load_emissions(self, same_month=True):
-        true_fp = xr.open_mfdataset(glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{self.fp_folder}/{self.true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{self.year}*.nc"))
+        true_fp = xr.open_mfdataset(glob.glob(f"/group/chem/acrg/LPDM/fp_Elena/{self.fp_folder}/{self.true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{self.year}*.nc"))
         shared_times = np.intersect1d(true_fp.time.values, self.all_fps.time)
         true_fp = true_fp.sel(time=shared_times)
         self.all_fps = self.all_fps.sel(time=shared_times)
@@ -861,7 +861,7 @@ def plot_emissions_ax(ax_ems, ax_true, ax_pred, model, idx, lon_squeeze=0, vmin=
 
 def get_gosat(site, species, 
               start_date = None, end_date = None, max_level=17,
-              data_directory = "/group/chemistry/acrg/obs"):
+              data_directory = "/group/chem/acrg/obs"):
     """
     FROM ACRG!
     retrieves obervations for a set of sites and species between start and 
