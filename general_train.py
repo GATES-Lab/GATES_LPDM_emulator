@@ -205,8 +205,10 @@ def train_and_save_model(parameters, path):
     if torch.cuda.is_available():
         model.cuda()
 
+    n_epochs = parameters.get("n_epochs", 302)
+
     #### 4 Train loop
-    for epoch in range(302):
+    for epoch in range(n_epochs):
         epoch=epoch+epoch_so_far
         running_loss = 0.0
         print(f"Start Epoch: {epoch}")
@@ -354,8 +356,10 @@ if __name__ == "__main__":
     print("PARAMETERS:")
     print(parameters)
 
+    folder_name = parameters.get("folder_name", "newversion")
+
     ## make this importable!
-    path="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_newversion/"
+    path=f"/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_{folder_name}/"
 
     # Train the model with the loaded parameters
     train_and_save_model(parameters, path=path)
