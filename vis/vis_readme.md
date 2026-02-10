@@ -7,6 +7,11 @@ Currently, the notebook loads the base data object: full-domain footprints, met 
 - [ ] Add capability to split domain into regions (e.g. by country border, in a grid)
 - [ ] Add prior plotting capability
 
+### Domain
+- [x] Show domain boundaries on map by data series (met, fp, topo) [JC: Not yet brought into main notebook]
+  - [ ] Extend to show multiple domains together on one map
+  - [ ] Extend to show boundaries for met and fp overlaid together
+
 ### Meteorology
 - [ ]  Winds
   - [ ] Quiver plot with direction and windspeed as colour, annual and seasonal
@@ -20,6 +25,6 @@ Currently, the notebook loads the base data object: full-domain footprints, met 
 - [ ]  Mean footprint shape per region and season
 
 ## Topography
-- [ ]  Topography/contour plot of elevation
+- [x]  Topography/contour plot of elevation [JC: Not yet brought into main notebook]
 - [ ]  Land-use map with labels. [Elena to find names of nine categories in JULES/MOSES handbook]
-- [ ]  Histogram of heights and land-uses across the domain
+- [ ]  Histogram of heights and land-uses across the domain [JC: I created a simple bar chart of land-use frequencies]
