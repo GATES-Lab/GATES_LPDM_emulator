@@ -15,9 +15,13 @@ import os
 import copy
 #import warning
 
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy
+
 from .load_data_helper_funs import *
 
-def load_fps(fp_datadir, verbose=False):
+def load_fps(fp_datadir, verbose=False, chunk=False):
     """
     Load footprints from datadir, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
     note that the list of problematic files is currently updated manually!
@@ -34,10 +38,14 @@ def load_fps(fp_datadir, verbose=False):
         - Add capability to ignore any files that couldn't be opened, and return only the successful files 
     """
     try:           
-        time_chunk = 25
+        if chunk:
+            time_chunk = 25
+            chunk_args = {"chunks" : {"time": time_chunk}, "parallel": True}
+        else:
+            chunk_args = {}
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             # attempt to load dataset of multiple files the standard way
-            fp_data_full = xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', chunks = {"time":time_chunk}, parallel=True) 
+            fp_data_full = xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', **chunk_args)
 
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
@@ -268,9 +276,15 @@ class LoadBaseSatelliteData:
 
         # each chunk should have around 1mill values,  - chunk per level and by time, rounded to the nearest hundred, 100MB-1GB
         # could calcualte this dynamically 
-        time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
+        chunk = False
+        if chunk:
+            time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
+            chunk_args = {"chunks" : {"time": time_chunk}}
+        else:
+            chunk_args = {}
+        
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", chunks = {"level":1, "time":time_chunk}, drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"], compat="override", preprocess=remove_duplicates) as met_file:
+            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", **chunk_args, drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"], compat="override", preprocess=remove_duplicates) as met_file:
 
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
@@ -367,7 +381,49 @@ class LoadBaseSatelliteData:
 
         return landcover_file
     
+    def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False):
+        """
+        plot a footprint for a particular timestamp or index, with the option to also plot the topography and landcover if they have been loaded. 
 
+        inputs:
+            - idx: int index of the footprint to plot. If timestamp is also passed, timestamp will be used instead of idx
+            - timestamp: timestamp of the footprint to plot, as a string in format "YYYY-MM-DDTHH:MM:SS" (eg "2016-01-01T12:00:00"). If idx is also passed, timestamp will be used instead of idx
+        """
+
+        if timestamp is not None:
+            fp_to_plot = self.fp_data_full.sel(time=np.datetime64(timestamp)).copy()
+            if len(fp_to_plot.time.values)>1:
+                print("there are multiple footprints for the timestamp you passed, check the timestamp and try again! plotting the first one")
+                fp_to_plot = fp_to_plot.isel(time=0)
+        
+        else:
+            fp_to_plot = self.fp_data_full.isel(time=idx).copy()
+
+        f = np.copy(fp_to_plot.fp.values)
+
+        extent = (fp_to_plot.lon.values[0], fp_to_plot.lon.values[-1], fp_to_plot.lat.values[0], fp_to_plot.lat.values[-1])
+
+        fig, ax = plt.subplots(1,1,subplot_kw={'projection': ccrs.PlateCarree()})
+        ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
+        ax.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
+        ax.add_feature(cartopy.feature.LAND)
+        ax.add_feature(cartopy.feature.OCEAN)
+
+        cmap = plt.cm.Reds
+        cmap.set_over = "k"
+        plot_params = {"transform":cartopy.crs.PlateCarree(), "cmap":cmap, "vmin":vmin_vmax[0], "vmax":vmin_vmax[1]}
+        background_alpha=0.4
+        if levels is None:
+            levels = [-4, -3.5, -3,  -2.5, -2, -1.5]
+
+        cb = ax.contourf(fp_to_plot.lon.values, fp_to_plot.lat.values, np.log10(f), **plot_params, levels=levels, extend="both", alpha=background_alpha)
+        f[f<background_threshold] = 0
+        cb = ax.contourf(fp_to_plot.lon.values, fp_to_plot.lat.values,np.log10(f), **plot_params, levels=levels, extend="both")
+        formatted_time = fp_to_plot.time.values.astype('datetime64[ms]').astype('O').strftime('%d-%m-%Y %H:%M:%S.%f')[:-3]
+        ax.set_title(formatted_time)
+
+        if add_cbar:
+            cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
 
 class LoadSquareSatelliteData(LoadBaseSatelliteData):
     """

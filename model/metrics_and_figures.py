@@ -8,13 +8,13 @@ import matplotlib.patches as mpatches
 
 import numpy as np
 
-sys.path.insert(0,"/software/local/languages/miniforge3/envs/elena/lib/python3.12/site-packages/")
+#sys.path.insert(0,"/software/local/languages/miniforge3/envs/elena/lib/python3.12/site-packages/")
 
-sys.path.insert(0,"/user/work/ef17148/oldstuff/ef17148/.conda/envs/new_graphnet/lib/python3.12/site-packages")
+#sys.path.insert(0,"/user/work/ef17148/oldstuff/ef17148/.conda/envs/new_graphnet/lib/python3.12/site-packages")
 
-print(sys.path)
+#print(sys.path)
 
-import torch
+#import torch
 import os
 import pickle
 import einops
@@ -25,7 +25,7 @@ from graphnet_LPDM_emulator.model.data.load_data import *
 #from loss_functions import *
 #from evaluation import *
 
-import torch.optim as optim
+#import torch.optim as optim
 from sklearn.metrics import mean_squared_error, r2_score
 import time
 from datetime import datetime
@@ -1085,11 +1085,16 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
             else:
                 cbar_label = f"{metric_name}"
 
+            if vmin_vmax[0] == 0:
+                extend="max"
+            else:
+                extend="both"
+
         if cbar_position == "bottom":
-            cbar = fig.colorbar(im, ax=ax, orientation="horizontal", extend='both', shrink=0.7).set_label(cbar_label)
+            cbar = fig.colorbar(im, ax=ax, orientation="horizontal", extend=extend, shrink=0.7).set_label(cbar_label)
         if cbar_position == "right":
             if metric_name is None: cbar_label = "ppb"
-            cbar = fig.colorbar(im, ax=ax, orientation="vertical", extend='both', shrink=0.7).set_label(cbar_label)
+            cbar = fig.colorbar(im, ax=ax, orientation="vertical", extend=extend, shrink=0.7).set_label(cbar_label)
 
     ax.coastlines()
     ax.add_feature(cartopy.feature.BORDERS,linewidth=1.)
