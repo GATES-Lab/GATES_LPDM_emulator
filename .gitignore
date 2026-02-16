@@ -1,0 +1,8 @@
+wandb
+*.pkl
+*.err
+*.nc
+
+*.out
+*.npy
+graph_weather
