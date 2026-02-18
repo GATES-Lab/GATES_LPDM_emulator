@@ -380,7 +380,46 @@ class LoadBaseSatelliteData:
         landcover_file = landcover_file.transpose("lat", "lon","pseudo_level")
 
         return landcover_file
-    
+
+    def align_met_domain(self):
+        """
+        makes sure that the data.met_file domain is the same as the footprint domain, in lat-lon, and interpolate to the footprint's grid using nearest.
+        """
+        if hasattr(self, "met_file"):
+            if np.max(self.met_file.lat.values) < np.max(self.fp_data_full.lat.values) or np.min(self.met_file.lat.values) > np.min(self.fp_data_full.lat.values) or np.max(self.met_file.lon.values) < np.max(self.fp_data_full.lon.values) or np.min(self.met_file.lon.values) > np.min(self.fp_data_full.lon.values):
+                print("met file domain is smaller than the footprint domain! interpolating to the same grid as the footprint, but this will create artifacts in the meteorology! \n Probably need to modify this function to adjust all domains to the smallest one, or manually crop the footprint file")
+
+            self.met_file = self.met_file.interp(lat=self.fp_data_full.lat.values, lon=self.fp_data_full.lon.values, method="nearest")
+        else:
+            print("met file has not been loaded yet, cannot align domains. Please load met file first)")
+
+    def get_country_masks(self, countrymask_path="default"):
+        ## get land-sea mass and country mask, can be used for filtering out footprints/data and during plotting
+        if countrymask_path=="default": 
+            countrymask_path = "/group/chem/acrg/LPDM/countries/country_"+self.domain+".nc"
+        if self.verbose: print(f"trying to load country mask from {countrymask_path}")
+        with xr.load_dataset(countrymask_path) as country_dataset:
+            country_ds = country_dataset.copy()
+        
+        try:
+            country_ds = country_ds.interp(lat=self.fp_data_full.lat.values, lon=self.fp_data_full.lon.values, method="nearest")
+            country_indices = xr.DataArray(np.arange(len(country_ds.name)), coords={'ncountries': country_ds.name.values}, dims='ncountries')
+
+            country_ds['country_mask'] = country_ds.country == country_indices
+            country_ds = country_ds.drop_vars("name").rename({"ncountries": "name"})
+            self.countries = country_ds
+
+            landmask = (self.countries.country != 0).astype(int)
+            self.countries['land_mask'] = landmask
+
+            if self.verbose: print("country mask loaded successfully at self.countries.country_mask and landmask at self.countries.land_mask")
+
+        except Exception as e:
+            print("Error occurred while processing country mask:", e)
+            print("Returning original country dataset without processing")
+            self.countries = country_ds
+
+
     def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False):
         """
         plot a footprint for a particular timestamp or index, with the option to also plot the topography and landcover if they have been loaded. 
