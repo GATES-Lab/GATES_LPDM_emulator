@@ -1312,13 +1312,17 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
 
     if time_delta==0:
         if interp_method == "nearest": print("note that until recently, interp_method=nearest loaded the closest fooprints in time with a 4h threshold. now it will load the closest timestamp in time regardless of distance, passed directly to xr.interp. If you want to load the closest timestamp within a 4h threshold, pass interp_method='closest'")
-        if interp_method == "closest":
+        elif interp_method == "closest":
             # if we are not interpolating, we can just use the times of the footprints
             # find first any idx that wont be able to be interpolated
+            print(fp_times)
             nearest = met.indexes["time"].get_indexer(pd.DatetimeIndex(fp_times), method="nearest", tolerance=pd.Timedelta("4h")) 
             nan_idxs = np.nonzero(nearest == -1)[0]
+            nearest_timestamps = pd.DatetimeIndex(met.indexes["time"].values)[nearest]
+            met = met.reindex(time=fp_times, method="nearest", tolerance="4h", fill_value = np.nan)
+            met["met_timestamps"] = ("time", nearest_timestamps)
+            #met["extracted_timestamps"] = pd.DatetimeIndex(met.indexes["time"].values)[nearest]
             
-            met = met.reindex(time=fp_times, method=interp_method, tolerance="4h", fill_value = np.nan)
         else:
             met = met.interp(time=fp_times, method=interp_method)
         met = met.assign({"fp_time":(("time"), fp_times)})
