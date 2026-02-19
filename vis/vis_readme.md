@@ -8,7 +8,7 @@ Currently, the notebook loads the base data object: full-domain footprints, met 
 - [ ] Add prior plotting capability
 
 ### Domain
-- [x] Show domain boundaries on map by data series (met, fp, topo) [JC: Not yet brought into main notebook]
+- [x] Show domain boundaries on map by data series (met, fp, topo)
   - [ ] Extend to show multiple domains together on one map◊
   - [x] Extend to show boundaries for met and fp overlaid together
 
@@ -30,7 +30,7 @@ Currently, the notebook loads the base data object: full-domain footprints, met 
 - [ ]  Mean footprint shape per region and season
 
 ## Topography
-- [x]  Topography/contour plot of elevation [JC: Not yet brought into main notebook]
+- [x]  Topography/contour plot of elevation
 - [x]  Land-use map with labels [JC: Not yet brought into main notebook].
 
 | Number label      | Land surface type |
