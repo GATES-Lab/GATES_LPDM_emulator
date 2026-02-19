@@ -9,8 +9,8 @@ Currently, the notebook loads the base data object: full-domain footprints, met 
 
 ### Domain
 - [x] Show domain boundaries on map by data series (met, fp, topo) [JC: Not yet brought into main notebook]
-  - [ ] Extend to show multiple domains together on one map
-  - [ ] Extend to show boundaries for met and fp overlaid together
+  - [ ] Extend to show multiple domains together on one map◊
+  - [x] Extend to show boundaries for met and fp overlaid together
 
 ### Meteorology
 - [ ]  Winds
