@@ -31,7 +31,7 @@ Currently, the notebook loads the base data object: full-domain footprints, met 
 
 ## Topography
 - [x]  Topography/contour plot of elevation
-- [x]  Land-use map with labels [JC: Not yet brought into main notebook].
+- [x]  Land-use map with labels
 
 | Number label      | Land surface type |
 | ----------- | ----------- |
