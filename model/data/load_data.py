@@ -381,17 +381,74 @@ class LoadBaseSatelliteData:
 
         return landcover_file
 
-    def align_met_domain(self):
+    def align_met_domain(self, crop_to_intersection=False):
         """
-        makes sure that the data.met_file domain is the same as the footprint domain, in lat-lon, and interpolate to the footprint's grid using nearest.
+        Align the meteorology domain with the footprint domain.
+        Makes sure that the data.met_file domain is the same as the footprint domain, in lat-lon, and interpolate to the footprint's grid using nearest.
+        Optionally crops the two datasets to their spatial intersection
+
+        Parameters
+        ----------
+        crop_to_intersection : bool
+            If False (default):
+                Interpolate met_file to the full footprint grid using nearest neighbour,
+                even if met_file is smaller. This preserves all footprint pixels but 
+                risks artefacts in the interpolated meteorology.
+
+            If True:
+                Crop BOTH datasets to the spatial intersection BEFORE interpolating.
+                This removes footprint pixels outside the met domain but avoids artefacts.
         """
-        if hasattr(self, "met_file"):
-            if np.max(self.met_file.lat.values) < np.max(self.fp_data_full.lat.values) or np.min(self.met_file.lat.values) > np.min(self.fp_data_full.lat.values) or np.max(self.met_file.lon.values) < np.max(self.fp_data_full.lon.values) or np.min(self.met_file.lon.values) > np.min(self.fp_data_full.lon.values):
-                print("met file domain is smaller than the footprint domain! interpolating to the same grid as the footprint, but this will create artifacts in the meteorology! \n Probably need to modify this function to adjust all domains to the smallest one, or manually crop the footprint file")
+        if not hasattr(self, "met_file"):
+            print("met file has not been loaded yet, cannot align domains. Please load met file first)")
+            return
+
+        met = self.met_file
+        fp = self.fp_data_full
+
+        met_lat_min, met_lat_max = float(met.lat.min()), float(met.lat.max())
+        met_lon_min, met_lon_max = float(met.lon.min()), float(met.lon.max())
+
+        fp_lat_min, fp_lat_max = float(fp.lat.min()), float(fp.lat.max())
+        fp_lon_min, fp_lon_max = float(fp.lon.min()), float(fp.lon.max())
+
+        if not crop_to_intersection:
+            if (met_lat_max < fp_lat_max or met_lat_min > fp_lat_min or met_lon_max < fp_lon_max or met_lon_min > fp_lon_min):
+                print("met file domain is smaller than the footprint domain! interpolating to the same grid as the footprint, but this will create artifacts in the meteorology! \n You may want to set crop_to_intersection=True.")
 
             self.met_file = self.met_file.interp(lat=self.fp_data_full.lat.values, lon=self.fp_data_full.lon.values, method="nearest")
-        else:
-            print("met file has not been loaded yet, cannot align domains. Please load met file first)")
+            return
+
+        # Determine intersection box to crop to
+        inter_lat_min = max(met_lat_min, fp_lat_min)
+        inter_lat_max = min(met_lat_max, fp_lat_max)
+        inter_lon_min = max(met_lon_min, fp_lon_min)
+        inter_lon_max = min(met_lon_max, fp_lon_max)
+
+        print(
+            f"Cropping to intersection:\n"
+            f"  lat: {inter_lat_min:.3f} → {inter_lat_max:.3f}\n"
+            f"  lon: {inter_lon_min:.3f} → {inter_lon_max:.3f}"
+        )
+
+
+        fp_cropped = fp.sel(
+            lat=slice(inter_lat_min, inter_lat_max),
+            lon=slice(inter_lon_min, inter_lon_max)
+        )
+        met_cropped = met.sel(
+            lat=slice(inter_lat_min, inter_lat_max),
+            lon=slice(inter_lon_min, inter_lon_max)
+        )
+
+        met_interp = met_cropped.interp(lat=fp_cropped.lat.values, lon=fp_cropped.lon.values, method="nearest")
+
+        self.fp_data_full = fp_cropped
+        self.met_file = met_interp
+
+        print("Aligned using spatial intersection without introducing met artefacts.")
+
+
 
     def get_country_masks(self, countrymask_path="default"):
         ## get land-sea mass and country mask, can be used for filtering out footprints/data and during plotting
