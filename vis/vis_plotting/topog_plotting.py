@@ -17,6 +17,7 @@ def plot_topography(
     vmin=None,
     vmax=None,
     plot_country_boundaries=True,
+    title=None,
     country=None,
     ocean_colour="#1d9cfe",
     land_only=True,
@@ -40,6 +41,8 @@ def plot_topography(
         Optional min/max (in metres) for bin edges. If None, inferred from land-only finite values.
     plot_country_boundaries : bool, optional
         Overlay country boundaries. Default True.
+    title : str
+        Custom title
     country : str
         If provided, applies a country mask to include only points within this country.
         The country name must match one of the entries in `data.countries.country_mask['name']`.
@@ -150,7 +153,11 @@ def plot_topography(
         pass
 
     # Title & layout
-    title_base = long_name or "Topography"
+    if title is None:
+        title_base = long_name or "Topography"
+    else:
+        title_base = title
+
     if country is not None:
         ax.set_title(f"{title_base} - {country}")
     else:
@@ -402,10 +409,12 @@ def plot_landuse_frequency(
         y_label += " (log scale)"
 
     ax.set_ylabel(y_label)
+
     if country is not None:
         ax.set_title(f"{title} – {country}")
     else:
         ax.set_title(title)
+        
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=30, ha='right')
     ax.grid(True, axis='y', linestyle=':', linewidth=0.6, alpha=0.7)
