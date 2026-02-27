@@ -381,29 +381,27 @@ class LoadBaseSatelliteData:
 
         return landcover_file
 
-    def align_met_domain(
+    def align_domains(
             self,
-            crop_to_intersection=False,
-            includee_topo_and_landcover=True
+            crop_to_intersection=True,
+            include_topo_and_landcover=True
         ):
         """
-        Align the meteorology domain with the footprint domain, and optionally topography and landcover.
-        Makes sure that the data.met_file domain is the same as the footprint domain, in lat-lon, and interpolate to the footprint's grid using nearest.
-        Optionally crops the two datasets to their spatial intersection
+        Aligns domains for the meteorology, footprints, and optionally topography and landcover.
 
         Parameters
         ----------
         crop_to_intersection : bool
-            If False (default):
+            If False:
                 Interpolate met_file to the full footprint grid using nearest neighbour,
                 even if met_file is smaller. This preserves all footprint pixels but 
                 risks artefacts in the interpolated meteorology.
 
-            If True:
+            If True (default):
                 Crop BOTH datasets to the spatial intersection BEFORE interpolating.
                 This removes footprint pixels outside the met domain but avoids artefacts.
 
-        includee_topo_and_landcover: bool
+        include_topo_and_landcover: bool
             Optionally include alignment of topography and landcover files. Included as default.
         
         """
@@ -453,7 +451,7 @@ class LoadBaseSatelliteData:
         self.fp_data_full = fp_cropped
         self.met_file = met_interp
 
-        if includee_topo_and_landcover:
+        if include_topo_and_landcover:
             topo = self.topog_file
             land = self.landcover_file
 
