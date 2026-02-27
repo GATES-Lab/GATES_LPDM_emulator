@@ -6,6 +6,8 @@ Currently, the notebook loads the base data object: full-domain footprints, met 
 - [ ]  Add loading of Square cropped object (met and topog are interpolated in time and cropped in space) to allow for cropped metrics (e.g. histogram of topographic height across footprint locations)
 - [ ] Add capability to split domain into regions (e.g. by country border, in a grid)
 - [ ] Add prior plotting capability
+- [ ] Add capability to compare domains
+  - [ ] Quantification
 
 ### Domain
 - [x] Show domain boundaries on map by data series (met, fp, topo)
@@ -32,18 +34,7 @@ Currently, the notebook loads the base data object: full-domain footprints, met 
 ## Topography
 - [x]  Topography/contour plot of elevation
 - [x]  Land-use map with labels
-
-| Number label      | Land surface type |
-| ----------- | ----------- |
-| 0?  | sea? (double check that it is 0! maybe it's nan. either way, we can use this as a sea/land mask)    |
-| 1      | broadleaf trees       |
-| 2   | needleleaf trees        |
-| 3   | C3 (temperate) grass       |
-| 4   | C4 (tropical) grass     |
-| 5   | shrubs      |
-| 6   | urban    |
-| 7   | inland water  |
-| 8   | bare soil      |
-| 9   | ice    |
-
 - [ ]  Histogram of heights and land-uses across the domain [JC: I created a simple bar chart of land-use frequencies]
+
+## General housekeeping
+- Ensure all functions are well documented and easy to read

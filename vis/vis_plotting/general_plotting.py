@@ -124,7 +124,8 @@ def _add_lonlat_rectangle(ax, min_lon, max_lon, min_lat, max_lat,
         ax.add_patch(patch)
         first = False
 
-def plot_domain(data, type,
+def plot_domain(data,
+                type,
                 projection="PlateCarree",
                 wrap_center=0.0,
                 zoom_to_data=True,
@@ -312,3 +313,48 @@ def plot_multiple_data_series(
     plt.title(title, pad=10)
     plt.tight_layout()
     return fig, ax
+
+def country_mask(data, country_name, ds=None):
+    """
+    Return a boolean mask for the specified country name from the data.countries.country_mask dataset.
+
+    Parameters
+    ----------
+    data : LoadBaseSatelliteData
+        Container with met/fp/topo datasets, including data.countries.country_mask
+    country_name : str
+        Name of the country to extract the mask for. Must match one of the entries in data.countries.country_mask['name'].
+    ds: xarray.Dataset or xarray.DataArray (optional)
+        Option to directly provide eg the footprint dataset
+    Returns
+    -------
+    xarray.DataArray
+        Filtered dataset with points within the specified country.
+    """
+    print("Applying country mask for:", country_name)
+    data.get_country_masks()
+    mask = data.countries.country_mask.sel(name=country_name)
+    if ds is not None:
+        filtered = ds.where(mask == 1)
+    else:
+        filtered = data.where(mask == 1)
+
+    return filtered
+
+
+def country_loop(data, function, countries):
+    for country in countries:
+        print (f"**** ----- {country} ----- *****")
+        try:
+            fig, ax, _ = function(
+            data,
+            bins=100,
+            log_y=True,
+            density=False,
+            title=None,
+            country = country
+            )
+        except Exception as e:
+            # Skip failures
+            print(f"Skipping {country!r} due to error: {e}")
+            continue

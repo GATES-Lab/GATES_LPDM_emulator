@@ -7,6 +7,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import xarray as xr
 
+from vis_plotting.general_plotting import country_mask
 
 
 def plot_topography(
@@ -16,6 +17,7 @@ def plot_topography(
     vmin=None,
     vmax=None,
     plot_country_boundaries=True,
+    country=None,
     ocean_colour="#1d9cfe",
     land_only=True,
     figure_size=(10.5, 5),
@@ -38,6 +40,9 @@ def plot_topography(
         Optional min/max (in metres) for bin edges. If None, inferred from land-only finite values.
     plot_country_boundaries : bool, optional
         Overlay country boundaries. Default True.
+    country : str
+        If provided, applies a country mask to include only points within this country.
+        The country name must match one of the entries in `data.countries.country_mask['name']`.
     ocean_colour : str, optional
         Colour for oceans (not included in colourbar). Default blue.
     land_only : bool, optional
@@ -60,6 +65,10 @@ def plot_topography(
 
     # Keep only finite numeric values
     da = da.where(np.isfinite(da))
+
+    if country is not None:
+        da = country_mask(data, country, da)
+
     Z = da.values  # 2D array
 
 
@@ -141,7 +150,11 @@ def plot_topography(
         pass
 
     # Title & layout
-    ax.set_title(long_name if long_name else 'Topography')
+    title_base = long_name or "Topography"
+    if country is not None:
+        ax.set_title(f"{title_base} - {country}")
+    else:
+        ax.set_title(title_base)
     plt.tight_layout()
     plt.show()
 
@@ -161,7 +174,8 @@ def plot_topography_histogram(
     colour="#4C78A8",
     alpha=0.8,
     edgecolour='white',
-    log_y=False
+    log_y=False,
+    country=None,
 ):
     """
     Create a histogram of topography (surface altitude) values from `data.topog_file`.
@@ -195,6 +209,9 @@ def plot_topography_histogram(
         Bar edge colour. Default 'white'.
     log_y : bool
         If True, use a logarithmic y-axis. Useful when the distribution spans orders of magnitude.
+    country : str
+        If provided, applies a country mask to include only points within this country.
+        The country name must match one of the entries in `data.countries.country_mask['name']`.
 
     Returns
     -------
@@ -205,6 +222,11 @@ def plot_topography_histogram(
     """
 
     ds = data.topog_file
+
+    # Apply optional country mask
+    if country is not None:
+        ds = country_mask(data, country, ds)
+
     da = ds['surface_altitude']  # (lat, lon)
 
     # Ensure finite values only
@@ -258,7 +280,11 @@ def plot_topography_histogram(
 
     ax.set_xlabel(f"{long_name} [{units}]")
     ax.set_ylabel(y_label)
-    ax.set_title(title if title else f"Histogram of {long_name}")
+    title_base = title if title else f"Histogram of {long_name}"
+    if country is not None:
+        ax.set_title(f"{title_base} – {country}")
+    else:
+        ax.set_title(title_base)
 
     # Grid and layout
     ax.grid(True, which='both', linestyle=':', linewidth=0.6, alpha=0.7)
@@ -269,8 +295,10 @@ def plot_topography_histogram(
 
 def plot_landuse_frequency(
     data,
+    country=None,
     outfile=None,
     log_y=False,
+    title = "Land use frequency (sum of fractions per class)",
     area_weighted=False,
     as_percent=True,
 ):
@@ -283,11 +311,16 @@ def plot_landuse_frequency(
         Container with `data.landcover_file['landcover_fraction']`.
         Expected dims: (lat, lon, pseudo_level) or (pseudo_level, lat, lon).
         Ocean/invalid grid cells are typically NaN and are ignored by the sum.
+    country : str
+        If provided, applies a country mask to include only points within this country.
+        The country name must match one of the entries in `data.countries.country_mask['name']`.
     outfile : str or None
         If provided, saves the figure to this filepath.
     log_y : bool
         If True, use a logarithmic y-axis.
         Default is False (linear scale).
+    title : str
+        Plot title.
     area_weighted : bool
         If True, weight each grid cell by cos(latitude) before summation (equal-area approx).
         Default is False (simple sum of fractions).
@@ -303,6 +336,10 @@ def plot_landuse_frequency(
     """
 
     da = data.landcover_file['landcover_fraction']
+
+    if country is not None:
+        da = country_mask(data, country, da)
+
 
     # Normalise dims to (lat, lon, pseudo_level)
     if da.dims == ('pseudo_level', 'lat', 'lon'):
@@ -365,7 +402,10 @@ def plot_landuse_frequency(
         y_label += " (log scale)"
 
     ax.set_ylabel(y_label)
-    ax.set_title("Land use frequency (sum of fractions per class)")
+    if country is not None:
+        ax.set_title(f"{title} – {country}")
+    else:
+        ax.set_title(title)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=30, ha='right')
     ax.grid(True, axis='y', linestyle=':', linewidth=0.6, alpha=0.7)
@@ -383,10 +423,11 @@ def plot_landuse_frequency(
 
 def plot_majority_landuse_map(
     data,
+    country=None,
     figure_size=(10.5, 5),
     plot_country_boundaries=True,
     coastline=True,
-    title="Majority land‑use class",
+    title="Majority land use class",
     show_legend=True,
     legend_loc="lower left",
 ):
@@ -404,6 +445,9 @@ def plot_majority_landuse_map(
     data : object
         Container with `data.landcover_file['landcover_fraction']`.
         Expected dims: (lat, lon, pseudo_level) or (pseudo_level, lat, lon).
+    country : str
+        If provided, applies a country mask to include only points within this country.
+        The country name must match one of the entries in `data.countries.country_mask['name']`.
     figure_size : tuple
         Figure size in inches.
     plot_country_boundaries : bool
@@ -429,6 +473,10 @@ def plot_majority_landuse_map(
 
     # --- Load and normalise dims ---
     da = data.landcover_file['landcover_fraction']
+
+    if country is not None:
+        da = country_mask(data, country, da)
+
     if da.dims == ('pseudo_level', 'lat', 'lon'):
         da = da.transpose('lat', 'lon', 'pseudo_level')
     elif da.dims != ('lat', 'lon', 'pseudo_level'):
@@ -490,7 +538,10 @@ def plot_majority_landuse_map(
         shading='nearest'  # categorical look; avoids smoothing between classes
     )
 
-    ax.set_title(title)
+    if country is not None:
+        ax.set_title(f"{title} – {country}")
+    else:
+        ax.set_title(title)
 
     # --- Legend to the RIGHT of the map ---
     if show_legend:
@@ -510,7 +561,7 @@ def plot_majority_landuse_map(
             frameon=True,
             framealpha=0.9,
             fontsize=9,
-            title="Majority land‑use"
+            title="Majority land use"
         )
 
         try:
