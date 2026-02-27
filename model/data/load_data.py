@@ -381,9 +381,13 @@ class LoadBaseSatelliteData:
 
         return landcover_file
 
-    def align_met_domain(self, crop_to_intersection=False):
+    def align_met_domain(
+            self,
+            crop_to_intersection=False,
+            includee_topo_and_landcover=True
+        ):
         """
-        Align the meteorology domain with the footprint domain.
+        Align the meteorology domain with the footprint domain, and optionally topography and landcover.
         Makes sure that the data.met_file domain is the same as the footprint domain, in lat-lon, and interpolate to the footprint's grid using nearest.
         Optionally crops the two datasets to their spatial intersection
 
@@ -398,6 +402,10 @@ class LoadBaseSatelliteData:
             If True:
                 Crop BOTH datasets to the spatial intersection BEFORE interpolating.
                 This removes footprint pixels outside the met domain but avoids artefacts.
+
+        includee_topo_and_landcover: bool
+            Optionally include alignment of topography and landcover files. Included as default.
+        
         """
         if not hasattr(self, "met_file"):
             print("met file has not been loaded yet, cannot align domains. Please load met file first)")
@@ -431,7 +439,6 @@ class LoadBaseSatelliteData:
             f"  lon: {inter_lon_min:.3f} → {inter_lon_max:.3f}"
         )
 
-
         fp_cropped = fp.sel(
             lat=slice(inter_lat_min, inter_lat_max),
             lon=slice(inter_lon_min, inter_lon_max)
@@ -446,9 +453,22 @@ class LoadBaseSatelliteData:
         self.fp_data_full = fp_cropped
         self.met_file = met_interp
 
-        print("Aligned using spatial intersection without introducing met artefacts.")
+        if includee_topo_and_landcover:
+            topo = self.topog_file
+            land = self.landcover_file
 
-
+            if topo is not None:
+                topo_cropped = topo.sel(
+                    lat=slice(inter_lat_min, inter_lat_max),
+                    lon=slice(inter_lon_min, inter_lon_max)
+                )
+                self.topog_file = topo_cropped
+            if land is not None:
+                land_cropped = land.sel(
+                    lat=slice(inter_lat_min, inter_lat_max),
+                    lon=slice(inter_lon_min, inter_lon_max)
+                )
+                self.landcover_file = land_cropped
 
     def get_country_masks(self, countrymask_path="default"):
         ## get land-sea mass and country mask, can be used for filtering out footprints/data and during plotting
