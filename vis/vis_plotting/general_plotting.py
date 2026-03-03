@@ -314,7 +314,11 @@ def plot_multiple_data_series(
     plt.tight_layout()
     return fig, ax
 
-def country_mask(data, country_name, ds=None):
+def country_mask(
+        data,
+        country_name,
+        ds=None
+    ):
     """
     Return a boolean mask for the specified country name from the data.countries.country_mask dataset.
 
@@ -342,19 +346,90 @@ def country_mask(data, country_name, ds=None):
     return filtered
 
 
-def country_loop(data, function, countries):
-    for country in countries:
-        print (f"**** ----- {country} ----- *****")
+def loop_over_countries(
+        data,
+        func,
+        countries,
+        **common_kwargs
+    ):
+    """
+    Apply a plotting function `func` to every country in `countries`.
+    If countries is None, run a single global plot (no country mask).
+
+    Parameters
+    ----------
+    data : LoadBaseSatelliteData
+        Container with met/fp/topo datasets, including data.countries.country_mask
+    func : str
+        Plotting function to call, e.g. plot_topography_histogram
+    countries : list[str]
+        List of country names
+    **common_kwargs :
+        Keyword arguments forwarded to `func`
+
+    Returns
+    -------
+    None
+    #results : dict[country, output or Exception]
+    #    Stores output for each successful country, or an Exception on failure.
+    """
+    # Deal with case-insensitive country names by converting to uppercase to match data.countries.country_mask['name'] being uppercase
+    # Also deal with trailing spaces or extra commas
+    if countries is not None:
+        countries = [c.strip().upper() for c in countries]
+
+    # Plot everything globally if no countries specified
+    if countries is None:
+        print("\n----- Global (no country mask) -----")
         try:
-            fig, ax, _ = function(
-            data,
-            bins=100,
-            log_y=True,
-            density=False,
-            title=None,
-            country = country
+            out = func(data, country=None, **common_kwargs)
+        except Exception as e:
+            print(f"Skipping GLOBAL due to error: {e}")
+        return    
+
+    # Otherwise loop through countries
+    for country in countries:
+        print(f"\n----- {country} -----")
+        try:
+            out = func(
+                data,
+                country=country,
+                **common_kwargs,
             )
         except Exception as e:
-            # Skip failures
             print(f"Skipping {country!r} due to error: {e}")
-            continue
+
+    return #results
+
+def run_all_plots(
+        data,
+        plot_functions,
+        countries=None,
+        **kwargs
+    ):
+    """
+    Cycle through all `plot_functions` and apply them to each country in "countries" using "loop_over_countries()".
+
+    Parameters
+    ----------
+    data : LoadBaseSatelliteData
+        Container with met/fp/topo datasets, including data.countries.country_mask
+    plot_functions : list[callable]
+        List of plotting functions to call, e.g. [plot_topography_histogram]
+    countries : list[str]
+        List of country names. If no countries are specified then plot "globally" (i.e. no country mask applied).
+    **common_kwargs :
+        Keyword arguments forwarded to `func`
+
+    Returns
+    -------
+    None
+    
+    
+    """
+    for f in plot_functions:
+        print(f"--- {f.__name__} ---")
+        try:
+            loop_over_countries(data, f, countries=countries, **kwargs)
+        except Exception as e:
+            print(f"   Skipped: {e}")
