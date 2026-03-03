@@ -381,17 +381,92 @@ class LoadBaseSatelliteData:
 
         return landcover_file
 
-    def align_met_domain(self):
+    def align_domains(
+            self,
+            crop_to_intersection=True,
+            include_topo_and_landcover=True
+        ):
         """
-        makes sure that the data.met_file domain is the same as the footprint domain, in lat-lon, and interpolate to the footprint's grid using nearest.
+        Aligns domains for the meteorology, footprints, and optionally topography and landcover.
+
+        Parameters
+        ----------
+        crop_to_intersection : bool
+            If False:
+                Interpolate met_file to the full footprint grid using nearest neighbour,
+                even if met_file is smaller. This preserves all footprint pixels but 
+                risks artefacts in the interpolated meteorology.
+
+            If True (default):
+                Crop BOTH datasets to the spatial intersection BEFORE interpolating.
+                This removes footprint pixels outside the met domain but avoids artefacts.
+
+        include_topo_and_landcover: bool
+            Optionally include alignment of topography and landcover files. Included as default.
+        
         """
-        if hasattr(self, "met_file"):
-            if np.max(self.met_file.lat.values) < np.max(self.fp_data_full.lat.values) or np.min(self.met_file.lat.values) > np.min(self.fp_data_full.lat.values) or np.max(self.met_file.lon.values) < np.max(self.fp_data_full.lon.values) or np.min(self.met_file.lon.values) > np.min(self.fp_data_full.lon.values):
-                print("met file domain is smaller than the footprint domain! interpolating to the same grid as the footprint, but this will create artifacts in the meteorology! \n Probably need to modify this function to adjust all domains to the smallest one, or manually crop the footprint file")
+        if not hasattr(self, "met_file"):
+            print("met file has not been loaded yet, cannot align domains. Please load met file first)")
+            return
+
+        met = self.met_file
+        fp = self.fp_data_full
+
+        met_lat_min, met_lat_max = float(met.lat.min()), float(met.lat.max())
+        met_lon_min, met_lon_max = float(met.lon.min()), float(met.lon.max())
+
+        fp_lat_min, fp_lat_max = float(fp.lat.min()), float(fp.lat.max())
+        fp_lon_min, fp_lon_max = float(fp.lon.min()), float(fp.lon.max())
+
+        if not crop_to_intersection:
+            if (met_lat_max < fp_lat_max or met_lat_min > fp_lat_min or met_lon_max < fp_lon_max or met_lon_min > fp_lon_min):
+                print("met file domain is smaller than the footprint domain! interpolating to the same grid as the footprint, but this will create artifacts in the meteorology! \n You may want to set crop_to_intersection=True.")
 
             self.met_file = self.met_file.interp(lat=self.fp_data_full.lat.values, lon=self.fp_data_full.lon.values, method="nearest")
-        else:
-            print("met file has not been loaded yet, cannot align domains. Please load met file first)")
+            return
+
+        # Determine intersection box to crop to
+        inter_lat_min = max(met_lat_min, fp_lat_min)
+        inter_lat_max = min(met_lat_max, fp_lat_max)
+        inter_lon_min = max(met_lon_min, fp_lon_min)
+        inter_lon_max = min(met_lon_max, fp_lon_max)
+
+        print(
+            f"Cropping to intersection:\n"
+            f"  lat: {inter_lat_min:.3f} → {inter_lat_max:.3f}\n"
+            f"  lon: {inter_lon_min:.3f} → {inter_lon_max:.3f}"
+        )
+
+        fp_cropped = fp.sel(
+            lat=slice(inter_lat_min, inter_lat_max),
+            lon=slice(inter_lon_min, inter_lon_max)
+        )
+        met_cropped = met.sel(
+            lat=slice(inter_lat_min, inter_lat_max),
+            lon=slice(inter_lon_min, inter_lon_max)
+        )
+
+        met_interp = met_cropped.interp(lat=fp_cropped.lat.values, lon=fp_cropped.lon.values, method="nearest")
+
+        self.fp_data_full = fp_cropped
+        self.met_file = met_interp
+
+        if include_topo_and_landcover:
+            topo = self.topog_file
+            land = self.landcover_file
+
+            if topo is not None:
+                topo_cropped = topo.sel(
+                    lat=slice(inter_lat_min, inter_lat_max),
+                    lon=slice(inter_lon_min, inter_lon_max)
+                )
+                self.topog_file = topo_cropped
+            if land is not None:
+                land_cropped = land.sel(
+                    lat=slice(inter_lat_min, inter_lat_max),
+                    lon=slice(inter_lon_min, inter_lon_max)
+                )
+                self.landcover_file = land_cropped
 
     def get_country_masks(self, countrymask_path="default"):
         ## get land-sea mass and country mask, can be used for filtering out footprints/data and during plotting
@@ -496,7 +571,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}, load_fps_as="array"):
 
         self.dataset_format = "square" 
         #### check domains
@@ -525,7 +600,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         #### load footprint (fp) data    
         if verbose: print("---- LOADING FOOTPRINTS") 
         self._load_footprints(fp_datadir)
-        self._process_footprints(lazy_load)
+        self._process_footprints(lazy_load, fp_data_as=load_fps_as)
 
         self.met_args = met_args
         self.met_processed = False
@@ -543,13 +618,13 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         
         if verbose: print("---- All done!")       
 
-    def _process_footprints(self, lazy_load):
+    def _process_footprints(self, lazy_load, fp_data_as="array"):
         """
         cut data around release point
         fp data returned is array of shape (time, size*size) with each footprint centered around its release point
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full = cut_satellite_data(self.fp_data_full, self.size, returnlatlons = True, return_as="array",fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full, self.fp_xr = cut_satellite_data(self.fp_data_full, self.size, returnlatlons = True, return_as=fp_data_as,fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
 
         # if self.fill_outofdomain_with == "all_nans":
             # remove here all indeces from self.idxs_out_of_domain! so we only keep the footprints that were fully inside the domain
@@ -1187,7 +1262,9 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
 
     # concatenate all of the cropped arrays
     cropped_fp = xr.concat(cropped_arrays, dim="time")
-    cropped_fp = cropped_fp.sortby("time")     
+    cropped_fp = cropped_fp.sortby("time") 
+    cropped_fp = cropped_fp[["fp", "lat_coords", "lon_coords", "release_lat", "release_lon"]]
+
 
     # load into memory, if required
     if load:
@@ -1199,7 +1276,7 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
             return cropped_fp, release_idxs, padding
         else:
             return cropped_fp
-    if return_as=="array":
+    elif return_as=="array":
         fp_data = cropped_fp.fp.transpose("time","lat", "lon").values
         fp_data = np.reshape(fp_data, (len(cropped_fp.time), size**2))
 
@@ -1208,8 +1285,16 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
             fp_lons = cropped_fp.lon_coords.values  
             return fp_data, fp_lats, fp_lons, release_idxs, padding, fp_full.sel(lat=slice(original_fp_domain[0], original_fp_domain[1]), lon=slice(original_fp_domain[2], original_fp_domain[3]))               
         else:
-            return fp_data            
- 
+            return fp_data     
+    elif return_as=="both":
+        fp_data = cropped_fp.fp.transpose("time","lat", "lon").values
+        fp_data = np.reshape(fp_data, (len(cropped_fp.time), size**2))
+
+        if return_everything:
+            fp_lats = cropped_fp.lat_coords.values
+            fp_lons = cropped_fp.lon_coords.values  
+            return fp_data, fp_lats, fp_lons, release_idxs, padding, fp_full.sel(lat=slice(original_fp_domain[0], original_fp_domain[1]), lon=slice(original_fp_domain[2], original_fp_domain[3])), cropped_fp
+            
 def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_variables=None, verbose=True, add_wind_direction=True):
 
     met = select_met_levels(met, levels=relevant_levels)
@@ -1315,11 +1400,11 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
         elif interp_method == "closest":
             # if we are not interpolating, we can just use the times of the footprints
             # find first any idx that wont be able to be interpolated
-            print(fp_times)
             nearest = met.indexes["time"].get_indexer(pd.DatetimeIndex(fp_times), method="nearest", tolerance=pd.Timedelta("4h")) 
             nan_idxs = np.nonzero(nearest == -1)[0]
             nearest_timestamps = pd.DatetimeIndex(met.indexes["time"].values)[nearest]
             met = met.reindex(time=fp_times, method="nearest", tolerance="4h", fill_value = np.nan)
+            ## the timestamp of the extracted meteorology is saved in data.met
             met["met_timestamps"] = ("time", nearest_timestamps)
             #met["extracted_timestamps"] = pd.DatetimeIndex(met.indexes["time"].values)[nearest]
             
