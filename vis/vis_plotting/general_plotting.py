@@ -373,6 +373,10 @@ def loop_over_countries(
     #results : dict[country, output or Exception]
     #    Stores output for each successful country, or an Exception on failure.
     """
+    # Deal with case-insensitive country names by converting to uppercase to match data.countries.country_mask['name'] being uppercase
+    # Also deal with trailing spaces or extra commas
+    if countries is not None:
+        countries = [c.strip().upper() for c in countries]
 
     # Plot everything globally if no countries specified
     if countries is None:
