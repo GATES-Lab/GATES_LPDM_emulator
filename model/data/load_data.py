@@ -753,7 +753,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met_nan_idxs=[]
 
     
-    def plot_cropped_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False):
+    def plot_cropped_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, return_fig=False):
         """
         plot a footprint for a particular timestamp or index, with the option to also plot the topography and landcover if they have been loaded. 
 
@@ -801,6 +801,37 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         if add_cbar:
             cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
 
+        if return_fig:
+            return fig, ax
+
+    def plot_footprint_mean(self,levels = [-4, -3.5, -3,  -2.5, -2, -1.5], vmin_vmax=[-4,-2], add_cbar=False):
+        f = self.fp_xr.fp.mean(dim="time").values
+        #f[f<5e-5] = 0
+        vmin, vmax = vmin_vmax
+
+        fig, ax = plt.subplots(1,1)
+
+        cmap = plt.cm.Reds
+        cmap.set_over = "k"
+        plot_params = {"cmap":cmap, "vmin":vmin, "vmax":vmax}
+        alpha =0.4
+        cb = ax.contourf(np.log10(f), **plot_params, levels=levels, alpha=0.6, extend="both")
+        if add_cbar:
+            cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
+
+        # set ticks at the middle data.size//2 and every 10 units from there
+        tick_interval =10
+        ticks = np.arange(tick_interval//2, self.size, tick_interval)
+
+        ax.set_xticks(ticks)
+        ax.set_yticks(ticks)
+        #ax.set_xticklabels(ticks - self.size//2)
+        #ax.set_yticklabels(ticks - self.size//2)
+        ax.set_xlabel("Longitude offset from release point (in grid-cells)")
+        ax.set_ylabel("Latitude offset from release point (in grid-cells)")
+
+        fig.suptitle("Mean footprint, centered around release point")
+        plt.show()
 
 class LoadDomainSatelliteData(LoadBaseSatelliteData):
     """
