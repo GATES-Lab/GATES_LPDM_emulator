@@ -752,6 +752,107 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         else:
             self.met_nan_idxs=[]
 
+    
+    def plot_cropped_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, plot_wind=False, return_fig=False):
+        """
+        plot a footprint for a particular timestamp or index, with the option to also plot the topography and landcover if they have been loaded. 
+
+        inputs:
+            - idx: int index of the footprint to plot. If timestamp is also passed, timestamp will be used instead of idx
+            - timestamp: timestamp of the footprint to plot, as a string in format "YYYY-MM-DDTHH:MM:SS" (eg "2016-01-01T12:00:00"). If idx is also passed, timestamp will be used instead of idx
+        """
+
+        if timestamp is not None:
+            fp_to_plot = self.fp_xr.sel(time=np.datetime64(timestamp)).copy()
+            if len(fp_to_plot.time.values)>1:
+                print("there are multiple footprints for the timestamp you passed, check the timestamp and try again! plotting the first one")
+                fp_to_plot = fp_to_plot.isel(time=0)
+            
+            idx = np.where(self.fp_xr.time.values == fp_to_plot.time.values)[0][0]
+        
+        else:
+            fp_to_plot = self.fp_xr.isel(time=idx).copy()
+            timestamp = fp_to_plot.time.values
+
+        f = np.copy(fp_to_plot.fp.values)
+        fp_lats = self.fp_lats[idx]
+        fp_lons = self.fp_lons[idx]
+
+        extent = (fp_lons[0], fp_lons[-1], fp_lats[0], fp_lats[-1])
+
+        fig, ax = plt.subplots(1,1,subplot_kw={'projection': ccrs.PlateCarree()})
+        ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
+        ax.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
+        ax.add_feature(cartopy.feature.LAND)
+        ax.add_feature(cartopy.feature.OCEAN)
+
+        cmap = plt.cm.Reds
+        cmap.set_over = "k"
+        plot_params = {"transform":cartopy.crs.PlateCarree(), "cmap":cmap, "vmin":vmin_vmax[0], "vmax":vmin_vmax[1]}
+        background_alpha=0.4
+        if levels is None:
+            levels = [-4, -3.5, -3,  -2.5, -2, -1.5]
+
+        cb = ax.contourf(fp_lons, fp_lats, np.log10(f), **plot_params, levels=levels, extend="both", alpha=background_alpha)
+        f[f<background_threshold] = 0
+        cb = ax.contourf(fp_lons, fp_lats, np.log10(f), **plot_params, levels=levels, extend="both")
+        formatted_time = fp_to_plot.time.values.astype('datetime64[ms]').astype('O').strftime('%d-%m-%Y %H:%M:%S.%f')[:-3]
+        ax.set_title(formatted_time)
+
+        if add_cbar:
+            cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
+
+        if plot_wind:
+            u_arrow = -self.met.x_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).values
+            v_arrow = -self.met.y_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).values
+
+            # Position arrow at centre of domain
+            arrow_lat = self.fp_xr.lat_coords.sel(lat=self.size//2, time=timestamp).values
+            arrow_lon = self.fp_xr.lon_coords.sel(lon=self.size//2, time=timestamp).values
+            print(f"plotting wind arrow at lat {arrow_lat} and lon {arrow_lon} with u {u_arrow} and v {v_arrow}")
+            ax.quiver(arrow_lon, arrow_lat, u_arrow, v_arrow,
+                    transform=cartopy.crs.PlateCarree(),
+                    scale=10, scale_units="inches",
+                    color='black', width=0.005,
+                    zorder=10)
+
+
+
+        if return_fig:
+            return fig, ax
+
+    def plot_footprint_mean(self,levels = [-4, -3.5, -3,  -2.5, -2, -1.5], vmin_vmax=[-4,-2], add_cbar=False):
+        """
+        Plot the mean of the cropped and aligned footprints. Levels and vmin_vmax adjust the colour scale. If add_cbar is True, adds a colorbar
+        """
+        f = self.fp_xr.fp.mean(dim="time").values
+        #f[f<5e-5] = 0
+        vmin, vmax = vmin_vmax
+
+        fig, ax = plt.subplots(1,1)
+
+        cmap = plt.cm.Reds
+        cmap.set_over = "k"
+        plot_params = {"cmap":cmap, "vmin":vmin, "vmax":vmax}
+        alpha =0.4
+        cb = ax.contourf(np.log10(f), **plot_params, levels=levels, alpha=0.6, extend="both")
+        if add_cbar:
+            cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
+
+        # set ticks at the middle data.size//2 and every 10 units from there
+        tick_interval =10
+        ticks = np.arange(tick_interval//2, self.size, tick_interval)
+
+        ax.set_xticks(ticks)
+        ax.set_yticks(ticks)
+        #ax.set_xticklabels(ticks - self.size//2)
+        #ax.set_yticklabels(ticks - self.size//2)
+        ax.set_xlabel("Longitude (in grid-cells)")
+        ax.set_ylabel("Latitude (in grid-cells)")
+
+        fig.suptitle("Mean footprint, centered around release point")
+        plt.show()
+
 class LoadDomainSatelliteData(LoadBaseSatelliteData):
     """
     Cuts the dataset to a common fixed domain. By default, cuts to the biggest domain that is shared by the footprints and the met
