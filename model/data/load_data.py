@@ -753,7 +753,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met_nan_idxs=[]
 
     
-    def plot_cropped_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, return_fig=False):
+    def plot_cropped_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, plot_wind=False, return_fig=False):
         """
         plot a footprint for a particular timestamp or index, with the option to also plot the topography and landcover if they have been loaded. 
 
@@ -772,6 +772,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         
         else:
             fp_to_plot = self.fp_xr.isel(time=idx).copy()
+            timestamp = fp_to_plot.time.values
 
         f = np.copy(fp_to_plot.fp.values)
         fp_lats = self.fp_lats[idx]
@@ -800,6 +801,22 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
 
         if add_cbar:
             cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
+
+        if plot_wind:
+            u_arrow = -self.met.x_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).values
+            v_arrow = -self.met.y_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).values
+
+            # Position arrow at centre of domain
+            arrow_lat = self.fp_xr.lat_coords.sel(lat=self.size//2, time=timestamp).values
+            arrow_lon = self.fp_xr.lon_coords.sel(lon=self.size//2, time=timestamp).values
+            print(f"plotting wind arrow at lat {arrow_lat} and lon {arrow_lon} with u {u_arrow} and v {v_arrow}")
+            ax.quiver(arrow_lon, arrow_lat, u_arrow, v_arrow,
+                    transform=cartopy.crs.PlateCarree(),
+                    scale=10, scale_units="inches",
+                    color='black', width=0.005,
+                    zorder=10)
+
+
 
         if return_fig:
             return fig, ax
