@@ -63,7 +63,7 @@ def plot_topography(
         The bin edges used for the discrete colour mapping.
     """
 
-    ds = data.topog_file
+    ds = getattr(data, "topog_file", getattr(data, "topog", None))
     da = ds['surface_altitude']  # (lat, lon)
 
     # Keep only finite numeric values
@@ -228,7 +228,8 @@ def plot_topography_histogram(
         The histogram values returned by matplotlib (counts or density) and the bin edges.
     """
 
-    ds = data.topog_file
+    ds = getattr(data, "topog_file", getattr(data, "topog", None))
+
 
     # Apply optional country mask
     if country is not None:
