@@ -38,6 +38,7 @@ from matplotlib.colors import Normalize
 import cartopy.crs as ccrs
 import matplotlib.ticker as mticker
 import random
+from scipy.stats import binned_statistic_2d
 
 """
 Functions used to build the figures and metrics from the paper
@@ -957,7 +958,6 @@ def get_gosat(site, species,
     return [data,]
 
 
-from scipy.stats import binned_statistic_2d
 def bin_data(data, lats, lons, degree_bins=1):
     lat_bins = range(int(np.floor(lats.min())), int(np.ceil(lats.max())) + 1, degree_bins) 
     lon_bins = range(int(np.floor(lons.min())), int(np.ceil(lons.max())) + 1, degree_bins) 

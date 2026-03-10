@@ -1,0 +1,13 @@
+wandb
+*.pkl
+*.err
+*.nc
+
+*.out
+*.npy
+graph_weather
+
+notebooks/uncertainty/summary_outputs/
+notebooks/*.npz
+notebooks/**/*pdf
+notebooks/**/*png
