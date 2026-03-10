@@ -12,7 +12,8 @@ from vis_plotting.general_plotting import country_mask
 
 def plot_topography(
     data,
-    cmap='RdYlGn_r',
+    what_to_plot="domain",
+    cmap="RdYlGn_r",
     n_bins=10,
     vmin=None,
     vmax=None,
@@ -33,6 +34,10 @@ def plot_topography(
     data : LoadBaseSatelliteData
         Container with topography dataset in `data.topog_file`, variable 'surface_altitude' (lat, lon).
         If available, a land mask is read from `data.landcover_file['land_binary_mask']` and used in "land_only" masking.
+    what_to_plot: str
+        Can either be:
+        - "domain": plot the full spatial domain
+        - "release_point": cropped and centred around the release point
     cmap : str, optional
         Base colormap name to discretize. Default 'RdYlGn_r', other options include 'terrain'.
     n_bins : int, optional
@@ -63,7 +68,11 @@ def plot_topography(
         The bin edges used for the discrete colour mapping.
     """
 
-    ds = getattr(data, "topog_file", getattr(data, "topog", None))
+    if what_to_plot=="release_point":
+        ds = data.topog
+    else:
+        ds = data.topog_file
+        
     da = ds['surface_altitude']  # (lat, lon)
 
     # Keep only finite numeric values
@@ -171,6 +180,7 @@ def plot_topography(
 
 def plot_topography_histogram(
     data,
+    what_to_plot="domain",
     bins=50,
     range=None,
     density=False,
@@ -192,6 +202,10 @@ def plot_topography_histogram(
     data : LoadBaseSatelliteData
         Container with the topography dataset in `data.topog_file`.
         Must contain variable 'surface_altitude' with dims (lat, lon).
+    what_to_plot: str
+        Can either be:
+        - "domain": plot the full spatial domain
+        - "release_point": cropped and centred around the release point
     bins : int or sequence, optional
         Number of bins or explicit bin edges. Default is 50.
     range : tuple(float, float) or None
@@ -227,9 +241,10 @@ def plot_topography_histogram(
     (counts, bin_edges) : tuple(np.ndarray, np.ndarray)
         The histogram values returned by matplotlib (counts or density) and the bin edges.
     """
-
-    ds = getattr(data, "topog_file", getattr(data, "topog", None))
-
+    if what_to_plot=="release_point":
+        ds = data.topog.topog.sel(lat=data.size//2, lon=data.size//2) 
+    else:
+        ds = data.topog_file
 
     # Apply optional country mask
     if country is not None:
@@ -237,7 +252,7 @@ def plot_topography_histogram(
 
     da = ds['surface_altitude']  # (lat, lon)
 
-    # Ensure finite values only
+    # Keep only finite numeric values
     da = da.where(np.isfinite(da))
 
     # Apply optional mask (keep True, drop False)
