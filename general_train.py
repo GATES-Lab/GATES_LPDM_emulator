@@ -429,7 +429,7 @@ for epoch in range(num_epochs):
         test_out = np.reshape(np.squeeze(test_out), (len(test_out), size[0],size[1]))
         transformed_preds = np.reshape(np.squeeze(transformed_preds), (len(transformed_preds), size[0],size[1]))
         fps = np.reshape(fps, (len(test_dataset.fp), size[0],size[1]))
-        test_dataset = np.reshape(test_dataset.fp, (len(test_dataset.fp), size[0],size[1]))
+        fp_trans = np.reshape(test_dataset.fp, (len(test_dataset.fp), size[0],size[1]))
         
         data_vars = {'predictions':(['time', "lat", "lon"], test_out, 
                                 {'space': 'transformed', 'type':"prediction", 'emulated_with': model_name}),
@@ -437,7 +437,7 @@ for epoch in range(num_epochs):
                                 {'space': 'original', 'type':"prediction",'emulated_with': model_name}),
                     'fp':(['time', "lat", "lon"], fps, 
                                 {'space': 'original', 'type':"truth"}),
-                    'trans_fp':(['time', "lat", "lon"], test_dataset, 
+                    'trans_fp':(['time', "lat", "lon"], fp_trans, 
                                 {'space': 'transformed', 'type':"truth"})}
 
         # define coordinates
@@ -468,13 +468,11 @@ for epoch in range(num_epochs):
         preds_artifact.add_file(netcdf_save_path)
         wandb.log_artifact(preds_artifact)
 
-        wandb.finish()  # End wandb session
-
-
     if epoch == 102:
         ## replaced NMAE with NMAE_nans in the whole file!
         if NMAE_nans(test_out,truths) == 1:
             print("no learning is happening! early stopping")
             break
+wandb.finish()  # End wandb session
 
 print("Finished Training")
