@@ -216,9 +216,13 @@ def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=
                 mini_ax.tick_params(axis='x', which='minor', length=3, width=1)  # Minor ticks without labels
 
             if not legend:
+                '''
                 mini_ax.legend(bbox_to_anchor=(3, 1), fontsize=12)
                 mini_ax.set_zorder(1)
                 legend=True
+                '''
+                mini_ax.legend(loc='lower left', bbox_to_anchor=(-0.75, 0.05), fontsize=12)
+                legend = True
 
             n=n+1
         else:
