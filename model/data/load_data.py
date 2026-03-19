@@ -528,13 +528,14 @@ class LoadBaseSatelliteData:
             self.countries = country_ds
 
 
-    def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False):
+    def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, return_fig=False, plot_marker=False):
         """
-        plot a footprint for a particular timestamp or index, with the option to also plot the topography and landcover if they have been loaded. 
+        plot a footprint for a particular timestamp or index
 
         inputs:
             - idx: int index of the footprint to plot. If timestamp is also passed, timestamp will be used instead of idx
             - timestamp: timestamp of the footprint to plot, as a string in format "YYYY-MM-DDTHH:MM:SS" (eg "2016-01-01T12:00:00"). If idx is also passed, timestamp will be used instead of idx
+            - return_fig: if True, returns the fig and ax objects instead of showing the plot. 
         """
 
         if timestamp is not None:
@@ -555,6 +556,7 @@ class LoadBaseSatelliteData:
         ax.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
         ax.add_feature(cartopy.feature.LAND)
         ax.add_feature(cartopy.feature.OCEAN)
+        ax.stock_img()
 
         cmap = plt.cm.Reds
         cmap.set_over = "k"
@@ -569,8 +571,16 @@ class LoadBaseSatelliteData:
         formatted_time = fp_to_plot.time.values.astype('datetime64[ms]').astype('O').strftime('%d-%m-%Y %H:%M:%S.%f')[:-3]
         ax.set_title(formatted_time)
 
+        if plot_marker:
+            ax.scatter(fp_to_plot.release_lon.values, fp_to_plot.release_lat.values, marker="x", color="white",s=25, lw=1,transform=cartopy.crs.PlateCarree(), zorder=10)
+
         if add_cbar:
             cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
+
+        if return_fig:
+            return fig, ax
+        else:
+            plt.show()
 
 class LoadSquareSatelliteData(LoadBaseSatelliteData):
     """
