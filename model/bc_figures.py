@@ -191,7 +191,7 @@ def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=
                     mini_ax.spines['right'].set_visible(False)
                 else:
                     first_axis=False
-                    mini_ax.set_ylabel("ppb", fontsize=20)
+                    mini_ax.set_ylabel(r"XCH$_4$ (ppb)", fontsize=20)
                     mini_ax.spines['right'].set_visible(False)
                     
 

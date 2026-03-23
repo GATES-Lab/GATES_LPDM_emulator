@@ -6,3 +6,5 @@ wandb
 modloss
 *.nc
 *.err
+*.png
+*.eps

@@ -1457,7 +1457,7 @@ def plot_seasonal_truth_pred_mse_shared_cbar(season_results, ground_truth_result
             cbar=False
         )
         if season_idx == 0:
-            ax[0, season_idx].text(-0.1, 0.5, "Ground Truth", rotation="vertical",
+            ax[0, season_idx].text(-0.1, 0.5, "NAME", rotation="vertical",
                                    va="center", ha="center", fontsize=14,
                                    transform=ax[0, season_idx].transAxes)
         
@@ -1476,7 +1476,7 @@ def plot_seasonal_truth_pred_mse_shared_cbar(season_results, ground_truth_result
             cbar=False
         )
         if season_idx == 0:
-            ax[1, season_idx].text(-0.1, 0.5, "Prediction", rotation="vertical",
+            ax[1, season_idx].text(-0.1, 0.5, "GATES", rotation="vertical",
                                    va="center", ha="center", fontsize=14,
                                    transform=ax[1, season_idx].transAxes)
         
@@ -1506,18 +1506,19 @@ def plot_seasonal_truth_pred_mse_shared_cbar(season_results, ground_truth_result
     cbar_ax_truth = fig.add_subplot(gs_cb_truth[0, 0])
     sm = plt.cm.ScalarMappable(cmap="viridis", norm=plt.Normalize(*vmin_vmax_shared))
     sm.set_array([])
-    plt.colorbar(sm, cax=cbar_ax_truth, orientation='vertical').set_label(label="Ground Truth / Prediction (ppb)", size=12)
-    
+    #plt.colorbar(sm, cax=cbar_ax_truth, orientation='vertical').set_label(label="GATES / NAME XCH4 (ppb)", size=12)
+    plt.colorbar(sm, cax=cbar_ax_truth, orientation='vertical').set_label(label=r"GATES / NAME XCH$_4$ (ppb)", size=12)
     # Colorbar for MSE
     gs_cb_mse = gs[2, -1].subgridspec(2, 1, height_ratios=[50, 1])
     cbar_ax_mse = fig.add_subplot(gs_cb_mse[0, 0])
     sm_mse = plt.cm.ScalarMappable(cmap="Reds", norm=plt.Normalize(*vmin_vmax_mse))
     sm_mse.set_array([])
-    plt.colorbar(sm_mse, cax=cbar_ax_mse, orientation='vertical').set_label(label="RMSE (ppb)", size=12)
-    
-    fig.suptitle("Ground Truth, Prediction, and RMSE by Season", fontsize=16)
+    #plt.colorbar(sm_mse, cax=cbar_ax_mse, orientation='vertical').set_label(label="RMSE (ppb)", size=12)
+    plt.colorbar(sm_mse, cax=cbar_ax_mse, orientation='vertical').set_label(label=r"XCH$_4$ (ppb)", size=12)
+
+    fig.suptitle("NAME, GATES, and RMSE by Season", fontsize=16)
     gs.update(top=0.95)
-    fig.savefig("spatial_map.eps", format="eps",bbox_inches="tight")
+    fig.savefig("spatial_map_alternative_2.png", format="png",bbox_inches="tight")
 
 
 # NAWID - CALCULATING THE DENSITY SPATIALLY 
