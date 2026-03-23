@@ -692,7 +692,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             pad_mode = "nans"
         if self.fill_outofdomain_with=="zeros":
             pad_mode = "edge"
-        self.met = cut_satellite_met_v4(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True)
+        self.met = cut_satellite_met(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True)
 
         if rechunk>0:
             self.met.chunk({"time":rechunk})
@@ -1526,7 +1526,7 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
 
 
 
-def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None, interp_method="closest", return_nan_idxs=False):
+def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None, relevant_variables=None, verbose=True, pad_mode="nans", load=False, add_wind_direction=True, save=False, savepath=None, delete_nans=False, attrs_dict=None, interp_method="closest", return_nan_idxs=False):
     """
     make into smaller functions!
     
@@ -1827,7 +1827,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
                 if data.dataset_format == "square":
-                    met, nan_idxs = cut_satellite_met_v4(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False, add_wind_direction=True, return_nan_idxs=True)
+                    met, nan_idxs = cut_satellite_met(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False, add_wind_direction=True, return_nan_idxs=True)
                     met_nan_idxs[delta] = nan_idxs
                 if data.dataset_format == "domain":
                     met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, add_wind_direction=True)
