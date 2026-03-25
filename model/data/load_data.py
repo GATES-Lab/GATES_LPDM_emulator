@@ -370,7 +370,7 @@ class LoadBaseSatelliteData:
     def _get_domain(self, region):
         #### check domains
         # TODO make domains dict importable
-        domains = {"BRAZIL":"SOUTHAMERICA", "SOUTHAMERICA":"SOUTHAMERICA", "SAHARA":"NORTHAFRICA", "INDIA":"SOUTHASIA"} 
+        domains = {"BRAZIL":"SOUTHAMERICA", "SOUTHAMERICA":"SOUTHAMERICA", "SAHARA":"NORTHAFRICA", "NORTHAFRICA":"NORTHAFRICA", "INDIA":"INDIA", "CHINA":"CHINA"} 
         try:
             domain = domains[region]   
         except: 
@@ -1897,3 +1897,116 @@ def grid_coordinates(side):
 
 
 
+def create_data_directories(region):
+    """
+    For use on Oracle (and possibly cloud systems)
+    Create the standard data folder structure if it doesn't already exist.
+    """
+
+    base_dir = "data"
+
+    directories = [
+        os.path.join(base_dir, "fp_archive", region),
+        os.path.join(base_dir, "met_archive", region),
+        os.path.join(base_dir, "LPDM", "topog_NAME"),
+    ]
+
+    for dir in directories:
+        os.makedirs(dir, exist_ok=True)
+
+def populate_data_directories(region, period, base_dir, dest_dir, dry_run=False):
+    """
+    Copy files matching a region and period pattern from multiple archive folders
+    (e.g. fp_archive, met_archive) into dest_dir.
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+    
+    # Define which subfolders to look in
+    source_subdirs = ["fp_archive", "met_archive"]
+    # Loop through each archive subdirectory
+    for subdir in source_subdirs:
+        print("Now processing:", subdir)
+        source_path = os.path.join(base_dir, subdir, region)
+        
+        # Build the file pattern (e.g. /base/fp_archive/NORTHAFRICA/NORTHAFRICA_Met_20160[1-3].nc)
+
+        pattern = os.path.join(source_path, f"*{region}*{period}.nc")
+        
+        # Find matching files
+        matching_files = glob.glob(pattern)
+
+        if not matching_files:
+            print(f"No files found for pattern: {pattern}")
+            continue
+
+        for file_path in matching_files:
+            filename = os.path.basename(file_path)
+            dest_path = os.path.join(dest_dir, subdir, region, filename)
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+
+            if os.path.exists(dest_path):
+                print(f"Skipping {filename} — already exists in destination.")
+                continue
+
+            if dry_run:
+                print(f"[DRY RUN] Would copy {file_path} -> {dest_path}")
+            else:
+                shutil.copy2(file_path, dest_path)
+                print(f"Copied {filename} to {dest_path}")
+
+    # Topo/landuse files
+    print("Now processing: topo and landuse files")
+    LPDM_source = "/mnt/data/LPDM/topog_NAME"
+    LPDM_dest = os.path.join(dest_dir, "LPDM", "topog_NAME")
+    os.makedirs(LPDM_dest, exist_ok=True)
+
+    for file_path in glob.glob(os.path.join(LPDM_source, "*")):
+        if not os.path.isfile(file_path):
+            continue
+
+        filename = os.path.basename(file_path)
+        dest_path = os.path.join(LPDM_dest, filename)
+
+        if os.path.exists(dest_path):
+            print(f"Skipping one-off file {filename} — already exists in {LPDM_dest}")
+            continue
+
+        if dry_run:
+            print(f"[DRY RUN] Would copy {file_path} -> {dest_path}")
+        else:
+            shutil.copy2(file_path, dest_path)
+            print(f"Copied one-off file {filename} to {dest_path}")
+
+
+def empty_folder(folder_path):
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)  # remove file or symlink
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)  # remove subdirectory
+            print("Deleted:", file_path)
+        except Exception as e:
+            print(f"Failed to delete {file_path}. Reason: {e}")
+
+def load_file(file_name, file_path):
+    # file_path=False if no argument was passed to the parser
+    if not file_path:
+       file_path ="/user/work/ef17148/GCN/graphnet/graph_weather/train_satellite_files/"
+    file_path = f"{file_path}{file_name}"
+    print(file_path)
+    try:
+        with open(file_path, 'r') as file:
+            if file_path.endswith('.json'):
+                data = json.load(file)
+            else:
+                data = file.read()
+                data = json.loads(data)
+        return data
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+        return None
+    except Exception as e:
+        print(f"An error occurred while loading the file: {str(e)}")
+        return None
