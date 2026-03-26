@@ -5,3 +5,4 @@
 /training_output
 /wandb
 /data
+__pycache__/
