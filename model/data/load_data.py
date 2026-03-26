@@ -678,7 +678,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         If the square to extract escapes the footprint domain, the padded space is filled with nans or zeros or deleted according to the fill_outofdomain_with and delete_outofdomain parameters.
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full, self.fp_xr = cut_satellite_data(self.fp_data_full, self.size, returnlatlons = True, return_as=fp_data_as,fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
+        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full, self.fp_xr = cut_satellite_data(self.fp_data_full, self.size, return_as=fp_data_as,fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
 
 
     def _process_meteorology(self,rechunk=0,lazy_load=True):
@@ -1304,7 +1304,7 @@ def cut_emissions_data(flux, fp_full, size):
     return flux_cut
 
 
-def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True,  return_everything=False):
+def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True,  return_everything=False):
     """
     cuts footprint to square of size size x size gridcells around the footprint's release point, returning with artificial lat-lon coordinates where the release point is at the middle of the grid [size/2, size/2]
 
@@ -1411,7 +1411,6 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
         fp_full = fp_full.assign_coords({"lon":updated_lons}) 
         
 
-    #print("padding", padding_needed, padding)
     if padding_needed:
         # recalculate the release indeces to account for the new padding that was just added
         domain_lats = np.copy(fp_full.lat.values)
@@ -1448,6 +1447,7 @@ def cut_satellite_data(fp_full, size, returnlatlons = False,fill_bads_with="nans
     cropped_fp = xr.concat(cropped_arrays, dim="time")
     cropped_fp = cropped_fp.sortby("time") 
     cropped_fp = cropped_fp[["fp", "lat_coords", "lon_coords", "release_lat", "release_lon"]]
+    cropped_fp = cropped_fp.transpose("time", "lat", "lon") # make sure fp is in the right order of dimensions
 
 
     # load into memory, if required
@@ -1551,7 +1551,7 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None, rele
         - interp_method (str): method to use for interpolation in time. Passed to xarray.interp. Options are "closest", to use the closest met timestamp in time to a tolerance of 4h, or standard options provided to xr.inter, including "nearest", "linear" etc. 
 
     Returns:
-        - met_cut: xarray with cropped and interpolated meteorology (ie interpolated to the correct times, and cropped to a square of size metsize around the footprint release point)
+        - met_cut: xarray with cropped and interpolated meteorology (ie interpolated to the correct times, and cropped to a square of size metsize around the footprint release point). The time delta is added as a coordinate
     """
 
     # subset the right levels and variables, as specified in the inputs
@@ -1598,12 +1598,12 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None, rele
     else:
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
         # reindex and interp are the same when method="nearest", but reindex allows tol
-        if interp_method == "nearest":
+        if interp_method == "closest":
             # find first any idx that wont be able to be interpolated
             nearest = met.indexes["time"].get_indexer(pd.DatetimeIndex(fp_times), method="nearest", tolerance=pd.Timedelta("4h")) 
             nan_idxs = np.nonzero(nearest == -1)[0]
 
-            met = met.reindex(time=fp_times, method=interp_method, tolerance="4h", fill_value = np.nan)
+            met = met.reindex(time=fp_times, method="nearest", tolerance="4h", fill_value = np.nan)
         else:
             met = met.interp(time=fp_times, method=interp_method)
         # store the original footprint times as a separate value
@@ -1778,12 +1778,20 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     - return_variable_names: bool, if true also returns a list of dicts with the variable names
     - return_asarray: bool, if true returns as an np array of shape (time, lat, lon, variables) and the variable_names
 
+    returns:
+    - if return_asarray=False and return_variable_names=False: xarray DataArray of size (fp_time, lat, lon, variable_name) where fp_time is the time of the reference footprint, and lat and lon are the artificial coordinates centered around the release point. The variable_name is a multiIndex, shown as a tuple of form (variable_name, level, time_delta) e.g. ('x_wind', 15, 6) for the x_wind at model height 15 and at t-6h. Surface variables and static variables have level = 0, and static variables always have time_delta = 0. 
+
+    - if return_asarray=True returns a np array of shape (time, lat, lon, variables) and a list of variable names in the same order as the variable dimension of the array. The variable names are shown as tuples as described above. We are trying to move away from this and towards only using xarrays.
+
+
     """
     assert hasattr(data, "dataset_format"), "It doesn't seem this is a SatelliteData object"
     #assert data.dataset_format == "square", "At the moment this only works for LoadSquareSatelliteData objects"
     assert data.met_processed == True, "Make sure that you have loaded and cut the meteorology in the SatelliteData object"
+    
+    if type(met_variables) is not dict:
+            raise ValueError("met_variables should be a dict of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list")
 
-    assert type(met_variables) is dict, "met_variables should be a dict of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list"
 
     if verbose: 
         print("------------------------")
@@ -1967,9 +1975,11 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     else:
         stacked_static_inputs=None
 
+    # make the variable name a multiindex of variable name, level and time delta, to keep track of what the variables are after concatenation
     concatenated_inputs = xr.concat(input_arrays, dim="variable_name")
-    idx = pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"])
-    concatenated_inputs = concatenated_inputs.assign_coords(variable_name=pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"]))
+    mindex = pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"])
+    mindex_coords = xr.Coordinates.from_pandas_multiindex(mindex, "variable_name")
+    concatenated_inputs = concatenated_inputs.assign_coords(mindex_coords)
 
     #latlons, idx_latlons = get_grid(data, latlon_fp)
 
