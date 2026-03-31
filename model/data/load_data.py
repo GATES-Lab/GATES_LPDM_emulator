@@ -631,7 +631,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=False, lazy_load=True, met_args={}, topog_args={}, load_fps_as="array"):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}):
 
         self.dataset_format = "square" 
         #### check domains
@@ -660,7 +660,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         #### load footprint (fp) data, subsample, crop
         if verbose: print("---- LOADING FOOTPRINTS") 
         self._load_footprints(fp_datadir)
-        self._process_footprints(lazy_load, fp_data_as=load_fps_as)
+        self._process_footprints(lazy_load)
 
         self.met_args = met_args
         self.met_processed = False
@@ -678,7 +678,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         
         if verbose: print("---- All done!")       
 
-    def _process_footprints(self, lazy_load, fp_data_as="array"):
+    def _process_footprints(self, lazy_load):
         """
         cut data around release point
         fp data returned is array of shape (time, size*size) with each footprint centered around its release point AND as a full xarray dataset of coordinates time, lat lon where lat and lon are artificial coordinates with range (0,size) and the measurement point is in the center at size//2, size//2

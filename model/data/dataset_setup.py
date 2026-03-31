@@ -249,7 +249,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
 
         concatenated_inputs = concatenated_inputs.load()
 
-        print("rechunked and loaded?!")
+        print("We are moving away from this!")
 
         if return_variable_names:
 
@@ -327,7 +327,6 @@ class InputsDataset:
         self.fit_on_subsample = scaler_params.pop("fit_on_subsample", 1)
 
         if scaler is None:
-            print(self.verbose)
             self.scaler = DefaultInputsScaler(**scaler_params, verbose=self.verbose)
         else:
             self.scaler = scaler(**scaler_params)
@@ -462,15 +461,12 @@ class LogAndShiftFpScaler:
         pass 
     
     def transform(self, fp):
-        print("new strategy2!")
-        zeros_mask = fp <= 0
         transformed_fp = np.log10(fp.where(fp > 0)) + self.minimum_oom  # take the log and add the minimum_oom), leave the zeros as is
         if self.non_negative:
             transformed_fp = transformed_fp.where(transformed_fp > 0, 0) # make all values that are zero or below zero (which can happen if the original fp was between 0 and 10**(-minimum_oom)) zero, to avoid having negative values in the transformed fp
         return transformed_fp
     
     def inverse_transform(self, transformed_fp):
-        print("inverting", self.minimum_oom)
 
         original_fp = 10**(transformed_fp - self.minimum_oom)
         
