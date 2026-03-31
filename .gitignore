@@ -1,0 +1,11 @@
+graph_weather
+*.pkl
+*.npy
+*.out
+wandb
+modloss
+*.nc
+*.err
+*.png
+*.eps
+test_run

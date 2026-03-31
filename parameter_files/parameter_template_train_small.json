@@ -16,8 +16,8 @@
 
     "variables" : {
         "met_variables":{"x_wind":[3,15], "y_wind":[3,15], "upward_air_velocity":[3,15], "atmosphere_boundary_layer_thickness":[], "surface_air_pressure":[]},
-        "static_variables":["lat_coords", "lon_coords", "x_coords", "y_coords", "topog", "landcover"],
-        "time_deltas":[6,12]
+        "static_variables":["lat_coords", "lon_coords"],
+        "time_deltas":[6]
     },
 
     "dataloader_parameters":{
