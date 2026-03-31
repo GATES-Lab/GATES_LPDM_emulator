@@ -47,11 +47,8 @@ def select_met_variables(met, variables=None):
     return met
 
 def _static_var_topog(topog_ds, coordinate_ds):
-    print(topog_ds.coords)
     if "time" not in topog_ds.coords:
-        print(">!>!>!")
         topog = topog_ds.topog.broadcast_like(coordinate_ds, exclude=["lat", "lon"])
-        print(topog)
         coordinate_ds = coordinate_ds.assign({"topog":topog})
         
     else:
@@ -101,7 +98,6 @@ def _static_var_y_coords(coordinate_ds):
     # create a mesh with [0,0] at the release point, in the y coordinate (latitude)
     grid_coords = np.meshgrid(np.arange(coordinate_ds.lon.size)-int(coordinate_ds.lon.size/2), np.arange(coordinate_ds.lat.size) -int(coordinate_ds.lat.size/2))
 
-    print(np.shape(grid_coords))
     coord = np.dstack([grid_coords[1]]*coordinate_ds.fp_time.size).transpose([2,0,1])
     coordinate_ds = coordinate_ds.assign({"x_coords":(("fp_time", "lat", "lon"), coord)})
 
