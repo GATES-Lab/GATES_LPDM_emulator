@@ -233,7 +233,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     mindex_coords = xr.Coordinates.from_pandas_multiindex(mindex, "variable_name")
     concatenated_inputs = concatenated_inputs.assign_coords(mindex_coords)
 
-    concatenated_inputs.attrs = {"source": concatenated_inputs.attrs["source"] if "source" in concatenated_inputs.attrs else "unknown","time_deltas":time_deltas, "generated on": str(datetime.now())}
+    concatenated_inputs.attrs = {"source": concatenated_inputs.attrs["source"] if "source" in concatenated_inputs.attrs else "unknown","time_deltas":time_deltas, "generated on": str(datetime.datetime.now())}
     concatenated_inputs = concatenated_inputs.astype("float32", copy=False)
     #latlons, idx_latlons = get_grid(data, latlon_fp)
 
@@ -453,21 +453,31 @@ class LogAndShiftFpScaler:
     Takes log of fp data where non-zero, and offsets by minimum order-of-magnitude value so its above zero. Does not need fitting.
     Note: translates across domain sizes
     """
-    def __init__(self, minimum_oom=5):
+    def __init__(self, minimum_oom=5, non_negative=True):
         self.minimum_oom = minimum_oom
+        self.non_negative = non_negative
         self.scaler_name = "LogAndShiftFpScaler"
 
     def fit(self, fp):
         pass 
     
     def transform(self, fp):
+        print("new strategy2!")
+        zeros_mask = fp <= 0
         transformed_fp = np.log10(fp.where(fp > 0)) + self.minimum_oom  # take the log and add the minimum_oom), leave the zeros as is
-        transformed_fp = fp.where(fp <= 0, transformed_fp)
+        if self.non_negative:
+            transformed_fp = transformed_fp.where(transformed_fp > 0, 0) # make all values that are zero or below zero (which can happen if the original fp was between 0 and 10**(-minimum_oom)) zero, to avoid having negative values in the transformed fp
         return transformed_fp
     
     def inverse_transform(self, transformed_fp):
+        print("inverting", self.minimum_oom)
+
         original_fp = 10**(transformed_fp - self.minimum_oom)
-        original_fp = transformed_fp.where(transformed_fp <= self.minimum_oom, original_fp)
+        
+        #original_fp = transformed_fp.where(transformed_fp <= self.minimum_oom, original_fp)
+        # make all negative values zero
+        original_fp = original_fp.where(original_fp >= 0, 0)
+        original_fp = original_fp.where(original_fp > 10**-int(self.minimum_oom), 0)
         return original_fp
     
 class LogAndShiftMeanFpScaler:
@@ -492,6 +502,7 @@ class LogAndShiftMeanFpScaler:
     
     def inverse_transform(self, transformed_fp):
         original_fp = 10**(transformed_fp - abs(self.logged_mean)) - 10**(-self.minimum_oom)
+        original_fp = original_fp.where(original_fp >= 0, 0)
         return original_fp
     
 class FootprintDataset:
