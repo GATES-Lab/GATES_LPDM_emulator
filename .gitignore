@@ -6,3 +6,6 @@
 /wandb
 /data
 __pycache__/
+/tests/__pycache__/
+/tests/data/__pycache__
+/tests/sample_data/*.nc
