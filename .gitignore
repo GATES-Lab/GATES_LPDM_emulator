@@ -1,8 +1,12 @@
 /model/layers/__pycache__
 /model/data/__pycache__
+/model/__pycache__
 /logs
 /uncertainty_runs
 /training_output
 /wandb
 /data
 __pycache__/
+/tests/__pycache__/
+/tests/data/__pycache__
+/tests/sample_data/*.nc
