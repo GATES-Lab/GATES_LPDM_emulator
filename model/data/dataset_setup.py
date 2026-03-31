@@ -9,6 +9,10 @@ import pandas as pd
 import joblib
 from pathlib import Path
 
+import torch
+import xbatcher as xb
+import xbatcher.loaders.torch
+
 from .load_data_helper_funs import *
 
 from .load_data import cut_satellite_met
@@ -577,3 +581,73 @@ class FootprintDataset:
         bundle = joblib.load(Path(path) / self.filename)
         #print(f"Loaded {bundle['scaler_type']} saved at {bundle['saved_at']}")
         self.scaler = bundle["scaler"]
+
+
+def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42, dataloader_params=None):
+    """
+    Build a PyTorch dataloader from the inputs and fps datasets, using xbatcher to handle batching and parallel loading. 
+    The inputs and fps should be aligned along the time dimension (fp_time for inputs and time for fps), and should have the same length along this dimension. The inputs should have dimensions (fp_time, lat, lon, variable_name) and the fps should have dimensions (time, lat, lon). If randomize is True, the data will be shuffled by permuting the time dimension before creating the dataloader. The random_seed parameter controls the seed for reproducibility of the shuffling. The dataloader_params can be used to pass additional parameters to the PyTorch DataLoader, such as num_workers for parallel loading.
+
+    Inputs:
+    - inputs: xarray DataArray of size (fp_time, lat, lon, variable_name) from get_square_satellite_inputs or similar function
+    - fps: xarray datarray, or xarray Dataset with variable "fp_transformed" of size (time, lat, lon) 
+    - batch_size: int, batch size for the dataloader
+    - randomize: bool, whether to shuffle the dataset along the time dimension. Recommended for training and not for testing
+    - random_seed: int, seed for reproducibility of the shuffling when randomize is True
+    - dataloader_params: dict, additional parameters to pass to the PyTorch DataLoader
+
+    Returns:
+    - dataloader: PyTorch DataLoader that yields batches of (inputs, fps), where inputs is a batch of the input data and fps is a batch of the corresponding footprints, withs shape (batch_size, lat, lon, variable_name) and (batch_size, lat, lon) respectively. The inputs and fps in each batch are aligned along the time dimension.
+    
+    """
+    # ensure that both have the right dimensions
+    if inputs.sizes["fp_time"] != fps.sizes["time"]:
+        raise ValueError("Incompatible dimensions between inputs and fps")
+    if isinstance(fps, xr.Dataset):
+        if "fp_transformed" not in fps:
+            raise ValueError("transformed_fps should be an xarray Dataset with a 'fp_transformed' variable, not a DataArray. Please ensure transformed_fps is the output of FootprintDataset.fit_transform() and that you are passing the correct variable.")
+    else:
+        fps = fps["fp_transformed"]
+        
+    if randomize:
+        print("randomizing dataset!")
+        # set the random seed for reproducibility
+        np.random.seed(random_seed)
+        # shuffle the data by permuting the fp_time dimension
+        permuted_time = np.random.permutation(inputs.fp_time)
+        inputs = inputs.sel(fp_time=permuted_time)
+        fps = fps.sel(time=permuted_time)
+
+    inputs = inputs.chunk(fp_time=batch_size)
+    inputs = inputs.transpose("fp_time", "lat", "lon", "variable_name")
+    fps = fps.chunk(time=batch_size)
+
+    X_bgen = xb.BatchGenerator(
+        inputs,
+        input_dims={"lat":len(inputs.lat), "lon":len(inputs.lon), "variable_name": len(inputs.variable_name)},
+        batch_dims={'fp_time': batch_size},
+        preload_batch=False,
+    )
+
+    y_bgen = xb.BatchGenerator(
+        fps,
+        input_dims={"lat":len(fps.lat), "lon":len(fps.lon)},
+        batch_dims={'time': batch_size},
+        preload_batch=False,
+    )
+
+    dataset = xbatcher.loaders.torch.MapDataset(X_bgen, y_bgen)
+    if dataloader_params is None:
+        dataloader_params = {
+            "prefetch_factor": 3,  # Prefetch up to 3 batches in advance to reduce data loading latency
+            "num_workers": 4,  # Use 4 parallel worker processes to load data concurrently
+            "persistent_workers": True,  # Keep workers alive between epochs for faster subsequent epochs
+            "multiprocessing_context": 'forkserver',  # Use "forkserver" to spawn subprocesses, ensuring stability in multiprocessing
+        }
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=None,  # Using batches defined by the dataset itself (via xbatcher)
+        **dataloader_params
+    )
+    
+    return dataloader
