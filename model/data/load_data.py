@@ -917,51 +917,8 @@ def load_default_brazil_emissions(year=2016):
 def load_default_sahara_emissions(year=2016):
     print("Obsolete: use load_emissions(domain='sahara', year=2016) instead")
 
-def cut_emissions_data(flux, fp_full, size):
-    # Obsolete: replaced by cut_emissions_data_v2.
-    # this assumes flux is a 2D np array of the same resolution and size as the footprints! it also assumes that the data is cut to a square size
 
-    release_idxs = _get_release_idxs(fp_full)
-
-    flux_cut = np.zeros((size, size, len(fp_full.time)))
-    half = int(size/2) 
-
-    # release indeces aren't unique so to save memory, process all footprints with same release at once
-    for rel_unique in np.unique(release_idxs, axis=0):
-        # find indeces across the time axis of footprints that have rel_unique as their release coordinates
-        idxs = np.where((release_idxs == rel_unique).all(axis=1))[0]
-        try:
-            emitted = flux[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half]
-            flux_cut[:,:,idxs] = emitted[:,:,None]
-            
-        except ValueError:
-            # footprint is pratially outside of domain, cut  
-            lower_lat = np.max((0, rel_unique[0]-half))
-            lower_lon = np.max((0, rel_unique[1]-half))
-            upper_lat = np.min((len(fp_full.lat.values), rel_unique[0]+half))
-            upper_lon = np.min((len(fp_full.lon.values), rel_unique[1]+half))
-
-            # cut the part of the footprint within domain area
-            emitted = flux[lower_lat:upper_lat,lower_lon:upper_lon]     
-
-            # upper_cut and lower_cut are the coordinates of the area that has been cut within the full area the cut footprint should cover
-            lower_cut_lat = np.max((0, -(rel_unique[0]-half)))
-            lower_cut_lon = np.max((0, -(rel_unique[1]-half)))
-            upper_cut_lat = np.min(((rel_unique[0]+half)-len(fp_full.lat.values), size))
-            if (rel_unique[0]+half)-len(fp_full.lat.values)>0: 
-                upper_cut_lat=size-((rel_unique[0]+half)-len(fp_full.lat.values))
-            else: upper_cut_lat=size
-            if (rel_unique[1]+half)-len(fp_full.lon.values)>0: 
-                upper_cut_lon=size-((rel_unique[1]+half)-len(fp_full.lon.values))
-            else: upper_cut_lon=size                
-
-            # save the part of the footprint that is within the domain
-            flux_cut[lower_cut_lat:upper_cut_lat,lower_cut_lon:upper_cut_lon, idxs] = emitted[:,:,None]     
-
-    return flux_cut
-
-
-def cut_emissions_data_v2(emissions, fp, size, tolerance="32D", verbose=True):
+def cut_emissions_data(emissions, fp, size, tolerance="32D", verbose=True):
     """
     Crops emissions to a size x size square centred on each footprint's release
     point, after matching each footprint to the nearest monthly emissions snapshot.
@@ -1000,7 +957,7 @@ def cut_emissions_data_v2(emissions, fp, size, tolerance="32D", verbose=True):
         pd.DatetimeIndex(fp.time.values), method="nearest", tolerance=tol)
     nan_idxs = pd.DatetimeIndex(fp.time.values)[nearest == -1]
     if verbose and len(nan_idxs):
-        print(f"cut_emissions_data_v2: {len(nan_idxs)} footprint timestamps had no "
+        print(f"cut_emissions_data: {len(nan_idxs)} footprint timestamps had no "
               f"emissions snapshot within {tolerance}. These will be NaN in the output.")
     nearest_safe = np.where(nearest != -1, nearest, 0)
     emissions_matched = emissions.isel(time=xr.DataArray(nearest_safe, dims="time"))
@@ -1019,7 +976,7 @@ def cut_emissions_data_v2(emissions, fp, size, tolerance="32D", verbose=True):
     fp_dlat = fp_lats[1] - fp_lats[0]
     fp_dlon = fp_lons[1] - fp_lons[0]
     if verbose and (not np.isclose(em_dlat, fp_dlat) or not np.isclose(em_dlon, fp_dlon)):
-        print(f"cut_emissions_data_v2: WARNING — emissions resolution "
+        print(f"cut_emissions_data: WARNING — emissions resolution "
               f"({em_dlat:.4f}, {em_dlon:.4f}) differs from fp resolution "
               f"({fp_dlat:.4f}, {fp_dlon:.4f}). Spatial alignment may be off.")
 
