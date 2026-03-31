@@ -604,11 +604,9 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     if inputs.sizes["fp_time"] != fps.sizes["time"]:
         raise ValueError("Incompatible dimensions between inputs and fps")
     if isinstance(fps, xr.Dataset):
-        if "fp_transformed" not in fps:
-            raise ValueError("transformed_fps should be an xarray Dataset with a 'fp_transformed' variable, not a DataArray. Please ensure transformed_fps is the output of FootprintDataset.fit_transform() and that you are passing the correct variable.")
-    else:
-        fps = fps["fp_transformed"]
-        
+        print(f"you passed a fps dataset with multiple variables: {list(fps.data_vars)}. All variables will be returned in the dataloader along a new dimension. ")
+        ## but make sure this is what you want! If you only want to return the transformed fps variable, pass fps['fp_transformed'] instead of the whole dataset when calling this function.
+
     if randomize:
         print("randomizing dataset!")
         # set the random seed for reproducibility
@@ -618,10 +616,10 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
         inputs = inputs.sel(fp_time=permuted_time)
         fps = fps.sel(time=permuted_time)
 
+
     inputs = inputs.chunk(fp_time=batch_size)
     inputs = inputs.transpose("fp_time", "lat", "lon", "variable_name")
-    fps = fps.chunk(time=batch_size)
-
+    
     X_bgen = xb.BatchGenerator(
         inputs,
         input_dims={"lat":len(inputs.lat), "lon":len(inputs.lon), "variable_name": len(inputs.variable_name)},
@@ -629,12 +627,31 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
         preload_batch=False,
     )
 
-    y_bgen = xb.BatchGenerator(
-        fps,
-        input_dims={"lat":len(fps.lat), "lon":len(fps.lon)},
-        batch_dims={'time': batch_size},
-        preload_batch=False,
-    )
+    # stack all variables in the fps along a new variable dimension, so that the dataloader returns all variables in the fps dataset. If fps is already an xarray DataArray, this will just add a variable dimension of size 1.
+    if isinstance(fps, xr.Dataset):
+        fps = fps.to_stacked_array(new_dim="variable_name", sample_dims=["time", "lat", "lon"], name="stacked_fps")
+        fps = fps.transpose("time", "lat", "lon", "variable_name")
+        fps_labels = fps.variable_name.values
+        fps = fps.chunk(time=batch_size, variable_name=-1)
+
+        y_bgen = xb.BatchGenerator(
+            fps,
+            input_dims={"lat":len(fps.lat), "lon":len(fps.lon), "variable_name": len(fps.variable_name)},
+            batch_dims={'time': batch_size},
+            preload_batch=False,
+        )
+
+    else:
+        fps_labels = fps.name if fps.name is not None else "fp"
+        fps = fps.chunk(time=batch_size)
+
+
+        y_bgen = xb.BatchGenerator(
+            fps,
+            input_dims={"lat":len(fps.lat), "lon":len(fps.lon)},
+            batch_dims={'time': batch_size},
+            preload_batch=False,
+        )
 
     dataset = xbatcher.loaders.torch.MapDataset(X_bgen, y_bgen)
     if dataloader_params is None:
