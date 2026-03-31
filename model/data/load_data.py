@@ -686,8 +686,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         If the square to extract escapes the footprint domain, the padded space is filled with nans or zeros or deleted according to the fill_outofdomain_with and delete_outofdomain parameters.
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        #self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full, self.fp_xr = cut_satellite_data_v2(self.fp_data_full, self.size, return_as=fp_data_as,fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
-        self.fp_xr, self.fp_data_full, self.release_idxs, padded_domain_coords = cut_satellite_data_v2(self.fp_data_full, self.size, fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, load=not lazy_load) 
+        self.fp_xr, self.fp_data_full, self.release_idxs, padded_domain_coords = cut_satellite_data(self.fp_data_full, self.size, fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, load=not lazy_load) 
         ## for now!
         self.padded_domain_coords = padded_domain_coords
 
@@ -896,17 +895,30 @@ def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
     return np.stack([lat_idxs, lon_idxs], axis=1)  # (n_times, 2)
 
 
-def load_default_brazil_emissions(year=2016, month_to_use=6):
-    emissions = xr.open_dataset("/group/chem/acrg/LPDM/emissions/SOUTHAMERICA/ch4_SOUTHAMERICA_2016_SWAMPS-v32-5_Saunois-Annual-Mean.nc")
-    emissions = emissions.sel(time=emissions.time[month_to_use-1])
-    return emissions.flux.values
 
-def load_default_sahara_emissions(year=2016, month_to_use=6):
-    emissions = xr.open_dataset(f"/group/chem/acrg/LPDM/emissions/NORTHAFRICA/ch4_NORTHAFRICA_{year}.nc")
-    emissions = emissions.sel(time=emissions.time[month_to_use-1])
-    return emissions.flux.values
+def load_emissions(domain, year=2016):
+    """
+    Load emissions for the given domain and year. Returns a lazy xarray DataArray (time, lat, lon) with all months in the file. Hardcoded paths should be replaced by a config file .
+    """
+    if domain.upper() in ["BRAZIL", "SOUTHAMERICA"]:
+        path = f"/group/chem/acrg/LPDM/emissions/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}_SWAMPS-v32-5_Saunois-Annual-Mean.nc"
+    elif domain.upper() in ["SAHARA", "NORTHAFRICA"]:
+        path = f"/group/chem/acrg/LPDM/emissions/NORTHAFRICA/ch4_NORTHAFRICA_{year}.nc"
+    else:
+        raise ValueError("Domain not recognized")
+
+    return xr.open_dataset(path).flux
+
+
+def load_default_brazil_emissions(year=2016):
+    print("Obsolete: use load_emissions(domain='brazil', year=2016) instead")
+
+
+def load_default_sahara_emissions(year=2016):
+    print("Obsolete: use load_emissions(domain='sahara', year=2016) instead")
 
 def cut_emissions_data(flux, fp_full, size):
+    # Obsolete: replaced by cut_emissions_data_v2.
     # this assumes flux is a 2D np array of the same resolution and size as the footprints! it also assumes that the data is cut to a square size
 
     release_idxs = _get_release_idxs(fp_full)
@@ -949,194 +961,104 @@ def cut_emissions_data(flux, fp_full, size):
     return flux_cut
 
 
-def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True,  return_everything=False):
+def cut_emissions_data_v2(emissions, fp, size, tolerance="32D", verbose=True):
     """
-    Obsolete: replaced by cut_satellite_data_v2, which uses vectorised isel instead of a loop + xr.concat.
+    Crops emissions to a size x size square centred on each footprint's release
+    point, after matching each footprint to the nearest monthly emissions snapshot.
 
-    cuts footprint to square of size size x size gridcells around the footprint's release point, returning with artificial lat-lon coordinates where the release point is at the middle of the grid [size/2, size/2]
+    Parameters
+    ----------
+    emissions : xr.DataArray, dims (time, lat, lon)
+        Monthly emissions snapshots (e.g. from load_default_brazil_emissions).
+    fp : xr.Dataset
+        Footprint dataset with release_lat, release_lon, and time coordinates.
+    size : int
+        Side length of crop square. Must be even.
+    tolerance : str
+        Maximum time distance for matching a footprint to an emissions snapshot.
+        Default '32D' (32 days) ensures each footprint matches at most one month.
+    verbose : bool
+        Print progress messages.
 
-    Sometimes the square of size size x size around the release point escapes the footprint domain in at least one direction. This is more likely to happen for bigger sizes, and for release points near the edge of the domain.
-    If size is bigger than the original footprint domain, the function will pad the cut footprint with either nans or zeros, depending on fill_bads_with, and if delete_outofdomain is False. If delete_outofdomain is True, the function will drop the footprints that escape the domain when cut to size.
-
-
-    Inputs:
-    - fp_full - full xr array with footprints. Should have variables .fp, .release_lat and .release_lon 
-
-    - size - size of square to cut footprints to. Must be even to ensure that the release point is in the middle of the cut footprint.
-
-    - fill_bads_with - str, options are "nans" and "zeros". If "nans" or "zeros", only the parts out of the domain are set to "nans" or "zeros" respectively. 
-    
-    - delete_outofdomain - bool, if True, deletes footprints that need to be padded (i.e. that escape the domain in at least one direction when cut to size). If False, keeps them and fills the part of the cut footprint that escapes the domain with either nans or zeros, depending on fill_bads_with. 
-    
-    the returns are a bit convoluted at the moment. Ideally, we move towards using only return_as="netcdf" and returning everything as an xarray with coordinates, but for now, to avoid breaking existing code, we have the following options:
-    - return_as - str, options are "array", "netcdf". If "array" returns as array of shape (time, size*size), if "netcdf" returns as an xarray with coordinates
-    - return_everything - bool, if True, returns extra variables together with the footprints.
-        - if return_as="array", returns
-            fp_data (array of size time x (size*size)), fp_lats (array of size time x lat), fp_lons (array of size time x lon), release_idxs (array of size time x 2 with the grid-indeces of the release point for each footprint with respect to the original domain), padding (dict with the number of gridcells that were padded in each direction, if any), something else i need to check
-        - if return_as="netcdf", returns
-            cropped_fp (xarray of the cropped footprints with coordinates time, lat, lon where lat and lon are artificial coordinates centered on the release point 0-size. the footprints are stored in variable .fp , the original lat and lon coordinates of the cut footprints are stored in variables .lat_coords and .lon_coords) release_idxs, padding (as above)
-        
-        if return_as = "both", returns all of the above, in the order of return_as="array" followed by the cropped xarray. Using this while transitioning
-         
+    Returns
+    -------
+    tuple of (xr.Dataset, pd.DatetimeIndex)
+        Dataset with variables:
+            - flux       : cropped emissions (time, lat, lon)
+            - lat_coords : actual latitudes  (time, lat)
+            - lon_coords : actual longitudes (time, lon)
+        lat/lon are artificial 0..size coordinates; release point is at size//2.
+        DatetimeIndex of fp timestamps that had no emissions match within tolerance.
     """
+    if size % 2 != 0:
+        raise ValueError(f"size must be even, got {size}")
+    half = size // 2
 
-    if size%2!=0:
-        raise ValueError("size should be even to ensure that the release point is in the middle of the cut footprint")
-    
-    half = int(size/2)
-    release_idxs = _get_release_idxs(fp_full)
+    # --- 1. Time matching ---
+    tol = pd.Timedelta(tolerance)
+    nearest = emissions.indexes["time"].get_indexer(
+        pd.DatetimeIndex(fp.time.values), method="nearest", tolerance=tol)
+    nan_idxs = pd.DatetimeIndex(fp.time.values)[nearest == -1]
+    if verbose and len(nan_idxs):
+        print(f"cut_emissions_data_v2: {len(nan_idxs)} footprint timestamps had no "
+              f"emissions snapshot within {tolerance}. These will be NaN in the output.")
+    nearest_safe = np.where(nearest != -1, nearest, 0)
+    emissions_matched = emissions.isel(time=xr.DataArray(nearest_safe, dims="time"))
+    emissions_matched["time"] = fp.time.values
+    if len(nan_idxs):
+        emissions_matched = emissions_matched.where(
+            xr.DataArray(nearest != -1, dims="time"), np.nan)
 
-    padding_needed = False
+    # --- 2. Resolution check ---
+    domain_lats = emissions_matched.lat.values
+    domain_lons = emissions_matched.lon.values
+    fp_lats = fp.lat.values
+    fp_lons = fp.lon.values
+    em_dlat = domain_lats[1] - domain_lats[0]
+    em_dlon = domain_lons[1] - domain_lons[0]
+    fp_dlat = fp_lats[1] - fp_lats[0]
+    fp_dlon = fp_lons[1] - fp_lons[0]
+    if verbose and (not np.isclose(em_dlat, fp_dlat) or not np.isclose(em_dlon, fp_dlon)):
+        print(f"cut_emissions_data_v2: WARNING — emissions resolution "
+              f"({em_dlat:.4f}, {em_dlon:.4f}) differs from fp resolution "
+              f"({fp_dlat:.4f}, {fp_dlon:.4f}). Spatial alignment may be off.")
 
-    if fill_bads_with not in ["nans", "zeros"]:
-        raise ValueError("fill_bads_with should be either 'nans' or 'zeros'")
+    # --- 3. Release indices + padding ---
+    release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
+    emissions_matched, domain_lats, domain_lons, release_idxs = _pad_domain(
+        emissions_matched, fp, release_idxs, half, pad_mode="nans")
 
-    if delete_outofdomain or fill_bads_with == "nans":
-        constant_values = np.nan
-    if fill_bads_with == "zeros":
-        constant_values = 0
-    
-    domain_lats = np.copy(fp_full.lat.values)
-    domain_lons = np.copy(fp_full.lon.values)
+    # --- 4. Vectorised isel ---
+    lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
+    lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
+    lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": fp.time})
+    lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": fp.time})
+    with dask.config.set(**{"array.slicing.split_large_chunks": False}):
+        cropped = emissions_matched.isel(lat=lat_da, lon=lon_da)
 
-    original_fp_domain = (fp_full.lat.values[0], fp_full.lat.values[-1], fp_full.lon.values[0], fp_full.lon.values[-1])
-
-    # this dict stores how many footprints needed to be expanded in each direction
-    # a footprint that needs padding in multiple directions is counted multiple times
-    fp_needed_padding_direction = {"N":0, "S":0, "E":0, "W":0}
-    # check if we need to pad in any direction
-    south_padding = release_idxs[:,0] < half
-    north_padding = (len(domain_lats) - release_idxs[:,0]) < half
-    west_padding = release_idxs[:,1] < half
-    east_padding = (len(domain_lons) - release_idxs[:,1]) < half
-    fp_needed_padding_direction["S"] = np.sum(south_padding)
-    fp_needed_padding_direction["N"] = np.sum(north_padding)
-    fp_needed_padding_direction["E"] = np.sum(east_padding)
-    fp_needed_padding_direction["W"] = np.sum(west_padding)
-    n_unique_padded_fps = np.sum(np.any([south_padding, north_padding, east_padding, west_padding], axis=0))
-    
-    padded_fps_idxs = np.where(np.any([south_padding, north_padding, east_padding, west_padding], axis=0))[0]
-    padding = {"lat":(0,0), "lon":(0,0)}
-
-    if delete_outofdomain and len(padded_fps_idxs)>0:
-        if verbose: print(f"for {len(padded_fps_idxs)} footprints, a square of size x size escapes the footprint domain in directions {fp_needed_padding_direction}. \n dropping these! if you want to keep them anyway, pass delete_outofdomain=False")
-        fp_full = fp_full.drop_sel(time=fp_full.time[padded_fps_idxs])
-        fp_needed_padding_direction = {"N":0, "S":0, "E":0, "W":0}
-        release_idxs = _get_release_idxs(fp_full)  
-
-    ## TODO make padding its own function
-    # 1) check if any footprints, when cut to size, will escape the domain
-    # if so, pad the array with either zeros or nans 
-    if fp_needed_padding_direction["S"]>0  or fp_needed_padding_direction["N"]>0:
-
-        delta_lat = domain_lats[1] -domain_lats[0]
-        to_pad = (np.max([0, half - np.min(release_idxs[:,0])]) , np.max([0, half - (len(domain_lats) - np.max(release_idxs[:,0]))]))
-        padding["lat"] = to_pad
-        print(f"careful! We had to pad the footprints along the latitude dimension to extract size {size} ({to_pad[0]} and {to_pad[1]} idxs on either side) Padding with {constant_values}") 
-        
-        fp_full = fp_full.pad(pad_width={"lat":to_pad}, constant_values=constant_values)
-    
-        padding_needed = True
-
-        # reassign coordinates to ensure that padded values have the right coordinate spacing
-        updated_lats = sorted([np.min(domain_lats)-(i+1)*delta_lat for i in range(to_pad[0])]) + list(domain_lats) + sorted([np.max(domain_lats)+(i+1)*delta_lat for i in range(to_pad[1])])
-        fp_full = fp_full.assign_coords({"lat":updated_lats})  
-          
-
-    if fp_needed_padding_direction["E"]>0  or fp_needed_padding_direction["W"]>0:
-        delta_lon = domain_lons[1] - domain_lons[0]
-        to_pad = (np.max([0, half - np.min(release_idxs[:,1])]) , np.max([0, half - (len(domain_lons) - np.max(release_idxs[:,1]))]))
-        padding["lon"] = to_pad
-        print(f"careful! We had to pad the footprints along the longitude dimension to extract size {size} ({to_pad[0]} and {to_pad[1]} idxs on either side) Padding with {constant_values}") 
-        
-        fp_full = fp_full.pad(pad_width={"lon":to_pad}, constant_values=constant_values)
-    
-        padding_needed = True
-        
-        # reassign coordinates to ensure that padded values have the right spacing
-        updated_lons = sorted([np.min(domain_lons)-(i+1)*delta_lon for i in range(to_pad[0])]) + list(domain_lons) + sorted([np.max(domain_lons)+(i+1)*delta_lon for i in range(to_pad[1])])
-        fp_full = fp_full.assign_coords({"lon":updated_lons}) 
-        
-
-    if padding_needed:
-        # recalculate the release indeces to account for the new padding that was just added
-        domain_lats = np.copy(fp_full.lat.values)
-        domain_lons = np.copy(fp_full.lon.values)
-        release_idxs = _get_release_idxs(fp_full)  
-
-        if verbose: # print some stats 
-            print(f"{n_unique_padded_fps} footprints were at least partially filled with {fill_bads_with} because they were cutting outside of the footprint file domain (this is {round(100*n_unique_padded_fps/len(fp_full.time.values), 2)}% of samples)")
-            print(f"Padding was needed for the following number of footprints along each direction: {fp_needed_padding_direction}")
-    
-    cropped_arrays = []
-
-    coords_array = np.arange(size)
-
-    
-    # 2) crop the data to an array of sizexsize, for each unique coordinate. store as a list of small arrays with artificial lat-lon coordinates 0-size, concatenate at the end along the time dimension 
-    for rel_unique in np.unique(release_idxs, axis=0):
-        # find the corresponding timestamps
-        idxs = np.where((release_idxs == rel_unique).all(axis=1))[0]
-
-        # crop the meteorology around the releasepoint
-        cutfp = fp_full.sel(time=fp_full.time.values[idxs], lat=domain_lats[rel_unique[0]-half:rel_unique[0]+half], lon=domain_lons[rel_unique[1]-half:rel_unique[1]+half])          
-
-        # copy the latitude/longitude values for this specific cropped square
-        lats = cutfp.lat.values.copy()
-        lons = cutfp.lon.values.copy()
-        #print(cutfp.fp)
-        # store them as variables to use as inputs and assign artificial coordinates
-        cutfp = cutfp.assign_coords({"lat":coords_array, "lon":coords_array}).assign({"lat_coords":(("lat"), lats), "lon_coords":(("lon"), lons)})
-
-        cropped_arrays.append(cutfp)
-
-    # concatenate all of the cropped arrays
-    cropped_fp = xr.concat(cropped_arrays, dim="time")
-    cropped_fp = cropped_fp.sortby("time") 
-    cropped_fp = cropped_fp[["fp", "lat_coords", "lon_coords", "release_lat", "release_lon"]]
-    cropped_fp = cropped_fp.transpose("time", "lat", "lon") # make sure fp is in the right order of dimensions
-    cropped_fp = cropped_fp.chunk({"time":100, "lat":-1, "lon":-1}) # chunk along time to avoid memory issues, can be loaded into memory later if needed
-
-    # load into memory, if required
-    if load:
-        print("loading cropped footprint dataset into memory. If you only want to lazy-load, pass load=False")
-        cropped_fp.load()    
-
-    if return_as=="netcdf":
-        if return_everything:
-            return cropped_fp, release_idxs, padding
-        else:
-            return cropped_fp
-    elif return_as=="array":
-        fp_data = cropped_fp.fp.transpose("time","lat", "lon").values
-        fp_data = np.reshape(fp_data, (len(cropped_fp.time), size**2))
-
-        if return_everything:
-            fp_lats = cropped_fp.lat_coords.values
-            fp_lons = cropped_fp.lon_coords.values  
-            return fp_data, fp_lats, fp_lons, release_idxs, padding, fp_full.sel(lat=slice(original_fp_domain[0], original_fp_domain[1]), lon=slice(original_fp_domain[2], original_fp_domain[3]))               
-        else:
-            return fp_data     
-    elif return_as=="both":
-        fp_data = cropped_fp.fp.transpose("time","lat", "lon").values
-        fp_data = np.reshape(fp_data, (len(cropped_fp.time), size**2))
-
-        if return_everything:
-            fp_lats = cropped_fp.lat_coords.values
-            fp_lons = cropped_fp.lon_coords.values  
-            return fp_data, fp_lats, fp_lons, release_idxs, padding, fp_full.sel(lat=slice(original_fp_domain[0], original_fp_domain[1]), lon=slice(original_fp_domain[2], original_fp_domain[3])), cropped_fp
+    # --- 5. Assign coordinates + return ---
+    cropped = (
+        cropped
+        .assign_coords(lat=np.arange(size), lon=np.arange(size))
+        .to_dataset(name="flux")
+        .assign({
+            "lat_coords": xr.DataArray(
+                domain_lats[lat_indices], dims=["time", "lat"],
+                coords={"time": fp.time}),
+            "lon_coords": xr.DataArray(
+                domain_lons[lon_indices], dims=["time", "lon"],
+                coords={"time": fp.time}),
+        })
+    )
+    return cropped, nan_idxs
 
 
-def cut_satellite_data_v2(fp_full, size, fill_bads_with="nans", delete_outofdomain=False,
+def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=False,
                            load=False, verbose=True):
     """
     Cuts footprints to a size x size square centred on each release point, returning
     an xarray Dataset with artificial lat/lon coordinates 0..size and the actual
     coordinates stored as lat_coords (time, lat) and lon_coords (time, lon) variables.
-
-    Vectorised replacement for cut_satellite_data: uses a single xr.isel() call with
-    DataArray index arrays instead of a Python loop + xr.concat, producing one coherent
-    lazy dask graph.
 
     Parameters
     ----------
