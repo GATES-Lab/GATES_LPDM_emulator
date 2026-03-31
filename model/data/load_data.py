@@ -280,12 +280,10 @@ class LoadBaseSatelliteData:
             landcover_path = "/group/chem/acrg/LPDM/topog_NAME/land_cover.nc"
         with xr.load_dataset(landcover_path) as landcover_dataset:
             landcover_file = landcover_dataset.copy()
-            
 
-        topog_file = self._interp_topog(topog_file, padding=self.padding)
+        topog_file = self._interp_topog(topog_file, padding=self.padded_domain_coords)
 
-        landcover_file = self._interp_landcover(landcover_file, padding=self.padding)
-
+        landcover_file = self._interp_landcover(landcover_file, padding=self.padded_domain_coords)
         return topog_file, landcover_file
 
     def _get_meteorology_file(self, met_datadir, lazy_load=True):
@@ -377,16 +375,20 @@ class LoadBaseSatelliteData:
         # assumes the same resolution and domain as the footprints, unless padding is passed (as a dict of shape {"lat":(0,0), "lon":(0,0)})
         """
 
-        lat_values = list(self.fp_data_full.lat.values)
-        lon_values = list(self.fp_data_full.lon.values)
+        #lat_values = list(self.fp_data_full.lat.values)
+        #lon_values = list(self.fp_data_full.lon.values)
 
+        if padding is not None:
+            lat_values = padding[0]
+            lon_values = padding[1]
+        """
         if padding is not None and padding != {"lat":(0,0), "lon":(0,0)}:
             delta_lon = lon_values[1]-lon_values[0]
             delta_lat = lat_values[1]-lat_values[0]               
             lat_values = np.array(sorted(lat_values + [np.max(lat_values)+delta_lat*i for i in range(5+padding["lat"][1])]+ [np.min(lat_values)-delta_lat*i for i in range(5+padding["lat"][0])]))
             lon_values = np.array(sorted(lon_values + [np.max(lon_values)+delta_lon*i for i in range(5+padding["lon"][1])]+ [np.min(lon_values)-delta_lon*i for i in range(5+padding["lon"][0])]))       
 
-
+        """
         topog_file = topog_file.interp(latitude=lat_values, longitude=lon_values).rename({"latitude":"lat", "longitude":"lon"})
 
         return topog_file
@@ -396,15 +398,19 @@ class LoadBaseSatelliteData:
         loads the landcover file, interpolates
         # assumes the same resolution and domain as the footprints, unless padding is passed (as a dict of shape {"lat":(0,0), "lon":(0,0)})
         """
-        lat_values = list(self.fp_data_full.lat.values)
-        lon_values = list(self.fp_data_full.lon.values)
+        ##lat_values = list(self.fp_data_full.lat.values)
+        ##lon_values = list(self.fp_data_full.lon.values)
 
+        if padding is not None:
+            lat_values = padding[0]
+            lon_values = padding[1]
+        """
         if padding is not None and padding != {"lat":(0,0), "lon":(0,0)}:
             delta_lon = lon_values[1]-lon_values[0]
             delta_lat = lat_values[1]-lat_values[0]               
             lat_values = np.array(sorted(lat_values + [np.max(lat_values)+delta_lat*i for i in range(5+padding["lat"][1])]+ [np.min(lat_values)-delta_lat*i for i in range(5+padding["lat"][0])]))
             lon_values = np.array(sorted(lon_values + [np.max(lon_values)+delta_lon*i for i in range(5+padding["lon"][1])]+ [np.min(lon_values)-delta_lon*i for i in range(5+padding["lon"][0])]))   
-
+        """
 
         landcover_file = landcover_file.assign_coords(lon=(((landcover_file.lon + 180) % 360) - 180))
         landcover_file = landcover_file.interp(lat=lat_values, lon=lon_values, method="nearest")
@@ -680,8 +686,10 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         If the square to extract escapes the footprint domain, the padded space is filled with nans or zeros or deleted according to the fill_outofdomain_with and delete_outofdomain parameters.
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full, self.fp_xr = cut_satellite_data(self.fp_data_full, self.size, return_as=fp_data_as,fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
-
+        #self.fp_data, self.fp_lats, self.fp_lons, self.release_idxs, self.padding, self.fp_data_full, self.fp_xr = cut_satellite_data_v2(self.fp_data_full, self.size, return_as=fp_data_as,fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, return_everything=True, load=not lazy_load) 
+        self.fp_xr, self.fp_data_full, self.release_idxs, padded_domain_coords = cut_satellite_data_v2(self.fp_data_full, self.size, fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, load=not lazy_load) 
+        ## for now!
+        self.padded_domain_coords = padded_domain_coords
 
     def _process_meteorology(self,rechunk=0,lazy_load=True):
         """
@@ -690,10 +698,10 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         """
         if self.verbose: print("----- Cutting met")
         self.metsize=self.size
-        if self.fill_outofdomain_with=="nans" or self.delete_outofdomain:
-            pad_mode = "nans"
-        if self.fill_outofdomain_with=="zeros":
-            pad_mode = "edge"
+        #if self.fill_outofdomain_with=="nans" or self.delete_outofdomain:
+        #    pad_mode = "nans"
+        #if self.fill_outofdomain_with=="zeros":
+        pad_mode = "edge"
         self.met = cut_satellite_met(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True)
 
         if rechunk>0:
@@ -705,69 +713,16 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     
     def _process_topog_and_landcover(self):
         """
-        cut topography to the same domain covered by the cut footprints (ie a sizexsize square centered around measurement point)
-        inputs are the latitudes and longitudes that the topog was interpolated to (this is clunky)
+        Obsolete as standalone logic: delegates to cut_topog_data.
 
-        uses object attributes self.topog_file, self.fp_data_full, self.size, self.fp_data, returning self.topog as an xarray dataset with dimensions time, lat, lon, and data variables topog (surface altitude), landcover (landcover type) and disaggregated_landcover (sea mask + nine types of land cover fractions). The lat and lon coordinates are artificial coordinates with range (0,size) and the measurement point is in the center at size//2, size//2. If the square to extract escapes the topog domain, the padded space is filled with zeros.
-
-        ENHANCEMENT: the topog dataset is often larger than the footprint dataset, so cutting it and padding with zeros is redundant!
+        Cuts topography and landcover to a size x size square centred on each
+        footprint's release point.
         """
-        if self.verbose: print("----- Cutting topog")
-
-        topog_lats = list(self.topog_file.lat.values)
-        topog_lons = list(self.topog_file.lon.values)
-
-        topog_release_idxs = _get_release_idxs(self.fp_data_full, domain_lats=topog_lats, domain_lons=topog_lons)
-
-        half = int(self.size/2)
-        full_topog=np.zeros_like(self.fp_data)
-        full_landcover=np.zeros_like(self.fp_data)
-        
-        full_topog=np.reshape(full_topog, (len(self.fp_data), self.size, self.size))
-        full_landcover=np.reshape(full_landcover, (len(self.fp_data), self.size, self.size))
-
-        n_disagg_landcover_types = 10
-        disaggregated_landcover = np.zeros((len(self.fp_data), self.size, self.size, n_disagg_landcover_types)) # sea mask + nine types of land cover
-
-        failed_idxs = []
-        for rel_unique in np.unique(topog_release_idxs, axis=0):
-            idxs = np.where((topog_release_idxs == rel_unique).all(axis=1))[0]  
-            try:
-                full_topog[idxs, :,:] = self.topog_file.surface_altitude.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half][np.newaxis, :]
-                full_landcover[idxs, :,:] = self.landcover_file.landcover_type.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half][np.newaxis, :]  
-
-                disaggregated_landcover[idxs, :,:,0] = self.landcover_file.land_binary_mask.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half][np.newaxis, :]   
-                disaggregated_landcover[idxs, :,:,1:] = self.landcover_file.landcover_fraction.values[rel_unique[0]-half:rel_unique[0]+half, rel_unique[1]-half:rel_unique[1]+half,:][np.newaxis, :]   
-
-
-            except IndexError:
-                empty = np.empty_like(full_topog[idxs, :,:])
-                empty[:] = np.nan
-                full_topog[idxs, :,:] = empty
-                full_landcover[idxs, :,:] = empty
-                failed_idxs = failed_idxs + list(idxs)
-            
-        
-        # reverse sea mask so that 1 is sea and zero is land
-        disaggregated_landcover[:, :,:,0] = 1 - disaggregated_landcover[:, :,:,0] 
-        # remove the nans that in the original file show the sea mask
-        disaggregated_landcover[:, :,:,1:] = np.nan_to_num(disaggregated_landcover[:, :,:,1:], copy=False)
-    
-        coords = {"time":("time", self.fp_data_full.time.values), "lat":("lat", np.arange(self.size)), "lon":np.arange(self.size), "landcover_level":np.arange(n_disagg_landcover_types)}
-
-        self.topog = xr.Dataset(
-            data_vars = 
-            {"topog": (["time", "lat", "lon"], full_topog),
-            "landcover": (["time", "lat", "lon"], full_landcover),
-             "disaggregated_landcover": (["time", "lat", "lon", "landcover_level"], disaggregated_landcover) },
-             coords = coords
-             )
-        
-        if len(failed_idxs)>0:
-            if self.verbose: print(f"remove {len(failed_idxs)} failed idxs for topog")
-            self.remove_indeces(failed_idxs)
-
-        # returning as a netcdf dataset
+        if self.verbose:
+            print("----- Cutting topog")
+        self.topog = cut_topog_data(
+            self.topog_file, self.landcover_file, self.fp_data_full,
+            self.size, pad_mode="zeros")
         return self.topog
 
     def remove_indeces(self, nan_idxs):
@@ -776,6 +731,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         """
         self.fp_data_full = self.fp_data_full.sel(time=np.delete(self.fp_data_full.time.values, nan_idxs))
         if hasattr(self, "fp_data"):
+        # this should now be redundant
             self.fp_lats = np.delete(self.fp_lats, nan_idxs, axis=0)
             self.fp_lons = np.delete(self.fp_lons, nan_idxs, axis=0)
             self.fp_data = np.delete(self.fp_data, nan_idxs, axis=0)
@@ -995,6 +951,8 @@ def cut_emissions_data(flux, fp_full, size):
 
 def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=False, load=True, return_as="netcdf", verbose=True,  return_everything=False):
     """
+    Obsolete: replaced by cut_satellite_data_v2, which uses vectorised isel instead of a loop + xr.concat.
+
     cuts footprint to square of size size x size gridcells around the footprint's release point, returning with artificial lat-lon coordinates where the release point is at the middle of the grid [size/2, size/2]
 
     Sometimes the square of size size x size around the release point escapes the footprint domain in at least one direction. This is more likely to happen for bigger sizes, and for release points near the edge of the domain.
@@ -1169,6 +1127,99 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
             return fp_data, fp_lats, fp_lons, release_idxs, padding, fp_full.sel(lat=slice(original_fp_domain[0], original_fp_domain[1]), lon=slice(original_fp_domain[2], original_fp_domain[3])), cropped_fp
 
 
+def cut_satellite_data_v2(fp_full, size, fill_bads_with="nans", delete_outofdomain=False,
+                           load=False, verbose=True):
+    """
+    Cuts footprints to a size x size square centred on each release point, returning
+    an xarray Dataset with artificial lat/lon coordinates 0..size and the actual
+    coordinates stored as lat_coords (time, lat) and lon_coords (time, lon) variables.
+
+    Vectorised replacement for cut_satellite_data: uses a single xr.isel() call with
+    DataArray index arrays instead of a Python loop + xr.concat, producing one coherent
+    lazy dask graph.
+
+    Parameters
+    ----------
+    fp_full : xarray.Dataset
+        Full footprint dataset with variables fp, release_lat, release_lon and
+        dimensions (time, lat, lon).
+    size : int
+        Side length of the square crop. Must be even.
+    fill_bads_with : str
+        'nans' or 'zeros' — fill value for out-of-domain padding.
+    delete_outofdomain : bool
+        If True, drop footprints whose crop square escapes the domain rather than padding.
+    load : bool
+        If True, load the result into memory immediately.
+    verbose : bool
+        Print progress messages.
+    """
+    print("using new cut satellite data!!!")
+    if size % 2 != 0:
+        raise ValueError("size must be even so the release point is centred")
+    half = size // 2
+
+    release_idxs = _get_release_idxs(fp_full)
+
+    if delete_outofdomain:
+        domain_lats = fp_full.lat.values
+        domain_lons = fp_full.lon.values
+        south = release_idxs[:, 0] < half
+        north = (len(domain_lats) - release_idxs[:, 0]) < half
+        west  = release_idxs[:, 1] < half
+        east  = (len(domain_lons) - release_idxs[:, 1]) < half
+        oob = np.where(np.any([south, north, west, east], axis=0))[0]
+        if len(oob) > 0:
+            if verbose:
+                print(f"Dropping {len(oob)} footprints that escape the domain when cut to size {size}")
+            fp_full = fp_full.drop_sel(time=fp_full.time.values[oob])
+            release_idxs = _get_release_idxs(fp_full)
+
+    before_padding_coords = (fp_full.lat.values.copy(), fp_full.lon.values.copy())
+
+    fp_full, domain_lats, domain_lons, release_idxs = _pad_domain(
+        fp_full, fp_full, release_idxs, half, pad_mode=fill_bads_with)
+
+    padded_domain_coords = (domain_lats, domain_lons)
+    # integer index arrays: shape (n_times, size)
+    lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
+    lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
+
+    lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": fp_full.time})
+    lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": fp_full.time})
+
+    with dask.config.set(**{"array.slicing.split_large_chunks": False}):
+        cropped_fp = fp_full.isel(lat=lat_da, lon=lon_da)
+
+    cropped_fp = (
+        cropped_fp
+        .assign_coords(lat=np.arange(size), lon=np.arange(size))
+        .assign({
+            "lat_coords": xr.DataArray(
+                domain_lats[lat_indices], dims=["time", "lat"],
+                coords={"time": cropped_fp.time}),
+            "lon_coords": xr.DataArray(
+                domain_lons[lon_indices], dims=["time", "lon"],
+                coords={"time": cropped_fp.time}),
+        })
+    )
+
+    cropped_fp = cropped_fp[["fp", "lat_coords", "lon_coords", "release_lat", "release_lon"]]
+    cropped_fp = cropped_fp.transpose("time", "lat", "lon")
+    cropped_fp = cropped_fp.chunk({"time": 100, "lat": -1, "lon": -1})
+
+    fp_full = fp_full.sel(lat=slice(before_padding_coords[0][0], before_padding_coords[0][-1]),
+                          lon=slice(before_padding_coords[1][0], before_padding_coords[1][-1]))
+
+    if load:
+        if verbose:
+            print("loading cropped footprint dataset into memory")
+        cropped_fp.load()
+    # return the same outputs as cut_satellite_data, except without the option to return as an array (we can add this later if needed, but it can be done easily with .values and reshape on the returned xarray)
+    #, fp_lats, fp_lons, release_idxs, padding, fp_full.sel(lat=slice(original_fp_domain[0], original_fp_domain[1]), lon=slice(original_fp_domain[2], original_fp_domain[3])), cropped_fp
+    return cropped_fp, fp_full, release_idxs, padded_domain_coords
+
+
 def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_tolerance="4h"):
     """
     Reindexes/interpolates met to footprint times (or time-shifted versions).
@@ -1199,19 +1250,22 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
     return met, nan_idxs
 
 
-def _pad_met_domain(met, fp, release_idxs, half, pad_mode):
+def _pad_domain(data, fp, release_idxs, half, pad_mode):
     """
-    Extends the met domain so that a (2*half) x (2*half) crop is possible for
-    every release point.  Returns (met_padded, domain_lats, domain_lons,
-    updated_release_idxs).
+    Extends the spatial domain of an xarray Dataset/DataArray so that a
+    (2*half) x (2*half) crop is possible for every footprint release point.
+    Works for any xarray object with lat/lon dimensions (met, fp, topog, etc.).
+    Returns (data_padded, domain_lats, domain_lons, updated_release_idxs).
 
-    For pad_mode='nans': uses xr.reindex with fill_value=np.nan — lazy, and
-    coordinates are defined upfront so no post-hoc patching is needed.
+    For pad_mode='nans': uses xr.reindex with fill_value nan — lazy, 
+    For pad_mode='zeros': uses xr.reindex with fill_value 0 — lazy, but be careful if your data has valid zeros!
     For pad_mode='edge': uses xr.pad(mode='edge') then assigns the correct
     extended coordinate values.
     """
-    domain_lats = met.lat.values.copy()
-    domain_lons = met.lon.values.copy()
+    if pad_mode not in ["nans", "zeros", "edge"]:
+        raise ValueError("pad_mode should be one of 'nans', 'zeros', or 'edge'")
+    domain_lats = data.lat.values.copy()
+    domain_lons = data.lon.values.copy()
     delta_lat = domain_lats[1] - domain_lats[0]
     delta_lon = domain_lons[1] - domain_lons[0]
     padding_needed = False
@@ -1220,6 +1274,7 @@ def _pad_met_domain(met, fp, release_idxs, half, pad_mode):
     need_N = np.sum((len(domain_lats) - release_idxs[:, 0]) < half)
     need_W = np.sum(release_idxs[:, 1] < half)
     need_E = np.sum((len(domain_lons) - release_idxs[:, 1]) < half)
+
 
     if need_S > 0 or need_N > 0:
         pad_S = int(np.max([0, half - np.min(release_idxs[:, 0])]))
@@ -1230,12 +1285,14 @@ def _pad_met_domain(met, fp, release_idxs, half, pad_mode):
             + list(domain_lats)
             + [domain_lats[-1] + (i + 1) * delta_lat for i in range(pad_N)]
         )
-        if pad_mode == "nans":
-            met = met.reindex(lat=extended_lats, fill_value=np.nan)
-        else:  # "edge"
-            met = met.pad(pad_width={"lat": (pad_S, pad_N)}, mode="edge")
-            met = met.assign_coords({"lat": extended_lats})
-        domain_lats = met.lat.values.copy()
+        if pad_mode == "edge":
+            data = data.pad(pad_width={"lat": (pad_S, pad_N)}, mode="edge")
+            data = data.assign_coords({"lat": extended_lats})
+        elif pad_mode == "zeros":
+            data = data.reindex(lat=extended_lats, fill_value=0)
+        elif pad_mode == "nans":
+            data = data.reindex(lat=extended_lats, fill_value=np.nan)
+        domain_lats = data.lat.values.copy()
         padding_needed = True
 
     if need_W > 0 or need_E > 0:
@@ -1247,18 +1304,20 @@ def _pad_met_domain(met, fp, release_idxs, half, pad_mode):
             + list(domain_lons)
             + [domain_lons[-1] + (i + 1) * delta_lon for i in range(pad_E)]
         )
-        if pad_mode == "nans":
-            met = met.reindex(lon=extended_lons, fill_value=np.nan)
-        else:  # "edge"
-            met = met.pad(pad_width={"lon": (pad_W, pad_E)}, mode="edge")
-            met = met.assign_coords({"lon": extended_lons})
-        domain_lons = met.lon.values.copy()
+        if pad_mode == "edge":
+            data = data.pad(pad_width={"lon": (pad_W, pad_E)}, mode="edge")
+            data = data.assign_coords({"lon": extended_lons})
+        elif pad_mode == "zeros":
+            data = data.reindex(lon=extended_lons, fill_value=0)
+        elif pad_mode == "nans":
+            data = data.reindex(lon=extended_lons, fill_value=np.nan)
+        domain_lons = data.lon.values.copy()
         padding_needed = True
 
     if padding_needed:
         release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
 
-    return met, domain_lats, domain_lons, release_idxs
+    return data, domain_lats, domain_lons, release_idxs
 
 
 def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
@@ -1321,7 +1380,7 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
         print("Warning: met and fp resolutions differ — cropping may be inaccurate")
 
     release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
-    met, domain_lats, domain_lons, release_idxs = _pad_met_domain(
+    met, domain_lats, domain_lons, release_idxs = _pad_domain(
         met, fp, release_idxs, half, pad_mode)
 
     # build integer index arrays: shape (n_times, metsize)
@@ -1428,6 +1487,90 @@ def grid_coordinates(side):
     z[:, 0] = yy.reshape(side**2)
     return z
 """
+
+def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
+    """
+    Crops topography and landcover to a size x size square centred on each
+    footprint's release point.  Returns an xarray Dataset with dimensions
+    (time, lat, lon) and variables:
+        - topog: surface altitude, shape (time, lat, lon)
+        - landcover: integer landcover type, shape (time, lat, lon)
+        - disaggregated_landcover: (time, lat, lon, landcover_level) with
+          land_binary_mask inverted (sea=1, land=0) in level 0 and 9 fractional
+          landcover types in levels 1–9
+    lat and lon are artificial coordinates 0..size; actual geographic coordinates
+    are stored in lat_coords (time, lat) and lon_coords (time, lon) variables.
+
+    Parameters
+    ----------
+    topog_file : xarray.Dataset
+        Topography dataset with variable surface_altitude and dimensions (lat, lon).
+    landcover_file : xarray.Dataset
+        Landcover dataset with variables landcover_type, land_binary_mask, and
+        landcover_fraction (lat, lon, pseudo_level),with coordinates lat, lon, pseudo_level
+    fp : xarray.Dataset
+        Footprint dataset providing release_lat, release_lon, and time coordinates.
+    size : int
+        Side length of the square crop. Must be even.
+    pad_mode : str
+        How to pad if a crop escapes the topog domain: 'zeros' (default) or 'edge'.
+    verbose : bool
+        Print progress messages.
+    """
+    if size % 2 != 0:
+        raise ValueError("size must be even so the release point is centred")
+    half = size // 2
+
+    domain_lats = topog_file.lat.values
+    domain_lons = topog_file.lon.values
+    release_idxs = _get_release_idxs(fp, domain_lats=domain_lats, domain_lons=domain_lons)
+
+    # pad both topog and landcover using the same release indices
+    topog_file, domain_lats, domain_lons, release_idxs = _pad_domain(
+        topog_file, fp, release_idxs, half, pad_mode=pad_mode)
+    landcover_file, _, _, _ = _pad_domain(
+        landcover_file, fp,
+        _get_release_idxs(fp, domain_lats=landcover_file.lat.values, domain_lons=landcover_file.lon.values),
+        half, pad_mode=pad_mode)
+
+    # integer index arrays: shape (n_times, size)
+    lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
+    lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
+
+    lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": fp.time})
+    lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": fp.time})
+
+    # isel on static (lat, lon) arrays — DataArray indexers introduce the time dim
+    with dask.config.set(**{"array.slicing.split_large_chunks": False}):
+        topog_crop      = topog_file.surface_altitude.isel(lat=lat_da, lon=lon_da)
+        landcover_crop  = landcover_file.landcover_type.isel(lat=lat_da, lon=lon_da)
+        sea_mask_crop   = landcover_file.land_binary_mask.isel(lat=lat_da, lon=lon_da)
+        lc_frac_crop    = landcover_file.landcover_fraction.isel(lat=lat_da, lon=lon_da)
+
+    # assemble disaggregated_landcover: level 0 = inverted sea mask, levels 1-9 = fractions
+    # rename whatever the fractional landcover's last dim is called to "landcover_level"
+    # sea level mask should be, like topog, not having a landcover_level dimension, so we expand it and concat along the new landcover_level dim
+
+    frac_levels = lc_frac_crop.fillna(0.0).rename({"pseudo_level": "landcover_level"})
+    sea_level = (1 - sea_mask_crop)
+    sea_level = sea_level.assign_coords(landcover_level=0)
+    #.expand_dims({"landcover_level": 1}, axis=-1)
+    disagg = xr.concat([sea_level, frac_levels], dim="landcover_level")
+    #disagg = disagg.assign_coords(landcover_level=np.arange(10))
+    result = xr.Dataset({
+        "topog":                    topog_crop,
+        "landcover":                landcover_crop,
+        "disaggregated_landcover":  disagg,
+        "lat_coords": xr.DataArray(
+            domain_lats[lat_indices], dims=["time", "lat"], coords={"time": fp.time}),
+        "lon_coords": xr.DataArray(
+            domain_lons[lon_indices], dims=["time", "lon"], coords={"time": fp.time}),
+    })
+
+    result = result.assign_coords(lat=np.arange(size), lon=np.arange(size))
+
+    return result
+
 
 
 
