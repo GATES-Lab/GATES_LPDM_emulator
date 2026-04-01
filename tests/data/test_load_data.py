@@ -520,3 +520,69 @@ class TestEdgeCases:
         expected = len(fp_ds.time.values[::2])  # same slice as _subsample_frequency uses
         assert len(obj.fp_data_full.time) == expected, \
             f"freq=2 should give {expected} timesteps, got {len(obj.fp_data_full.time)}"
+
+
+    # ── _check_domain_overlap edge case tests ────────────────────────────────────
+
+    class TestCheckDomainOverlap:
+        """Tests for _check_domain_overlap edge conditions."""
+
+        def _make_footprint_ds(self, lat_range, lon_range, release_lat, release_lon):
+            lats = np.linspace(lat_range[0], lat_range[1], 5)
+            lons = np.linspace(lon_range[0], lon_range[1], 5)
+            return xr.Dataset(
+                {
+                    "fp": (["time", "lat", "lon"], np.ones((1, 5, 5), dtype="float32")),
+                    "release_lat": ("time", [release_lat]),
+                    "release_lon": ("time", [release_lon]),
+                },
+                coords={
+                    "time": pd.date_range(TEST_START_DATE, periods=1),
+                    "lat": lats,
+                    "lon": lons,
+                },
+            )
+
+        def _make_data_ds(self, lat_range, lon_range):
+            lats = np.linspace(lat_range[0], lat_range[1], 5)
+            lons = np.linspace(lon_range[0], lon_range[1], 5)
+            return xr.Dataset(
+                {"data": (["lat", "lon"], np.ones((5, 5), dtype="float32"))},
+                coords={"lat": lats, "lon": lons},
+            )
+
+        def test_no_spatial_overlap_raises_error(self):
+            fp = self._make_footprint_ds(
+                lat_range=(-10.0, 10.0),
+                lon_range=(-50.0, -40.0),
+                release_lat=8.0,
+                release_lon=-42.0,
+            )
+            data2 = self._make_data_ds(lat_range=(20.0, 30.0), lon_range=(-20.0, -10.0))
+
+            def _mock_load_fps(self_, fp_datadir):
+                self_.fp_data_full = fp
+
+            with patch.object(LoadBaseSatelliteData, "_load_footprints", _mock_load_fps):
+                obj = LoadBaseSatelliteData(year=TEST_YEAR, month=TEST_MONTH)
+
+            with pytest.raises(ValueError, match="No spatial overlap"):
+                obj._check_domain_overlap(fp, data2, "footprints", "meteorology")
+
+        def test_domain_close_to_release_warns(self):
+            fp = self._make_footprint_ds(
+                lat_range=(-10.0, 10.0),
+                lon_range=(-50.0, -40.0),
+                release_lat=9.0,
+                release_lon=-41.0,
+            )
+            data2 = self._make_data_ds(lat_range=(-5.0, 8.0), lon_range=(-48.0, -40.9))
+
+            def _mock_load_fps(self_, fp_datadir):
+                self_.fp_data_full = fp
+
+            with patch.object(LoadBaseSatelliteData, "_load_footprints", _mock_load_fps):
+                obj = LoadBaseSatelliteData(year=TEST_YEAR, month=TEST_MONTH)
+
+            with pytest.warns(UserWarning, match="does not fully cover the area"):
+                obj._check_domain_overlap(fp, data2, "footprints", "meteorology")

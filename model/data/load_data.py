@@ -23,6 +23,29 @@ import cartopy
 
 from .load_data_helper_funs import *
 
+
+def _rename_latlon(ds):
+    """Rename latitude→lat and longitude→lon if those names are present as dims."""
+    rename = {}
+    if "latitude" in ds.dims:
+        rename["latitude"] = "lat"
+    if "longitude" in ds.dims:
+        rename["longitude"] = "lon"
+    return ds.rename(rename) if rename else ds
+
+
+def _wrap_longitudes(ds):
+    """Convert longitudes from 0–360 to –180 to 180 if any values exceed 180.
+    Detects the coordinate name automatically (lon or longitude).
+    Sorts by the longitude coordinate after wrapping so the grid stays monotonic.
+    """
+    lon_name = next((n for n in ("lon", "longitude") if n in ds.coords), None)
+    if lon_name is None or float(ds[lon_name].max()) <= 180:
+        return ds
+    ds = ds.assign_coords({lon_name: (((ds[lon_name] + 180) % 360) - 180)})
+    return ds.sortby(lon_name)
+
+
 def load_fps(fp_datadir, verbose=False, chunk=False):
     """
     Load footprints from datadir, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
@@ -46,6 +69,9 @@ def load_fps(fp_datadir, verbose=False, chunk=False):
         else:
             chunk_args = {}
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            # check that there are any files to open
+            if len(glob.glob(fp_datadir))==0:
+                raise ValueError(f"No files found in the specified directory:\n {fp_datadir} \nCheck that the path is correct and that there are files matching the pattern.")
             # attempt to load dataset of multiple files the standard way
             fp_data_full = xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', **chunk_args)
 
@@ -104,7 +130,8 @@ def load_fps(fp_datadir, verbose=False, chunk=False):
         else:
             print("there was a problem", e)
 
-    fp_data_full= fp_data_full.sortby('time')
+    fp_data_full = _rename_latlon(fp_data_full)
+    fp_data_full = fp_data_full.sortby('time')
 
     return fp_data_full
 
@@ -138,11 +165,8 @@ def preprocess_met_data(ds, duplicate_dim="longitude"):
     """
 
     ds = ds.astype("float32")
-
-    
     ds = remove_duplicates(ds, dim=duplicate_dim)
-
-    return ds
+    return _rename_latlon(ds)
 
 
 class LoadBaseSatelliteData:
@@ -241,7 +265,10 @@ class LoadBaseSatelliteData:
         if self.verbose: print("\n ---- LOADING MET")
 
         # 1) load from file
-        self._get_meteorology_file(met_datadir)
+        self.met_file = self._get_meteorology_file(met_datadir)
+
+        # 2) check domain overlap
+        self._check_domain_overlap(self.fp_data_full, self.met_file, "footprint", "meteorology")
 
         if len(met_levels)>0:
             try:
@@ -281,6 +308,9 @@ class LoadBaseSatelliteData:
         with xr.load_dataset(landcover_path) as landcover_dataset:
             landcover_file = landcover_dataset.copy()
 
+        if not hasattr(self, "padded_domain_coords"):
+            self.padded_domain_coords = None
+
         topog_file = self._interp_topog(topog_file, padding=self.padded_domain_coords)
 
         landcover_file = self._interp_landcover(landcover_file, padding=self.padded_domain_coords)
@@ -310,10 +340,12 @@ class LoadBaseSatelliteData:
 
                 #) rename, select levels and variables
                 if "model_level_number" in met_file.dims:
-                    met_file = met_file.rename({"model_level_number": "levels", "latitude":"lat", "longitude":"lon"})
+                    met_file = met_file.rename({"model_level_number": "levels"})
+                met_file = _rename_latlon(met_file)
 
                 met_file = met_file.drop_duplicates(dim=["lat", "lon", "time"])
                 self.met_file = met_file.copy()
+        return self.met_file
 
 
     def _get_domain(self, region):
@@ -326,6 +358,68 @@ class LoadBaseSatelliteData:
             raise ValueError("No domain was passed, and the region you passed is not associated to any domain!")   
         
         return domain   
+
+    def _check_domain_overlap(self, data1, data2, data1_name="footprints", data2_name="data2"):
+        """
+        Check that data2 (e.g., meteorology) has sufficient spatial coverage of data1 (e.g., footprint).
+        Raises an error if there is no overlap, and warns if data2 is smaller than data1.
+
+        Parameters
+        ----------
+        data1 : xarray.Dataset or DataArray
+            Reference dataset (typically footprint). Expected to have release_lat and release_lon.
+        data2 : xarray.Dataset or DataArray
+            Dataset to check (typically meteorology, topography, or landcover).
+        data1_name : str
+            Name of data1 for messages. Default is "footprints".
+        data2_name : str
+            Name of data2 for messages (e.g., "meteorology").
+
+        Raises
+        ------
+        ValueError
+            If the spatial domains do not overlap at all.
+
+        Warns
+        -----
+        If data2 domain is noticeably smaller than data1, suggests alignment may be needed.
+        """
+        import warnings
+
+        # Get lat/lon coordinate names (assume it has been renamed already)
+        lat1_min, lat1_max = float(data1['lat'].min()), float(data1['lat'].max())
+        lon1_min, lon1_max = float(data1['lon'].min()), float(data1['lon'].max())
+        lat2_min, lat2_max = float(data2['lat'].min()), float(data2['lat'].max())
+        lon2_min, lon2_max = float(data2['lon'].min()), float(data2['lon'].max())
+
+        # Check for overlap
+        lat_overlap = not (lat1_max < lat2_min or lat1_min > lat2_max)
+        lon_overlap = not (lon1_max < lon2_min or lon1_min > lon2_max)
+
+        if not (lat_overlap and lon_overlap):
+            raise ValueError(
+                f"No spatial overlap between {data1_name} and {data2_name}!\n"
+                f"  {data1_name}: lat [{lat1_min:.2f}, {lat1_max:.2f}], lon [{lon1_min:.2f}, {lon1_max:.2f}]\n"
+                f"  {data2_name}: lat [{lat2_min:.2f}, {lat2_max:.2f}], lon [{lon2_min:.2f}, {lon2_max:.2f}]"
+            )
+
+        # Calculate margin based on max release latitude/longitude in the footprint
+        max_release_lat = float(data1['release_lat'].max())
+        min_release_lat = float(data1['release_lat'].min())
+        margin_lat = [lat2_max - max_release_lat, min_release_lat - lat2_min]
+        max_release_lon = float(data1['release_lon'].max())
+        min_release_lon = float(data1['release_lon'].min())
+        margin_lon = [lon2_max - max_release_lon, min_release_lon - lon2_min]   
+
+        margin_threshold = 0.5  # degrees, can adjust based on typical footprint spread
+        # warn if the lat and lon dont cover the area where there are releases
+        if margin_lat[0] < margin_threshold or margin_lat[1] < margin_threshold or margin_lon[0] < margin_threshold or margin_lon[1] < margin_threshold:
+            warnings.warn(
+                f"{data2_name} domain does not fully cover the area where {data1_name} releases occur, or is close to it.\n"
+                f"  {data1_name}: lat range {lat1_max - lat1_min:.2f}°, lon range {lon1_max - lon1_min:.2f}°\n"
+                f"  {data2_name}: lat range {lat2_max - lat2_min:.2f}°, lon range {lon2_max - lon2_min:.2f}°\n",
+                UserWarning
+            )
 
     def _load_footprints(self, fp_datadir):
         """
@@ -372,15 +466,16 @@ class LoadBaseSatelliteData:
     def _interp_topog(self, topog_file, padding=None):
         """
         loads the topography, interpolates to fp res
-        # assumes the same resolution and domain as the footprints, unless padding is passed (as a dict of shape {"lat":(0,0), "lon":(0,0)})
+        # assumes the same resolution and domain as the footprints, unless padding is passed as padded coordinates (tuple with shape (lat_values, lon_values)) 
         """
 
-        #lat_values = list(self.fp_data_full.lat.values)
-        #lon_values = list(self.fp_data_full.lon.values)
+        lat_values = list(self.fp_data_full.lat.values)
+        lon_values = list(self.fp_data_full.lon.values)
 
         if padding is not None:
             lat_values = padding[0]
             lon_values = padding[1]
+        
         """
         if padding is not None and padding != {"lat":(0,0), "lon":(0,0)}:
             delta_lon = lon_values[1]-lon_values[0]
@@ -389,17 +484,22 @@ class LoadBaseSatelliteData:
             lon_values = np.array(sorted(lon_values + [np.max(lon_values)+delta_lon*i for i in range(5+padding["lon"][1])]+ [np.min(lon_values)-delta_lon*i for i in range(5+padding["lon"][0])]))       
 
         """
-        topog_file = topog_file.interp(latitude=lat_values, longitude=lon_values).rename({"latitude":"lat", "longitude":"lon"})
+        topog_file = _rename_latlon(topog_file)
+        
+        # Check domain overlap after renaming
+        self._check_domain_overlap(self.fp_data_full, topog_file, "footprint", "topography")
+        
+        topog_file = topog_file.interp(lat=lat_values, lon=lon_values)
 
         return topog_file
 
     def _interp_landcover(self, landcover_file, padding=None):
         """
         loads the landcover file, interpolates
-        # assumes the same resolution and domain as the footprints, unless padding is passed (as a dict of shape {"lat":(0,0), "lon":(0,0)})
+        # assumes the same resolution and domain as the footprints, unless padding is passed as padded coordinates (tuple with shape (lat_values, lon_values))
         """
-        ##lat_values = list(self.fp_data_full.lat.values)
-        ##lon_values = list(self.fp_data_full.lon.values)
+        lat_values = list(self.fp_data_full.lat.values)
+        lon_values = list(self.fp_data_full.lon.values)
 
         if padding is not None:
             lat_values = padding[0]
@@ -411,8 +511,12 @@ class LoadBaseSatelliteData:
             lat_values = np.array(sorted(lat_values + [np.max(lat_values)+delta_lat*i for i in range(5+padding["lat"][1])]+ [np.min(lat_values)-delta_lat*i for i in range(5+padding["lat"][0])]))
             lon_values = np.array(sorted(lon_values + [np.max(lon_values)+delta_lon*i for i in range(5+padding["lon"][1])]+ [np.min(lon_values)-delta_lon*i for i in range(5+padding["lon"][0])]))   
         """
-
-        landcover_file = landcover_file.assign_coords(lon=(((landcover_file.lon + 180) % 360) - 180))
+        landcover_file = _rename_latlon(landcover_file)
+        landcover_file = _wrap_longitudes(landcover_file)
+        
+        # Check domain overlap after renaming and wrapping
+        self._check_domain_overlap(self.fp_data_full, landcover_file, "footprint", "landcover")
+        
         landcover_file = landcover_file.interp(lat=lat_values, lon=lon_values, method="nearest")
 
         landcover_file = landcover_file.transpose("lat", "lon","pseudo_level")
@@ -510,7 +614,7 @@ class LoadBaseSatelliteData:
         """
         Loads country mask for the domain, and creates a land-sea mask. Interpolates both to the same resolution and domain as the footprints in self.fp_data_full. Stores the country mask in self.countries.country_mask and the land-sea mask in self.countries.land_mask.
         """
-        ## get land-sea mass and country mask, can be used for filtering out footprints/data and during plotting
+        ## get land-sea mass and country mask, can be used for filtering out footprints/data and during fplotting
         if countrymask_path=="default": 
             countrymask_path = "/group/chem/acrg/LPDM/countries/country_"+self.domain+".nc"
         if self.verbose: print(f"trying to load country mask from {countrymask_path}")
