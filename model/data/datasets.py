@@ -666,5 +666,6 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
         batch_size=None,  # Using batches defined by the dataset itself (via xbatcher)
         **dataloader_params
     )
+
     
-    return dataloader
+    return dataloader, fps_labels

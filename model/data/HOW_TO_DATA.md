@@ -184,8 +184,22 @@ fp_ds = FootprintDataset(data.fp_xr)
 scaled_fps = fp_ds.fit_transform()
 
 # 5. DataLoader
-train_loader = make_dataloader(
+train_loader, _ = make_dataloader(
     scaled_inputs, scaled_fps["fp_transformed"],
     batch_size=32, randomize=True,
 )
+
+train_features, train_labels = next(iter(dataloader))
 ```
+
+Passing a dataset with multiple variables will stack them. For example, `scaled_fps` has variables `["fp_transformed", "fp_original"]`, so 
+```python
+# 5. DataLoader with multiple output labels
+train_loader, fp_labels = make_dataloader(
+    scaled_inputs, scaled_fps,
+    batch_size=32, randomize=True,
+)
+
+train_features, train_labels = next(iter(dataloader))
+```
+will yield `train_labels` with shape `(batch_size, lat, lon, n_labels)`, in this case `n_labels=2` and `train_labels=["fp_transformed", "fp_original"]`.
