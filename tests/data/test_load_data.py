@@ -1,4 +1,5 @@
 import os
+import warnings
 import pytest
 import numpy as np
 import pandas as pd
@@ -311,6 +312,45 @@ class TestLoadBase:
     def test_met_time_in_correct_year(self, base_obj):
         years = pd.DatetimeIndex(base_obj.met_file.time.values).year
         assert np.all(years == TEST_YEAR), f"All met timestamps should be in {TEST_YEAR}"
+
+    def test_sample_files_overlap_checks_pass(
+        self,
+        use_sample_files,
+        test_fp_datadir,
+        test_met_datadir,
+        test_topog_path,
+        test_landcover_path,
+    ):
+        """With real sample files, overlap checks should not error or warn."""
+        if not use_sample_files:
+            pytest.skip("Requires --sample-files to validate overlap checks on real sample files")
+
+        # The loader appends YYYYMM*.nc, so pass path prefixes.
+        fp_prefix = test_fp_datadir[:-9]
+        met_prefix = test_met_datadir[:-9]
+
+        with warnings.catch_warnings(record=True) as warning_list:
+            warnings.simplefilter("always")
+            obj = LoadBaseSatelliteData(
+                year=TEST_YEAR,
+                month=TEST_MONTH,
+                fp_datadir=fp_prefix,
+                met_args={"met_datadir": met_prefix},
+                topog_args={"topog_path": test_topog_path, "landcover_path": test_landcover_path},
+                load_everything=True,
+            )
+
+        # If there was no overlap, object construction would raise ValueError.
+        assert hasattr(obj, "fp_data_full")
+        assert hasattr(obj, "met_file")
+        assert hasattr(obj, "topog_file")
+        assert hasattr(obj, "landcover_file")
+
+        overlap_warnings = [
+            w for w in warning_list
+            if "does not fully cover the area" in str(w.message) or "No spatial overlap" in str(w.message)
+        ]
+        assert len(overlap_warnings) == 0, "Sample files should overlap without domain overlap warnings"
 
 
 # ── LoadSquareSatelliteData tests (Tier 2) ────────────────────────────────────
