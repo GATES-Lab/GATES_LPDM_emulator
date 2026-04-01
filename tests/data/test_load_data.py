@@ -274,7 +274,6 @@ class TestLoadBase:
                 self_.fp_data_full = fp_ds
 
             def _mock_get_met(self_, met_datadir, lazy_load=True):
-                # Build met that covers all fp timestamps (3h intervals over Jan 2016)
                 met_file = met_ds
                 met_file = met_file.drop_duplicates(dim=["lat", "lon", "time"])
                 if "model_level_number" in met_file.dims:
@@ -361,7 +360,6 @@ class TestLoadSquare:
                 self_._subsample_frequency(**self_.subsample_parameters)
 
             def _mock_get_met(self_, met_datadir, lazy_load=True):
-                # Build met that covers all fp timestamps (3h intervals over Jan 2016)
                 met_file = met_ds
                 met_file = met_file.drop_duplicates(dim=["lat", "lon", "time"])
                 if "model_level_number" in met_file.dims:
