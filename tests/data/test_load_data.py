@@ -15,8 +15,8 @@ from model.data.load_data import (
     cut_satellite_data,
     cut_topog_data,
     LoadBaseSatelliteData,
-    LoadSquareSatelliteData,
 )
+from ..test_helper_funs import make_square_satellite_obj
 
 SAMPLE_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample_data")
 TEST_YEAR = 2016
@@ -274,7 +274,7 @@ class TestLoadBase:
             def _mock_load_fps(self_, fp_datadir):
                 self_.fp_data_full = fp_ds
 
-            def _mock_get_met(self_, met_datadir, lazy_load=True):
+            def _mock_get_met(self_, met_datadir, lazy_load=True, met_time_chunk=None, parallel=False):
                 met_file = met_ds
                 met_file = met_file.drop_duplicates(dim=["lat", "lon", "time"])
                 if "model_level_number" in met_file.dims:
@@ -359,74 +359,6 @@ class TestLoadSquare:
     """Tests for LoadSquareSatelliteData: spatial shape, coordinate convention,
     time consistency across attributes, and NaN-padding for large crops."""
 
-    def _make_square_obj(
-        self,
-        fp_ds,
-        met_ds,
-        topog_ds,
-        landcover_ds,
-        size,
-        test_fp_datadir=None,
-        test_met_datadir=None,
-        test_topog_path=None,
-        test_landcover_path=None,
-    ):
-        """Shared helper: build LoadSquareSatelliteData with real paths or mocked I/O."""
-
-        paths_available = all([
-            test_fp_datadir is not None,
-            test_met_datadir is not None,
-            test_topog_path is not None,
-            test_landcover_path is not None,
-        ])
-
-        if paths_available:
-            return LoadSquareSatelliteData(
-                year=TEST_YEAR,
-                month=TEST_MONTH,
-                size=size,
-                fp_datadir=test_fp_datadir[:-9],
-                met_args={"met_datadir": test_met_datadir[:-9]},
-                topog_args={"topog_path": test_topog_path, "landcover_path": test_landcover_path},
-                load_everything=True,
-                lazy_load=True,
-            )
-        
-        else:
-            print("Using mocked data for LoadSquareSatelliteData tests (real sample files not available)")
-
-            def _mock_load_fps(self_, fp_datadir):
-                self_.fp_data_full = fp_ds
-                self_._subsample_frequency(**self_.subsample_parameters)
-
-            def _mock_get_met(self_, met_datadir, lazy_load=True):
-                met_file = met_ds
-                met_file = met_file.drop_duplicates(dim=["lat", "lon", "time"])
-                if "model_level_number" in met_file.dims:
-                    met_file = met_file.rename({"model_level_number": "levels"})
-                self.met_file = met_file
-                return self.met_file
-
-            def _mock_load_topog(self_, topog_path="default", landcover_path="default"):
-                topog = topog_ds
-                landcover = landcover_ds
-                print("topog")
-                print(topog)
-                print("landcover")
-                print(landcover)
-                
-                topog = self_._interp_topog(topog)
-                landcover = self_._interp_landcover(landcover)
-                return topog, landcover
-
-            with patch.object(LoadBaseSatelliteData, "_load_footprints", _mock_load_fps), \
-                patch.object(LoadBaseSatelliteData, "_get_meteorology_file", _mock_get_met), \
-                patch.object(LoadBaseSatelliteData, "load_topog", _mock_load_topog):
-                return LoadSquareSatelliteData(
-                    year=TEST_YEAR, month=TEST_MONTH, size=size,
-                    load_everything=True, lazy_load=True,
-                )
-
     @pytest.fixture
     def square_obj_size8(
         self,
@@ -439,11 +371,13 @@ class TestLoadSquare:
         test_topog_path,
         test_landcover_path,
     ):
-        return self._make_square_obj(
+        return make_square_satellite_obj(
             fp_ds,
             met_ds,
             topog_ds,
             landcover_ds,
+            year=TEST_YEAR,
+            month=TEST_MONTH,
             size=8,
             test_fp_datadir=test_fp_datadir,
             test_met_datadir=test_met_datadir,
@@ -463,11 +397,13 @@ class TestLoadSquare:
         test_topog_path,
         test_landcover_path,
     ):
-        return self._make_square_obj(
+        return make_square_satellite_obj(
             fp_ds,
             met_ds,
             topog_ds,
             landcover_ds,
+            year=TEST_YEAR,
+            month=TEST_MONTH,
             size=20,
             test_fp_datadir=test_fp_datadir,
             test_met_datadir=test_met_datadir,

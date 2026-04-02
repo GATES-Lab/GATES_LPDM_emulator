@@ -35,10 +35,11 @@ def _make_met_ds(n_lat=50, n_lon=50, n_levels=3):
     n_time = len(times)
     lats   = np.linspace(-15.0,  15.0, n_lat)
     lons   = np.linspace(-40.0, 30.0, n_lon)
-    levels = [1, 5, 10]
+    levels = [3, 5, 10]
     return xr.Dataset(
         {"x_wind": (["time","model_level_number","lat","lon"], np.random.rand(n_time, n_levels, n_lat, n_lon)),
-         "y_wind": (["time","model_level_number","lat","lon"], np.random.rand(n_time, n_levels, n_lat, n_lon))},
+         "y_wind": (["time","model_level_number","lat","lon"], np.random.rand(n_time, n_levels, n_lat, n_lon)),
+         "atmosphere_boundary_layer_thickness": (["time","lat","lon"], np.random.rand(n_time, n_lat, n_lon))},
         coords={"time": times, "model_level_number": levels, "lat": lats, "lon": lons}
     )
 

@@ -66,13 +66,14 @@ def load_fps(fp_datadir, verbose=False, chunk=False):
         if chunk:
             time_chunk = 25
             chunk_args = {"chunks" : {"time": time_chunk}, "parallel": True}
+            chunk_args = {"chunks":"auto", "parallel": True}
         else:
             chunk_args = {}
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             # check that there are any files to open
             if len(glob.glob(fp_datadir))==0:
                 raise ValueError(f"No files found in the specified directory:\n {fp_datadir} \nCheck that the path is correct and that there are files matching the pattern.")
-            # attempt to load dataset of multiple files the standard way
+            # attempt to load dataset of multiple files thfe standard way
             fp_data_full = xr.open_mfdataset(sorted(glob.glob(fp_datadir)), combine='by_coords', **chunk_args)
 
     except Exception as e:
@@ -147,8 +148,15 @@ def remove_duplicates(ds, dim="longitude"):
     Returns:
     - xarray Dataset with duplicates removed
     """
+    if isinstance(dim, (list, tuple)):
+        dims = list(dim)
+    else:
+        dims = [dim]
+
     with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-        ds = ds.drop_duplicates(dim)
+        for d in dims:
+            if d in ds.dims:
+                ds = ds.drop_duplicates(d)
     return ds
 
 
@@ -163,10 +171,12 @@ def preprocess_met_data(ds, duplicate_dim="longitude"):
     Returns:
     - xarray Dataset with duplicates removed
     """
-
-    ds = ds.astype("float32")
-    ds = remove_duplicates(ds, dim=duplicate_dim)
-    return _rename_latlon(ds)
+    ds = _rename_latlon(ds)
+    if duplicate_dim in ds.dims:
+        ds = remove_duplicates(ds, dim=duplicate_dim)
+    elif duplicate_dim == "longitude" and "lon" in ds.dims:
+        ds = remove_duplicates(ds, dim="lon")
+    return ds
 
 
 class LoadBaseSatelliteData:
@@ -252,7 +262,7 @@ class LoadBaseSatelliteData:
 
 
 
-    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True):
+    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True, met_time_chunk=24, parallel=False):
         """
         loads meteorology and selects the met levels and variables if required
 
@@ -265,7 +275,11 @@ class LoadBaseSatelliteData:
         if self.verbose: print("\n ---- LOADING MET")
 
         # 1) load from file
-        self.met_file = self._get_meteorology_file(met_datadir)
+        self.met_file = self._get_meteorology_file(
+            met_datadir,
+            met_time_chunk=met_time_chunk,
+            parallel=parallel,
+        )
 
         # 2) check domain overlap
         self._check_domain_overlap(self.fp_data_full, self.met_file, "footprint", "meteorology")
@@ -277,7 +291,7 @@ class LoadBaseSatelliteData:
                 print(f"there was an error selecting the met levels you passed. Check! \n You passed  {met_levels} but met loaded has {self.met_file.levels}. \n Loading all levels")
         if len(met_variables)>0:
             try:
-                self.met_file = self.met[met_variables]
+                self.met_file = self.met_file[met_variables]
             except KeyError:
                 print(f"there was an error selecting the met variables you passed. Check! \n You passed  {met_variables} but met loaded has {list(self.met_file.keys())}. \n Loading all variables")
 
@@ -316,7 +330,7 @@ class LoadBaseSatelliteData:
         landcover_file = self._interp_landcover(landcover_file, padding=self.padded_domain_coords)
         return topog_file, landcover_file
 
-    def _get_meteorology_file(self, met_datadir, lazy_load=True):
+    def _get_meteorology_file(self, met_datadir, lazy_load=True, met_time_chunk=24, parallel=False):
         """
         Load the meteorology from the directory, concatenating files along the time dimension. If met_datadir is None, uses default directory and file format. If met_datadir is passed, the date will be automatically added, so the files should have format example_name_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/example_name_"
         """
@@ -326,25 +340,42 @@ class LoadBaseSatelliteData:
             met_datadir = met_datadir+str(self.date)+"*.nc"
         if self.verbose: print("Loading meteorology from " + met_datadir)
 
-        # each chunk should have around 1mill values,  - chunk per level and by time, rounded to the nearest hundred, 100MB-1GB
-        # could calcualte this dynamically 
-        chunk = False
-        if chunk:
-            time_chunk = 500 #round(1000000/(self.metsize*self.metsize), -2) #
-            chunk_args = {"chunks" : {"time": time_chunk}}
-        else:
-            chunk_args = {}
-        
+        met_files = sorted(glob.glob(met_datadir))
+        if len(met_files) == 0:
+            raise ValueError(
+                f"No meteorology files found in the specified directory:\n {met_datadir}"
+            )
+
+        chunk_args = {"chunks": {"time": met_time_chunk}} if met_time_chunk is not None else {}
+
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(sorted(glob.glob(met_datadir)),  concat_dim="time", combine="nested", data_vars="minimal", coords="minimal", parallel=True, join="inner", **chunk_args, drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"], compat="override", preprocess=remove_duplicates) as met_file:
+            met_file = xr.open_mfdataset(
+                met_files,
+                concat_dim="time",
+                combine="nested",
+                data_vars="minimal",
+                coords="minimal",
+                parallel=parallel,
+                join="inner",
+                **chunk_args,
+                drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"],
+                compat="override",
+                preprocess=preprocess_met_data,
+            )
 
-                #) rename, select levels and variables
-                if "model_level_number" in met_file.dims:
-                    met_file = met_file.rename({"model_level_number": "levels"})
-                met_file = _rename_latlon(met_file)
+            if "model_level_number" in met_file.dims:
+                met_file = met_file.rename({"model_level_number": "levels"})
+            met_file = _rename_latlon(met_file)
 
-                met_file = met_file.drop_duplicates(dim=["lat", "lon", "time"])
-                self.met_file = met_file.copy()
+            for dim in ("lat", "lon", "time"):
+                if dim in met_file.dims and met_file.get_index(dim).has_duplicates:
+                    met_file = met_file.drop_duplicates(dim=dim)
+
+            first_var = list(met_file.data_vars)[0]
+            if met_file[first_var].dtype != np.float32:
+                met_file = met_file.astype(np.float32)
+
+            self.met_file = met_file
         return self.met_file
 
 
@@ -436,12 +467,17 @@ class LoadBaseSatelliteData:
         if self.verbose: print("Loading footprint data from " + fp_datadir) 
 
         self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose)  
+        print("failed after loading fps")
 
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
+        print("failed after dropping duplicates")
 
         ## reduce data frequency with regular sampling 9eg keep only 1 in every 3 timesteps
         # uses the sampling_mode and freq parameters
         self._subsample_frequency(**self.subsample_parameters)
+        print("failed after subsampling")
+
+        self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": 500})
 
         if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
 
@@ -640,7 +676,7 @@ class LoadBaseSatelliteData:
             self.countries = country_ds
 
 
-    def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, return_fig=False, plot_marker=False):
+    def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, return_fig=False, plot_marker=False, dpi=100):
         """
         plot a footprint for a particular timestamp or index
 
@@ -663,7 +699,7 @@ class LoadBaseSatelliteData:
 
         extent = (fp_to_plot.lon.values[0], fp_to_plot.lon.values[-1], fp_to_plot.lat.values[0], fp_to_plot.lat.values[-1])
 
-        fig, ax = plt.subplots(1,1,subplot_kw={'projection': ccrs.PlateCarree()})
+        fig, ax = plt.subplots(1,1,subplot_kw={'projection': ccrs.PlateCarree()}, figsize=(8,6), dpi=dpi)
         ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
         ax.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
         ax.add_feature(cartopy.feature.LAND)
@@ -832,20 +868,21 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         """
         removes any set of indeces passed as nan_idxs from all the objects in the dataset
         """
-        self.fp_data_full = self.fp_data_full.sel(time=np.delete(self.fp_data_full.time.values, nan_idxs))
+        self.fp_data_full = self.fp_data_full.drop_sel(time=nan_idxs)
         if hasattr(self, "fp_data"):
-        # this should now be redundant
+        # this should now be redundant and fail!
+            print("this should be redundant")
             self.fp_lats = np.delete(self.fp_lats, nan_idxs, axis=0)
             self.fp_lons = np.delete(self.fp_lons, nan_idxs, axis=0)
             self.fp_data = np.delete(self.fp_data, nan_idxs, axis=0)
             if self.verbose: print(f"current length: {len(self.release_idxs)}")
             self.release_idxs = np.delete(self.release_idxs, nan_idxs, axis=0)
         if hasattr(self, "fp_xr"):
-            self.fp_xr = self.fp_xr.sel(time=np.delete(self.fp_xr.time.values, nan_idxs))
+            self.fp_xr = self.fp_xr.drop_sel(time=nan_idxs)
         if hasattr(self, "met"): 
-            self.met = self.met.sel(time=np.delete(self.met.time.values, nan_idxs))
+            self.met = self.met.drop_sel(time=nan_idxs)
         if hasattr(self, "topog"):
-            self.topog = self.topog.sel(time=np.delete(self.topog.time.values, nan_idxs))
+            self.topog = self.topog.drop_sel(time=nan_idxs)
 
         if self.verbose: print(f"Length after removing indeces: {self.fp_data_full.time.size}")
 
@@ -1230,6 +1267,9 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
         met = met.interp(time=target_times, method=interp_method)
 
     met = met.assign({"fp_time": (("time",), fp_original_times)})
+    # convert nan_idxs to the original fp time values for clarity by adding the time_delta back, and then to numpy array for easier use later
+    nan_idxs = (pd.to_datetime(nan_idxs) + pd.Timedelta(f"{time_delta}h")).to_numpy()
+
     return met, nan_idxs
 
 

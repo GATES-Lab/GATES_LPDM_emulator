@@ -111,7 +111,8 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     # if the time_delta is large, cut met might have interpolated to t-time_delta outside of the known met. check and if so remove indeces
     all_nan_idxs = np.unique(np.concatenate(list(met_nan_idxs.values())))
     if len(all_nan_idxs)>0:
-        full_met = full_met.drop_isel(fp_time=all_nan_idxs)
+        # drop idx only if already in fp_time
+        full_met = full_met.drop_sel(fp_time=all_nan_idxs)
         print(f"removing {len(all_nan_idxs)} indeces due to problems with interpolating meteorology for the passed time_deltas")
         data.remove_indeces(all_nan_idxs)
 
@@ -166,8 +167,8 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
         # add empty variable levels so it aligns with the met dataset
         stacked_surface_met = full_met[surface_variables_needed].assign_coords(levels=0).expand_dims("levels").transpose("fp_time", "lat", "lon", "levels", "time_delta").to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_surface_met")
         varnames_dict = varnames_dict + [{"var":tup[0], "time_delta":tup[2], "type":"surface_met"} for tup in stacked_surface_met.variable_name.values]
-        stacked_surface_met = stacked_surface_met.drop_vars({'time_delta', 'variable_name', 'variable'}).assign_coords({"variable_name":stacked_surface_met.variable_name.values})
-
+        stacked_surface_met = stacked_surface_met.drop_vars({'time_delta', 'levels', 'variable_name', 'variable'}).assign_coords({"variable_name":stacked_surface_met.variable_name.values})
+        
         if return_asarray:
             stacked_surface_met.load()
 
@@ -221,7 +222,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
 
         
         varnames_dict = varnames_dict + [{"var":tup[0], "type":"static"} for tup in stacked_static_inputs.variable_name.values]
-        stacked_static_inputs = stacked_static_inputs.drop_vars({'variable_name', 'variable'}).assign_coords({"variable_name":stacked_static_inputs.variable_name.values})
+        stacked_static_inputs = stacked_static_inputs.drop_vars({'variable_name', 'variable', "levels", "time_delta"}).assign_coords({"variable_name":stacked_static_inputs.variable_name.values})
 
         if return_asarray:
             stacked_static_inputs.load()
