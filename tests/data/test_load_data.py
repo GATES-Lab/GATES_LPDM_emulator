@@ -17,10 +17,11 @@ from model.data.load_data import (
     LoadBaseSatelliteData,
 )
 from ..test_helper_funs import make_square_satellite_obj
+from ..conftest import SAMPLE_YEAR, SAMPLE_MONTH
 
 SAMPLE_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample_data")
-TEST_YEAR = 2016
-TEST_MONTH = "01"
+TEST_YEAR = int(SAMPLE_YEAR)
+TEST_MONTH = SAMPLE_MONTH
 TEST_DATE = f"{TEST_YEAR}{TEST_MONTH}"
 TEST_START_DATE = f"{TEST_YEAR}-{TEST_MONTH}-01"
 

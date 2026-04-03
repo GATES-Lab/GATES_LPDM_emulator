@@ -11,9 +11,10 @@ from model.data.datasets import LogAndShiftFpScaler
 from model.data.datasets import LogAndShiftMeanFpScaler
 from model.data.datasets import FootprintDataset
 from ..test_helper_funs import make_square_satellite_obj
+from ..conftest import SAMPLE_YEAR, SAMPLE_MONTH
 
-TEST_YEAR = 2016
-TEST_MONTH = "01"
+TEST_YEAR = int(SAMPLE_YEAR)
+TEST_MONTH = SAMPLE_MONTH
 
 
 # ── TestGetSquareSatelliteInputs ──────────────────────────────────────────────
