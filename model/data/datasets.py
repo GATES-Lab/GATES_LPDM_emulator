@@ -8,6 +8,7 @@ import datetime
 import pandas as pd
 import joblib
 from pathlib import Path
+import warnings
 
 import torch
 import xbatcher as xb
@@ -84,6 +85,13 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
                 #met = met.reset_coords(["time"])
                 met = met.drop_vars("time")
                 #met = met.rename({"fp_time":"time"})
+                #met = met.assign_coords({"time_delta": ("time_delta", [delta])})
+                for var in met_variables_needed:
+                    if var not in met.data_vars:
+                        warnings.warn(f"Variable {var} is not available in the met data, skipping this variable")
+                        met = met.drop_vars(var)
+                    else:
+                        met[var] = met[var].expand_dims("time_delta").assign_coords({"time_delta": ("time_delta", [delta])})
 
             else:
                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
@@ -102,14 +110,27 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
 
             del met 
 
-    
-    # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
-    full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", ..., "time_delta")
+    # print if timedeltas isnt the same as the key of all met files
+    if time_deltas != list(all_met_files.keys()):
+        warnings.warn(f"Warning: the time_deltas passed {time_deltas} are not the same as the time_deltas of the extracted met {list(all_met_files.keys())}. Check that the cut_satellite_met function is working correctly for the passed time_deltas")
+    # if there is only one met file because only one time delta
+    if len(all_met_files.keys())==1:
+        # extract time delta, drop and add with expand dims
+        time_delta = list(all_met_files.keys())[0]
+        full_met = all_met_files[time_delta]
+
+        full_met = full_met.transpose("fp_time", "lat", "lon", ..., "time_delta")
+        all_nan_idxs = np.unique(list(met_nan_idxs.values()))
+    else:
+        # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
+        full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", ..., "time_delta")
+        all_nan_idxs = np.unique(np.concatenate(list(met_nan_idxs.values())))
+        
     for v in full_met.data_vars:
         full_met[v].astype("float32", copy=False)
 
     # if the time_delta is large, cut met might have interpolated to t-time_delta outside of the known met. check and if so remove indeces
-    all_nan_idxs = np.unique(np.concatenate(list(met_nan_idxs.values())))
+    
     if len(all_nan_idxs)>0:
         # drop idx only if already in fp_time
         full_met = full_met.drop_sel(fp_time=all_nan_idxs)
@@ -136,15 +157,34 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
     if len(levels_variables_needed)>0:
         if verbose: print(f"Setting up variables with levels: {levels_variables_needed}")
         stacked_levels_met = full_met[levels_variables_needed].to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_levels_met")
-
+        
         # make sure we keep only the levels passed in met_variables
+        """
         indexes = []
+        # build requested labels
+        for v in list(set(levels_variables_needed)):
+            for delta in time_deltas:
+                for lev in 
+
+        
+                # check if lev is available in the met variables
+                if lev not in full_met[v].levels.values:
+                    print(f"Warning: requested level {lev} for variable {v} is not available in the met data, skipping this level")
+                    continue
+                for lev in met_variables[v]:
+                    indexes.append((v, lev, delta))
+        """
+        indexes = stacked_levels_met.variable_name.values
+        # build the required tuples, from the inputs, and keep only the tupes that are present in both
+        required_tuples = []
         for v in list(set(levels_variables_needed)):
             for delta in time_deltas:
                 for lev in met_variables[v]:
-                    indexes.append((v, lev, delta))
+                    required_tuples.append((v, lev, delta))
         
-        stacked_levels_met = stacked_levels_met.sel(variable_name=indexes)
+        variable_tuples = list(set(stacked_levels_met.variable_name.values))
+
+        stacked_levels_met = stacked_levels_met.sel(variable_name=variable_tuples)
 
         varnames_dict = varnames_dict + [{"var":tup[0], "level":tup[1], "time_delta":tup[2], "type":"met"} for tup in stacked_levels_met.variable_name.values]
         
@@ -261,6 +301,316 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_vari
             return np.reshape(concatenated_inputs.values, (concatenated_inputs.fp_time.size, concatenated_inputs.lat.size*concatenated_inputs.lon.size, concatenated_inputs.variable_name.size)), varnames_dict
         else:
             return np.reshape(concatenated_inputs.values, (concatenated_inputs.fp_time.size, concatenated_inputs.lat.size*concatenated_inputs.lon.size, concatenated_inputs.variable_name.size))
+
+
+def _stack_and_label_variables_v2(ds, var_names, var_type, met_variables_dict=None, verbose=False):
+    """
+    Stack requested variables into a single variable_name dimension with tuple labels.
+    Returns (stacked_dataarray_or_None, warnings).
+    """
+    if not var_names:
+        return None, []
+
+    if verbose:
+        print(f"Setting up {var_type}: {var_names}")
+
+
+    if var_type == "met_with_levels":
+        filtered_vars = {}
+        for var in var_names:
+            if var not in ds.data_vars:
+                warnings.warn(f"requested variable {var} is not available and will be skipped")
+                continue
+
+            if "levels" not in ds[var].coords:
+                warnings.warn(f"variable {var} has no 'levels' coordinate and will be skipped")
+                continue
+
+            requested_levels = list(met_variables_dict.get(var, [])) if met_variables_dict is not None else []
+            available_levels = list(ds[var].levels.values)
+            valid_levels = [lev for lev in requested_levels if lev in available_levels]
+            dropped_levels = [lev for lev in requested_levels if lev not in available_levels]
+
+            if dropped_levels:
+                warnings.warn(f"requested levels {dropped_levels} for variable {var} are not available and will be skipped")
+
+            if len(valid_levels) == 0:
+                warnings.warn(f"variable {var} has no valid levels left after filtering and will be skipped")
+                continue
+
+            filtered_vars[var] = ds[var].sel(levels=valid_levels)
+
+        if len(filtered_vars) == 0:
+            return None
+
+        data = xr.Dataset(filtered_vars).transpose("fp_time", "lat", "lon", "levels", "time_delta")
+
+    elif var_type == "surface_met":
+        valid_vars = [v for v in var_names if v in ds.data_vars]
+        missing_vars = [v for v in var_names if v not in ds.data_vars]
+        for mv in missing_vars:
+            warnings.warn(f"requested surface variable {mv} is not available and will be skipped")
+
+        if len(valid_vars) == 0:
+            return None
+
+        data = ds[valid_vars].assign_coords(levels=0).expand_dims("levels")
+        data = data.transpose("fp_time", "lat", "lon", "levels", "time_delta")
+
+    elif var_type == "static":
+        valid_vars = [v for v in var_names if v in ds.data_vars]
+        missing_vars = [v for v in var_names if v not in ds.data_vars]
+        for mv in missing_vars:
+            warnings.warn(f"requested static variable {mv} is not available and will be skipped")
+
+        if len(valid_vars) == 0:
+            return None
+
+        data = ds[valid_vars].assign_coords(levels=0, time_delta=0).expand_dims("levels").expand_dims("time_delta")
+        data = data.transpose("fp_time", "lat", "lon", "levels", "time_delta")
+
+    else:
+        raise ValueError(f"unknown var_type: {var_type}")
+
+    stacked = data.to_stacked_array(
+        new_dim="variable_name",
+        sample_dims=["fp_time", "lat", "lon"],
+        name=f"stacked_{var_type}",
+    )
+
+    variable_labels = list(stacked.variable_name.values)
+    if len(variable_labels) == 0:
+        return None
+
+    # Rebuild tuple labels from split coords if variable_name is not tuple-like.
+    if not isinstance(variable_labels[0], tuple):
+        if all(coord in stacked.coords for coord in ["variable", "levels", "time_delta"]):
+            variable_labels = list(
+                zip(
+                    stacked["variable"].values,
+                    stacked["levels"].values,
+                    stacked["time_delta"].values,
+                )
+            )
+        else:
+            raise ValueError(
+                "Could not construct variable_name tuples from stacked data. "
+                "Please check requested variables and levels."
+            )
+
+    mindex = pd.MultiIndex.from_tuples(variable_labels, names=["variable", "levels", "time_delta"])
+    stacked = stacked.drop_vars({"time_delta", "levels", "variable"}, errors="ignore")
+    stacked = stacked.assign_coords(xr.Coordinates.from_pandas_multiindex(mindex, "variable_name"))
+    
+    return stacked
+
+
+def get_square_satellite_inputs_v2(data, met_variables, time_deltas=None, static_variables=None, verbose=True, add_timedelta_zero=True):
+    """
+    Refactored version of get_square_satellite_inputs with unified stacking logic and explicit edge-case handling.
+
+    Returns:
+    - xarray DataArray with dims (fp_time, lat, lon, variable_name)
+    - variable_name tuples of (variable, levels, time_delta)
+    """
+    assert hasattr(data, "dataset_format"), "It doesn't seem this is a SatelliteData object"
+    assert data.met_processed is True, "Make sure that you have loaded and cut the meteorology in the SatelliteData object"
+
+    if type(met_variables) is not dict:
+        raise ValueError("met_variables should be a dict of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list")
+
+    if time_deltas is None:
+        time_deltas = []
+    else:
+        time_deltas = list(time_deltas)
+
+    if static_variables is None:
+        static_variables = []
+    else:
+        static_variables = list(static_variables)
+
+    if verbose:
+        print("------------------------")
+        print("---EXTRACTING MET DATA---")
+
+    if add_timedelta_zero and 0 not in time_deltas:
+        time_deltas.append(0)
+    time_deltas = sorted(set(time_deltas))
+    print(f"Time deltas: {time_deltas}")
+
+    met_variables_needed = list(met_variables.keys())
+    surface_variables_needed = [var_name for var_name, levs in met_variables.items() if levs == []]
+    levels_variables_needed = [var_name for var_name, levs in met_variables.items() if len(levs) > 0]
+    min_levels_needed = sorted({lev for levels in met_variables.values() for lev in levels})
+
+    all_met_files = {}
+    met_nan_idxs = {}
+
+    if len(time_deltas) > 0:
+        print(f"extracting met at t-H for H in: {time_deltas}")
+        for delta in time_deltas:
+            if delta == 0:
+                met = data.met
+                met = select_met_levels(met, levels=min_levels_needed.copy())
+                met = select_met_variables(met, variables=met_variables_needed.copy())
+                met = met.swap_dims({"time": "fp_time"})
+                met = met.drop_vars("time", errors="ignore")
+
+                for var in [v for v in met_variables_needed if v in met.data_vars]:
+                    met[var] = met[var].expand_dims("time_delta").assign_coords({"time_delta": ("time_delta", [delta])})
+
+                missing_in_zero = [v for v in met_variables_needed if v not in met.data_vars]
+                for mv in missing_in_zero:
+                    warnings.warn(f"Warning: requested variable {mv} is not available in met data at t=0 and will be skipped")
+            else:
+                if data.dataset_format == "square":
+                    met, nan_idxs = cut_satellite_met(
+                        data.met_file,
+                        data.fp_data_full,
+                        metsize=data.metsize,
+                        time_delta=delta,
+                        relevant_levels=min_levels_needed,
+                        relevant_variables=met_variables_needed,
+                        pad_mode=data.fill_outofdomain_with,
+                        load=False,
+                        add_wind_direction=True,
+                        return_nan_idxs=True,
+                    )
+                    met_nan_idxs[delta] = nan_idxs
+
+                met = met.swap_dims({"time": "fp_time"})
+                met = met.drop_vars("time", errors="ignore")
+                # if met_timestamps is a coordinate or variable, drop it
+                if "met_timestamps" in met.data_vars:
+                    met = met.drop_vars("met_timestamps", errors="ignore")
+
+
+            all_met_files[delta] = met
+            del met
+
+    if time_deltas != list(all_met_files.keys()):
+        warnings.warn(f"the time_deltas passed {time_deltas} are not the same as the time_deltas of the extracted met {list(all_met_files.keys())}. Check that cut_satellite_met is working correctly for the passed time_deltas")
+
+    if len(all_met_files.keys()) == 1:
+        only_delta = list(all_met_files.keys())[0]
+        full_met = all_met_files[only_delta].transpose("fp_time", "lat", "lon", ..., "time_delta")
+    else:
+        full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars=met_variables_needed)
+        full_met = full_met.transpose("fp_time", "lat", "lon", ..., "time_delta")
+    
+    all_nan_idxs = np.unique(np.concatenate([np.atleast_1d(v) for v in met_nan_idxs.values()])) if len(met_nan_idxs) > 0 else np.array([], dtype=int)
+
+    for v in full_met.data_vars:
+        full_met[v] = full_met[v].astype("float32", copy=False)
+
+    if len(all_nan_idxs) > 0:
+        full_met = full_met.drop_sel(fp_time=all_nan_idxs)
+        warnings.warn(f"removing {len(all_nan_idxs)} indeces due to problems with interpolating meteorology for the passed time_deltas")
+        data.remove_indeces(all_nan_idxs)
+
+    input_arrays = []
+
+    ### SETTING UP VARIABLES WITH LEVELS
+    if len(levels_variables_needed) > 0:
+        stacked_levels_met = _stack_and_label_variables_v2(
+            full_met,
+            levels_variables_needed,
+            "met_with_levels",
+            met_variables_dict=met_variables,
+            verbose=verbose,
+        )
+
+        if stacked_levels_met is not None:
+            input_arrays.append(stacked_levels_met)
+
+    ### SETTING UP VARIABLES WITH NO LEVELS
+    if len(surface_variables_needed) > 0:
+        stacked_surface_met = _stack_and_label_variables_v2(
+            full_met,
+            surface_variables_needed,
+            "surface_met",
+            verbose=verbose,
+        )
+
+        if stacked_surface_met is not None:
+            input_arrays.append(stacked_surface_met)
+
+    ### SETTING UP NON-MET VARIABLES
+    if len(static_variables) > 0:
+        #if verbose:
+        #   print(f"Setting up static variables: {static_variables}")
+
+        static_variables_functions = get_static_variables_functions()
+
+        if data.dataset_format == "square":
+            (static_ds,) = xr.broadcast(full_met[["lat_coords", "lon_coords"]])
+        elif data.dataset_format == "domain":
+            (static_ds,) = xr.broadcast(
+                full_met.assign({"lat_coords": (("lat"), full_met.lat.values), "lon_coords": (("lon"), full_met.lon.values)})
+                [["lat_coords", "lon_coords", "fp_time"]]
+            )
+            static_ds = static_ds[["lat_coords", "lon_coords"]]
+
+            if "time" not in data.topog.coords:
+                data.topog = data.topog.broadcast_like(static_ds, exclude=["lat", "lon", "landcover_level"])
+                data.topog = data.topog.assign_coords({"lat": static_ds.lat.values, "lon": static_ds.lon.values}).rename({"fp_time": "time"})
+        else:
+            raise ValueError(f"Unsupported dataset_format: {data.dataset_format}")
+
+        for var in static_variables:
+            if var in ["topog", "landcover", "landcover_disaggregated"]:
+                assert hasattr(data, "topog"), "Load topog on the data object before trying to extract this as an input!"
+                static_ds = static_variables_functions[var](data.topog, static_ds)
+            elif "domain" in var:
+                if var in static_variables_functions:
+                    static_ds = static_variables_functions[var](data.fp_data_full, static_ds)
+                else:
+                    warnings.warn(f"variable {var} was not found in the list of known functions and will be skipped")
+            elif var in list(static_variables_functions.keys()) and var not in ["lat_coords", "lon_coords"]:
+                static_ds = static_variables_functions[var](static_ds)
+            elif var not in ["lat_coords", "lon_coords"]:
+                warnings.warn(f"variable {var} was not found in the list of known functions and will be skipped")
+
+        if "lat_coords" not in static_variables:
+            static_ds = static_ds.drop_vars(["lat_coords"], errors="ignore")
+        if "lon_coords" not in static_variables:
+            static_ds = static_ds.drop_vars(["lon_coords"], errors="ignore")
+
+        stacked_static_inputs = _stack_and_label_variables_v2(
+            static_ds,
+            list(static_ds.data_vars),
+            "static",
+            verbose=verbose,
+        )
+
+        if stacked_static_inputs is not None:
+            input_arrays.append(stacked_static_inputs)
+
+    ### FINAL CONCATENATION
+    if len(input_arrays) == 0:
+        raise ValueError(
+            "All requested variables/levels were unavailable after filtering. "
+            "Please check met_variables/static_variables against dataset contents."
+        )
+
+    concatenated_inputs = xr.concat(input_arrays, dim="variable_name")
+    mindex = pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"])
+    concatenated_inputs = concatenated_inputs.assign_coords(xr.Coordinates.from_pandas_multiindex(mindex, "variable_name"))
+
+    concatenated_inputs.attrs = {
+        "source": concatenated_inputs.attrs["source"] if "source" in concatenated_inputs.attrs else "unknown",
+        "time_deltas": time_deltas,
+        "generated on": str(datetime.datetime.now()),
+    }
+    concatenated_inputs = concatenated_inputs.astype("float32", copy=False)
+
+    if concatenated_inputs.sizes.get("variable_name", 0) == 0:
+        raise ValueError(
+            "All requested variables/levels were unavailable after filtering. "
+            "Please check met_variables/static_variables against dataset contents."
+        )
+
+    return concatenated_inputs
 
 
 ####
