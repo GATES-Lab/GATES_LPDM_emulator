@@ -752,9 +752,9 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
 
     # stack all variables in the fps along a new variable dimension, so that the dataloader returns all variables in the fps dataset. If fps is already an xarray DataArray, this will just add a variable dimension of size 1.
     if isinstance(fps, xr.Dataset):
+        fps_labels = list(fps.data_vars)
         fps = fps.to_stacked_array(new_dim="variable_name", sample_dims=["time", "lat", "lon"], name="stacked_fps")
         fps = fps.transpose("time", "lat", "lon", "variable_name")
-        fps_labels = list(fps.variable_name.values)
         fps = fps.chunk(time=batch_size, variable_name=-1)
 
         y_bgen = xb.BatchGenerator(

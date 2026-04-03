@@ -45,6 +45,7 @@ data = LoadSquareSatelliteData(
     region="BRAZIL",
     month="01",   # omit for a full year
     size=10,      # cut to 10×10 square around release point
+    freq=3, # load one in every three footprints, sampled regularly along the time axis
 )
 ```
 
@@ -59,7 +60,7 @@ Key attributes after loading:
 
 | Attribute | Contents |
 |-----------|----------|
-| `data.fp_data_full` | Full footprint Dataset (dims: `time`, `lat`, `lon`) NOTE: soon to be obsolete|
+| `data.fp_data_full` | Full footprint Dataset (dims: `time`, `lat`, `lon`) 
 | `data.fp_xr` | Footprints cut to square (dims: `time`, `lat`, `lon`, with artificial centred coordinates) |
 | `data.met` | Met cut to square, aligned to footprint times |
 | `data.topog` | Topography/landcover interpolated to footprint grid |
@@ -76,12 +77,12 @@ The xarrays have coordinates `[0,1,2,3 ..., size-1]`, with the release coordinat
 from model.data.datasets import get_square_satellite_inputs
 
 met_variables = {
-    "x_wind": [15, 20],          # atmospheric variable: list of model levels to extract
-    "y_wind": [15, 20],
-    "atmosphere_boundary_layer_thickness": [0], # a 2D variable, with no levels
+    "x_wind": [15, 21],          # atmospheric variable: list of model levels to extract
+    "y_wind": [15, 21],
+    "atmosphere_boundary_layer_thickness": [], # a 2D variable, with no levels
 }
 
-inputs = get_square_satellite_inputs(
+inputs, data = get_square_satellite_inputs(
     data,
     met_variables,
     time_deltas=[6],                       # also extract met at t-6h 
@@ -91,7 +92,7 @@ inputs = get_square_satellite_inputs(
 
 This stacks all variables along a `variable_name` MultiIndex of tuples `(variable, level, time_delta)`. Static variables always have `level=0, time_delta=0`.
 
-Returns an xarray DataArray of shape `(fp_time, lat, lon, variable_name)`.
+Returns `inputs`, an xarray DataArray of shape `(fp_time, lat, lon, variable_name)`, and also returns the original data object - if any indeces could not be interpolated correctly to the requested time-deltas, these are dropped from the object too.
 
 Available `static_variables`: `topog`, `landcover`, `lat_coords`, `lon_coords`, and others — see `get_static_variables_functions()` in `load_data_helper_funs.py`.
 
@@ -138,18 +139,44 @@ fp_recovered = fp_ds.inverse_transform(scaled_fps)
 
 ### Step 5 — Build DataLoader: `make_dataloader`
 
+Uses `xbatcher` to batch lazily — data is not all loaded into memory at once. Returns a standard `torch.utils.data.DataLoader` yielding `(inputs_batch, fp_batch)` pairs. `inputs_batch` always has shape `(batch_size, lat, lon, variable_name)`.
+
+The shape of the `fp_batch` will depend on what footprint data was passed. Passing a DataArray will return batches of shape `(batch_size, lat, lon)`:
+
 ```python
 from model.data.datasets import make_dataloader
 
-train_loader = make_dataloader(
+train_loader, fp_labels = make_dataloader(
     scaled_inputs,
     scaled_fps["fp_transformed"],
     batch_size=32,
     randomize=True,    # shuffle for training; set False for val/test
 )
 ```
+Passing a Dataset with multiple variables will stack them. For example, `scaled_fps` has variables `["fp_transformed", "fp_original"]`, so each `fp_batch` will have shape `(batch_size, lat, lon, n_fp_labels)`:
 
-Uses `xbatcher` to batch lazily — data is not all loaded into memory at once. Returns a standard `torch.utils.data.DataLoader` yielding `(inputs_batch, fp_batch)` pairs of shape `(batch_size, lat, lon, variable_name)` and `(batch_size, lat, lon)`.
+```python
+# 5. DataLoader with multiple output labels
+train_loader, fp_labels = make_dataloader(
+    scaled_inputs, scaled_fps,
+    batch_size=10, randomize=True,
+)
+
+train_features, train_labels = next(iter(dataloader))
+```
+You can pass parameters directly to Torch's dataloader by passing a dictionary 
+```python
+dataloader_params={"prefetch_factor": None, # whether to pre-load the following batches while the current one is being used 
+    "num_workers": 0, # how many subprocesses to use in parallel
+    "shuffle" : False # whether to shuffle the batches each epoch
+    }
+train_loader, fp_labels = make_dataloader(
+    scaled_inputs, scaled_fps,
+    batch_size=10, dataloader_params=dataloader_params
+)
+```
+In a notebook (or for small tests) the above dataloader parameters are recommended. In computation settings that allow more memory, increasing these parameters should help with memory and latency (e.g. `dataloader_params={"prefetch_factor": 2, "num_workers": 2}` )
+
 
 ---
 
@@ -165,13 +192,13 @@ data = LoadSquareSatelliteData(year=2016, region="BRAZIL", month="01", size=10)
 
 # 2. Build inputs
 met_variables = {
-    "x_wind": [15, 20], "y_wind": [15, 20],
-    "specific_humidity": [15], "surface_temperature": [],
+    "x_wind": [3,15], "y_wind": [3,15],
+    "upward_air_velocity": [15], "atmosphere_boundary_layer_thickness": [],
 }
-inputs = get_square_satellite_inputs(
+inputs, data = get_square_satellite_inputs(
     data, met_variables,
     time_deltas=[6],
-    static_variables=["topog", "lat_coords"],
+    static_variables=["topog", "lat_coords", "lon_coords"],
 )
 
 # 3. Scale inputs
@@ -186,20 +213,9 @@ scaled_fps = fp_ds.fit_transform()
 # 5. DataLoader
 train_loader, _ = make_dataloader(
     scaled_inputs, scaled_fps["fp_transformed"],
-    batch_size=32, randomize=True,
+    batch_size=10, randomize=True,
 )
 
 train_features, train_labels = next(iter(dataloader))
 ```
 
-Passing a dataset with multiple variables will stack them. For example, `scaled_fps` has variables `["fp_transformed", "fp_original"]`, so 
-```python
-# 5. DataLoader with multiple output labels
-train_loader, fp_labels = make_dataloader(
-    scaled_inputs, scaled_fps,
-    batch_size=32, randomize=True,
-)
-
-train_features, train_labels = next(iter(dataloader))
-```
-will yield `train_labels` with shape `(batch_size, lat, lon, n_labels)`, in this case `n_labels=2` and `train_labels=["fp_transformed", "fp_original"]`.
