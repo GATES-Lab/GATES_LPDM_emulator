@@ -18,292 +18,6 @@ from .load_data_helper_funs import *
 
 from .load_data import cut_satellite_met
 
-# deprecated
-# def get_square_satellite_inputs(data, met_variables, time_deltas=[], static_variables=[], verbose=True, return_variable_names=False, return_asarray=False):
-#     """
-#     LATEST VERSION - get inputs from LoadSquareSatelliteData object and format as a DataArray of size (time, lat, lon, variables)
-
-#     ToDo: add option for it to work with LoadDomainSatelliteData! 
-
-#     Inputs:
-#     - data: LoadSquareSatelliteData object
-#     - met_variables: dict, of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list
-#     - time_deltas: list, of t-H hours to extract the met variables. t=0 (ie the time of the satellite measurement) is extracted automatically. time_deltas=[6,12] extracts the data at t=0, t-6h and t-12h.
-#     - static_variables: list of static variables to add, eg topog, landcover, lat_coords. You can see or increase the list of valid names get_static_variables_functions()
-#     - return_variable_names: bool, if true also returns a list of dicts with the variable names
-#     - return_asarray: bool, if true returns as an np array of shape (time, lat, lon, variables) and the variable_names
-
-#     returns:
-#     - if return_asarray=False and return_variable_names=False: xarray DataArray of size (fp_time, lat, lon, variable_name) where fp_time is the time of the reference footprint, and lat and lon are the artificial coordinates centered around the release point. The variable_name is a multiIndex, shown as a tuple of form (variable_name, level, time_delta) e.g. ('x_wind', 15, 6) for the x_wind at model height 15 and at t-6h. Surface variables and static variables have level = 0, and static variables always have time_delta = 0. 
-
-#     - if return_asarray=True returns a np array of shape (time, lat, lon, variables) and a list of variable names in the same order as the variable dimension of the array. The variable names are shown as tuples as described above. We are trying to move away from this and towards only using xarrays.
-
-
-#     """
-#     assert hasattr(data, "dataset_format"), "It doesn't seem this is a SatelliteData object"
-#     #assert data.dataset_format == "square", "At the moment this only works for LoadSquareSatelliteData objects"
-#     assert data.met_processed == True, "Make sure that you have loaded and cut the meteorology in the SatelliteData object"
-    
-#     if type(met_variables) is not dict:
-#             raise ValueError("met_variables should be a dict of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list")
-
-
-#     if verbose: 
-#         print("------------------------")
-#         print("---EXTRACTING MET DATA---")
-
-#     if not (0 in time_deltas):
-#         time_deltas.append(0) # append 0 to get present met too
-
-#     time_deltas=list(sorted(set(time_deltas)))
-
-#     all_met_files={}
-
-#     # subset before saving to the dict
-
-#     min_levels_needed = list(set([levels[i] for levels in list(met_variables.values()) for i in range(len(levels))]))
-                             
-#     met_variables_needed = list(met_variables.keys())
-
-#     surface_variables_needed = [var_name for var_name in met_variables if met_variables[var_name]==[]]
-
-#     levels_variables_needed = [var_name for var_name in met_variables if len(met_variables[var_name])>0]
-
-#     # check that the passed variables and levels are available in data.met (cut data object for 0)
-
-#     if len(time_deltas)>0:
-#         print(f"extracting met at t-H for H in: {time_deltas}")
-#         met_nan_idxs = {}
-#         # filename here 
-#         for delta in time_deltas:
-#             if delta==0:
-#                 met = data.met
-#                 met = select_met_levels(met, levels=min_levels_needed)
-#                 met = select_met_variables(met, variables=met_variables_needed)
-#                 # swap the dimensions so that each dataset, no matter the time delta, is aligned along the fp_time (the time of the measurement)
-#                 # so that met.time = met.fp_time - met.time_delta in hours
-#                 met = met.swap_dims({"time":"fp_time"})
-#                 #met = met.reset_coords(["time"])
-#                 met = met.drop_vars("time")
-#                 #met = met.rename({"fp_time":"time"})
-#                 #met = met.assign_coords({"time_delta": ("time_delta", [delta])})
-#                 for var in met_variables_needed:
-#                     if var not in met.data_vars:
-#                         warnings.warn(f"Variable {var} is not available in the met data, skipping this variable")
-#                         met = met.drop_vars(var)
-#                     else:
-#                         met[var] = met[var].expand_dims("time_delta").assign_coords({"time_delta": ("time_delta", [delta])})
-
-#             else:
-#                 # to make this extendable to LoadDomainSatelliteData, add an option here that processes it met for the fix domain instead of this function, which does square cropping (to be written)
-#                 if data.dataset_format == "square":
-#                     met, nan_idxs = cut_satellite_met(data.met_file, data.fp_data_full, metsize=data.metsize, time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, pad_mode=data.fill_outofdomain_with, load=False, add_wind_direction=True, return_nan_idxs=True)
-#                     met_nan_idxs[delta] = nan_idxs
-#                 #if data.dataset_format == "domain":
-#                 #    met = process_domain_met(data.met_file, data.fp_data_full,time_delta=delta, relevant_levels = min_levels_needed, relevant_variables = met_variables_needed, add_wind_direction=True)
-
-#                 met = met.swap_dims({"time":"fp_time"})
-#                 #met = met.reset_coords(["time"])
-#                 met = met.drop_vars("time")
-                
-#             # does having .copy load it into memory? check
-#             all_met_files[delta] = met
-
-#             del met 
-
-#     # print if timedeltas isnt the same as the key of all met files
-#     if time_deltas != list(all_met_files.keys()):
-#         warnings.warn(f"Warning: the time_deltas passed {time_deltas} are not the same as the time_deltas of the extracted met {list(all_met_files.keys())}. Check that the cut_satellite_met function is working correctly for the passed time_deltas")
-#     # if there is only one met file because only one time delta
-#     if len(all_met_files.keys())==1:
-#         # extract time delta, drop and add with expand dims
-#         time_delta = list(all_met_files.keys())[0]
-#         full_met = all_met_files[time_delta]
-
-#         full_met = full_met.transpose("fp_time", "lat", "lon", ..., "time_delta")
-#         all_nan_idxs = np.unique(list(met_nan_idxs.values()))
-#     else:
-#         # concatenate all met datasets, which should have the same coordinates except the time_delta dimension
-#         full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars =met_variables_needed).transpose("fp_time", "lat", "lon", ..., "time_delta")
-#         all_nan_idxs = np.unique(np.concatenate(list(met_nan_idxs.values())))
-        
-#     for v in full_met.data_vars:
-#         full_met[v].astype("float32", copy=False)
-
-#     # if the time_delta is large, cut met might have interpolated to t-time_delta outside of the known met. check and if so remove indeces
-    
-#     if len(all_nan_idxs)>0:
-#         # drop idx only if already in fp_time
-#         full_met = full_met.drop_sel(fp_time=all_nan_idxs)
-#         print(f"removing {len(all_nan_idxs)} indeces due to problems with interpolating meteorology for the passed time_deltas")
-#         data.remove_indeces(all_nan_idxs)
-
-#     """
-#     if data.met.time.values[0] - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]:
-#         badly_interpolated = data.met.time.values - pd.Timedelta(f"{max(time_deltas)}h") < data.met_file.time.values[0]
-#         full_met = full_met.drop_sel(fp_time=full_met.fp_time.values[badly_interpolated])
-
-#         # this updates any indeces that couldnt be interpolated
-#         # i think it updates data without needing to return it as a new object
-#         data.remove_indeces(np.where(badly_interpolated)[0])
-
-#     """
-
-#     input_arrays = []
-#     varnames_dict = []
-
-    
-#     ### SETTING UP VARIABLES WITH LEVELS
-#     # stack along the variable dimension, so that the new variable has shape (variable name, level, time_delta)
-#     if len(levels_variables_needed)>0:
-#         if verbose: print(f"Setting up variables with levels: {levels_variables_needed}")
-#         stacked_levels_met = full_met[levels_variables_needed].to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_levels_met")
-        
-#         # make sure we keep only the levels passed in met_variables
-#         """
-#         indexes = []
-#         # build requested labels
-#         for v in list(set(levels_variables_needed)):
-#             for delta in time_deltas:
-#                 for lev in 
-
-        
-#                 # check if lev is available in the met variables
-#                 if lev not in full_met[v].levels.values:
-#                     print(f"Warning: requested level {lev} for variable {v} is not available in the met data, skipping this level")
-#                     continue
-#                 for lev in met_variables[v]:
-#                     indexes.append((v, lev, delta))
-#         """
-#         indexes = stacked_levels_met.variable_name.values
-#         # build the required tuples, from the inputs, and keep only the tupes that are present in both
-#         required_tuples = []
-#         for v in list(set(levels_variables_needed)):
-#             for delta in time_deltas:
-#                 for lev in met_variables[v]:
-#                     required_tuples.append((v, lev, delta))
-        
-#         variable_tuples = list(set(stacked_levels_met.variable_name.values))
-
-#         stacked_levels_met = stacked_levels_met.sel(variable_name=variable_tuples)
-
-#         varnames_dict = varnames_dict + [{"var":tup[0], "level":tup[1], "time_delta":tup[2], "type":"met"} for tup in stacked_levels_met.variable_name.values]
-        
-
-#         stacked_levels_met = stacked_levels_met.drop_vars({'time_delta', 'variable_name', 'levels','variable'}).assign_coords({"variable_name":stacked_levels_met.variable_name.values})
-
-#         if return_asarray:
-#             stacked_levels_met = stacked_levels_met.chunk({"fp_time":100, "variable_name":1})
-#             stacked_levels_met.load()
-
-#         input_arrays.append(stacked_levels_met)
-        
-#     else:
-#         stacked_levels_met = None
-    
-#     ### SETTING UP VARIABLES WITH NO LEVELS
-#     if len(surface_variables_needed)>0:
-#         if verbose: print(f"Setting up surface variables: {surface_variables_needed}")
-        
-#         # add empty variable levels so it aligns with the met dataset
-#         stacked_surface_met = full_met[surface_variables_needed].assign_coords(levels=0).expand_dims("levels").transpose("fp_time", "lat", "lon", "levels", "time_delta").to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_surface_met")
-#         varnames_dict = varnames_dict + [{"var":tup[0], "time_delta":tup[2], "type":"surface_met"} for tup in stacked_surface_met.variable_name.values]
-#         stacked_surface_met = stacked_surface_met.drop_vars({'time_delta', 'levels', 'variable_name', 'variable'}).assign_coords({"variable_name":stacked_surface_met.variable_name.values})
-        
-#         if return_asarray:
-#             stacked_surface_met.load()
-
-#         input_arrays.append(stacked_surface_met)
-
-#     else:
-#         stacked_surface_met = None
-
-#     ### SETTING UP NON-MET VARIABLES
-#     if len(static_variables)>0:
-#         if verbose: print(f"Setting up static variables: {static_variables}")       
-
-#         # dict of arguments and the functions that they return
-#         static_variables_functions = get_static_variables_functions()
-
-#         # broadcast lat_coords and lon_coords from shape (time, lat) and (time, lon) to shared shape(time, lat, lon). we will use these as a starting array to add all the static variables, and will remove them at the end if they were not passed in "static_variables"
-#         if data.dataset_format=="square":
-#             (static_ds, ) = xr.broadcast(full_met[["lat_coords", "lon_coords"]])
-#         if data.dataset_format == "domain":
-#             (static_ds, ) = xr.broadcast(full_met.assign({"lat_coords":(("lat"), full_met.lat.values), "lon_coords":(("lon"), full_met.lon.values)})[["lat_coords", "lon_coords", "fp_time"]])
-
-#             static_ds = static_ds[["lat_coords", "lon_coords"]]
-
-#             if "time" not in data.topog.coords:
-#                 data.topog = data.topog.broadcast_like(static_ds, exclude=["lat", "lon", "landcover_level"])
-#                 data.topog = data.topog.assign_coords({"lat":static_ds.lat.values, "lon":static_ds.lon.values}).rename({"fp_time":"time"})
-        
-
-
-
-#         for var in static_variables:
-#             # add each input as a variable in the static_ds
-#             if var in ["topog", "landcover", "landcover_disaggregated"]:
-#                 assert hasattr(data, "topog"), "Load topog on the data object before trying to extract this as an input!"
-#                 static_ds = static_variables_functions[var](data.topog, static_ds)
-#             elif "domain" in var:
-#                 static_ds = static_variables_functions[var](data.fp_data_full, static_ds)
-#             elif var in list(static_variables_functions.keys()) and var not in ["lat_coords", "lon_coords"]:
-#                 static_ds = static_variables_functions[var](static_ds)
-#             elif var != "lat_coords" and var != "lon_coords":
-#                 print(f"variable {var} was not found in the list of known functions!")
-
-        
-#         if "lat_coords" not in static_variables:
-#             static_ds = static_ds.drop_vars(["lat_coords"])
-#         if "lon_coords" not in static_variables:
-#             static_ds = static_ds.drop_vars(["lon_coords"])
-
-#         # add empty variable levels and time_delta so it aligns with the met dataset
-#         stacked_static_inputs = static_ds.assign_coords(levels=0, time_delta=0).expand_dims("levels").expand_dims("time_delta").transpose("fp_time", "lat", "lon", "levels", "time_delta").to_stacked_array(new_dim="variable_name", sample_dims=["fp_time", "lat", "lon"], name="stacked_static_inputs")  
-
-        
-#         varnames_dict = varnames_dict + [{"var":tup[0], "type":"static"} for tup in stacked_static_inputs.variable_name.values]
-#         stacked_static_inputs = stacked_static_inputs.drop_vars({'variable_name', 'variable', "levels", "time_delta"}).assign_coords({"variable_name":stacked_static_inputs.variable_name.values})
-
-#         if return_asarray:
-#             stacked_static_inputs.load()
-
-#         input_arrays.append(stacked_static_inputs)
-
-#     else:
-#         stacked_static_inputs=None
-
-#     # make the variable name a multiindex of variable name, level and time delta, to keep track of what the variables are after concatenation
-#     concatenated_inputs = xr.concat(input_arrays, dim="variable_name")
-#     mindex = pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"])
-#     mindex_coords = xr.Coordinates.from_pandas_multiindex(mindex, "variable_name")
-#     concatenated_inputs = concatenated_inputs.assign_coords(mindex_coords)
-
-#     concatenated_inputs.attrs = {"source": concatenated_inputs.attrs["source"] if "source" in concatenated_inputs.attrs else "unknown","time_deltas":time_deltas, "generated on": str(datetime.datetime.now())}
-#     concatenated_inputs = concatenated_inputs.astype("float32", copy=False)
-#     #latlons, idx_latlons = get_grid(data, latlon_fp)
-
-#     if not return_asarray:
-#         if return_variable_names:
-#             return concatenated_inputs, varnames_dict
-#         else:
-#             return concatenated_inputs
-    
-#     ## ideally we move away from this! it requires loading on the spot and takes a long time
-#     if return_asarray:
-#         concatenated_inputs = concatenated_inputs.chunk({"fp_time":100, "variable_name":1})
-
-#         concatenated_inputs = concatenated_inputs.load()
-
-#         print("We are moving away from this!")
-
-#         if return_variable_names:
-
-#             return np.reshape(concatenated_inputs.values, (concatenated_inputs.fp_time.size, concatenated_inputs.lat.size*concatenated_inputs.lon.size, concatenated_inputs.variable_name.size)), varnames_dict
-#         else:
-#             return np.reshape(concatenated_inputs.values, (concatenated_inputs.fp_time.size, concatenated_inputs.lat.size*concatenated_inputs.lon.size, concatenated_inputs.variable_name.size))
-
-
 def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None, verbose=False):
     """
     Stack requested variables into a single variable_name dimension with tuple labels.
@@ -901,11 +615,12 @@ class FootprintDataset:
     accepts either the Dataset returned by ``transform`` or the transformed DataArray.
     """
 
-    def __init__(self, fp, scaler=None, scaler_params={}):
+    def __init__(self, fp, scaler=None, scaler_params={}, add_nan_mask=False):
         
         fp = self._check_fp_format(fp)
         
         self.fp = fp.copy()
+        self.add_nan_mask = add_nan_mask
 
         if scaler is None:
             self.scaler = LogAndShiftMeanFpScaler(**scaler_params)
@@ -941,6 +656,10 @@ class FootprintDataset:
             "fp_transformed": transformed_fp,
             "fp_original": fp,
         })
+
+        if self.add_nan_mask:
+            ds["fp_nan_mask"] = xr.where(fp.isnull(), 1, 0)
+
         # add coord linked to time index with idx
         ds = ds.chunk({"time": 1})
         ds = ds.assign_coords(idx=("time", list(range(len(ds.time)))))
@@ -1063,7 +782,7 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
             "prefetch_factor": 3,  # Prefetch up to 3 batches in advance to reduce data loading latency
             "num_workers": 4,  # Use 4 parallel worker processes to load data concurrently
             "persistent_workers": True,  # Keep workers alive between epochs for faster subsequent epochs
-            "multiprocessing_context": 'forkserver',  # Use "forkserver" to spawn subprocesses, ensuring stability in multiprocessing
+            #"multiprocessing_context": 'forkserver',  # Use "forkserver" to spawn subprocesses, ensuring stability in multiprocessing
         }
     dataloader = torch.utils.data.DataLoader(
         dataset,
