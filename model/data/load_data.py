@@ -15,7 +15,7 @@ import dask
 import sys
 import os
 import copy
-#import warning
+import warnings
 
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
@@ -467,15 +467,12 @@ class LoadBaseSatelliteData:
         if self.verbose: print("Loading footprint data from " + fp_datadir) 
 
         self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose)  
-        print("failed after loading fps")
 
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
-        print("failed after dropping duplicates")
 
         ## reduce data frequency with regular sampling 9eg keep only 1 in every 3 timesteps
         # uses the sampling_mode and freq parameters
         self._subsample_frequency(**self.subsample_parameters)
-        print("failed after subsampling")
 
         self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": 500})
 
@@ -598,7 +595,7 @@ class LoadBaseSatelliteData:
 
         if not crop_to_intersection:
             if (met_lat_max < fp_lat_max or met_lat_min > fp_lat_min or met_lon_max < fp_lon_max or met_lon_min > fp_lon_min):
-                print("met file domain is smaller than the footprint domain! interpolating to the same grid as the footprint, but this will create artifacts in the meteorology! \n You may want to set crop_to_intersection=True.")
+                warnings.warn("met file domain is smaller than the footprint domain! interpolating to the same grid as the footprint, but this will create artifacts in the meteorology! \n You may want to set crop_to_intersection=True.")
 
             self.met_file = self.met_file.interp(lat=self.fp_data_full.lat.values, lon=self.fp_data_full.lon.values, method="nearest")
             return
@@ -671,8 +668,7 @@ class LoadBaseSatelliteData:
             if self.verbose: print("country mask loaded successfully at self.countries.country_mask and landmask at self.countries.land_mask")
 
         except Exception as e:
-            print("Error occurred while processing country mask:", e)
-            print("Returning original country dataset without processing")
+            warnings.warn(f"Error occurred while processing country mask: {e} \n Returning original country dataset without processing")
             self.countries = country_ds
 
 
@@ -885,6 +881,9 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.topog = self.topog.drop_sel(time=nan_idxs)
 
         if self.verbose: print(f"Length after removing indeces: {self.fp_data_full.time.size}")
+        # if the len is zero, raise an error
+        if self.fp_data_full.time.size == 0:
+            raise ValueError("All data has been removed after removing nans, cannot continue!")
 
     def _remove_fp_nans(self):
         ## check if any of the fp entries are nans, and if so remove from met and others
@@ -1037,7 +1036,7 @@ def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
 
 
 
-def load_emissions(domain, year=2016):
+def load_flux_data(domain, year=2016):
     """
     Load emissions for the given domain and year. Returns a lazy xarray DataArray (time, lat, lon) with all months in the file. Hardcoded paths should be replaced by a config file .
     """
@@ -1059,21 +1058,21 @@ def load_default_sahara_emissions(year=2016):
     print("Obsolete: use load_emissions(domain='sahara', year=2016) instead")
 
 
-def cut_emissions_data(emissions, fp, size, tolerance="32D", verbose=True):
+def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
     """
-    Crops emissions to a size x size square centred on each footprint's release
-    point, after matching each footprint to the nearest monthly emissions snapshot.
+    Crops flux data to a size x size square centred on each footprint's release
+    point, after matching each footprint to the nearest monthly flux snapshot.
 
     Parameters
     ----------
-    emissions : xr.DataArray, dims (time, lat, lon)
-        Monthly emissions snapshots (e.g. from load_default_brazil_emissions).
+    flux : xr.DataArray, dims (time, lat, lon)
+        Monthly flux snapshots (e.g. from load_default_brazil_emissions).
     fp : xr.Dataset
         Footprint dataset with release_lat, release_lon, and time coordinates.
     size : int
         Side length of crop square. Must be even.
     tolerance : str
-        Maximum time distance for matching a footprint to an emissions snapshot.
+        Maximum time distance for matching a footprint to a flux snapshot.
         Default '32D' (32 days) ensures each footprint matches at most one month.
     verbose : bool
         Print progress messages.
@@ -1082,11 +1081,11 @@ def cut_emissions_data(emissions, fp, size, tolerance="32D", verbose=True):
     -------
     tuple of (xr.Dataset, pd.DatetimeIndex)
         Dataset with variables:
-            - flux       : cropped emissions (time, lat, lon)
+            - flux       : cropped flux (time, lat, lon)
             - lat_coords : actual latitudes  (time, lat)
             - lon_coords : actual longitudes (time, lon)
         lat/lon are artificial 0..size coordinates; release point is at size//2.
-        DatetimeIndex of fp timestamps that had no emissions match within tolerance.
+        DatetimeIndex of fp timestamps that had no flux match within tolerance.
     """
     if size % 2 != 0:
         raise ValueError(f"size must be even, got {size}")
@@ -1094,22 +1093,22 @@ def cut_emissions_data(emissions, fp, size, tolerance="32D", verbose=True):
 
     # --- 1. Time matching ---
     tol = pd.Timedelta(tolerance)
-    nearest = emissions.indexes["time"].get_indexer(
+    nearest = flux.indexes["time"].get_indexer(
         pd.DatetimeIndex(fp.time.values), method="nearest", tolerance=tol)
     nan_idxs = pd.DatetimeIndex(fp.time.values)[nearest == -1]
     if verbose and len(nan_idxs):
-        print(f"cut_emissions_data: {len(nan_idxs)} footprint timestamps had no "
-              f"emissions snapshot within {tolerance}. These will be NaN in the output.")
+        print(f"cut_flux_data: {len(nan_idxs)} footprint timestamps had no "
+              f"flux snapshot within {tolerance}. These will be NaN in the output.")
     nearest_safe = np.where(nearest != -1, nearest, 0)
-    emissions_matched = emissions.isel(time=xr.DataArray(nearest_safe, dims="time"))
-    emissions_matched["time"] = fp.time.values
+    flux_matched = flux.isel(time=xr.DataArray(nearest_safe, dims="time"))
+    flux_matched["time"] = fp.time.values
     if len(nan_idxs):
-        emissions_matched = emissions_matched.where(
+        flux_matched = flux_matched.where(
             xr.DataArray(nearest != -1, dims="time"), np.nan)
 
     # --- 2. Resolution check ---
-    domain_lats = emissions_matched.lat.values
-    domain_lons = emissions_matched.lon.values
+    domain_lats = flux_matched.lat.values
+    domain_lons = flux_matched.lon.values
     fp_lats = fp.lat.values
     fp_lons = fp.lon.values
     em_dlat = domain_lats[1] - domain_lats[0]
@@ -1117,14 +1116,14 @@ def cut_emissions_data(emissions, fp, size, tolerance="32D", verbose=True):
     fp_dlat = fp_lats[1] - fp_lats[0]
     fp_dlon = fp_lons[1] - fp_lons[0]
     if verbose and (not np.isclose(em_dlat, fp_dlat) or not np.isclose(em_dlon, fp_dlon)):
-        print(f"cut_emissions_data: WARNING — emissions resolution "
+        print(f"cut_flux_data: WARNING — flux resolution "
               f"({em_dlat:.4f}, {em_dlon:.4f}) differs from fp resolution "
               f"({fp_dlat:.4f}, {fp_dlon:.4f}). Spatial alignment may be off.")
 
     # --- 3. Release indices + padding ---
     release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
-    emissions_matched, domain_lats, domain_lons, release_idxs = _pad_domain(
-        emissions_matched, fp, release_idxs, half, pad_mode="nans")
+    flux_matched, domain_lats, domain_lons, release_idxs = _pad_domain(
+        flux_matched, fp, release_idxs, half, pad_mode="nans")
 
     # --- 4. Vectorised isel ---
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
@@ -1132,7 +1131,7 @@ def cut_emissions_data(emissions, fp, size, tolerance="32D", verbose=True):
     lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": fp.time})
     lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": fp.time})
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
-        cropped = emissions_matched.isel(lat=lat_da, lon=lon_da)
+        cropped = flux_matched.isel(lat=lat_da, lon=lon_da)
 
     # --- 5. Assign coordinates + return ---
     cropped = (
