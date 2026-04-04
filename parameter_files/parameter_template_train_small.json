@@ -43,6 +43,13 @@
 
     "learning_rate":5e-5,
 
+    "epochs" : {
+        "training": 300,
+        "visualize": 5,
+        "patience": 3,
+        "model_saving": 50
+    },    
+
     "loss_functions" : {
         "criterion": "MSE_weighted_by_truth_nans(multiply_by_add, w=1000)",
         "criterion_test": "torch.nn.MSELoss()"

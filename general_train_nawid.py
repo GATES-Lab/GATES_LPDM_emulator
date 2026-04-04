@@ -121,6 +121,7 @@ def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device,
             
     return running_loss / len(loader)
 
+
 @torch.no_grad()
 def validate_and_predict(model, loader, criterion_test, device):
     model.eval()
@@ -130,10 +131,59 @@ def validate_and_predict(model, loader, criterion_test, device):
     for batch in loader:
         ins, labels = batch[0].to(device), batch[1].to(device)
         outputs = model(ins)
-        test_error += criterion_test(outputs, labels).item()
-        preds_list.append(outputs.cpu().numpy().squeeze())
         
+        test_error += criterion_test(outputs, labels).item()
+        
+        # Convert to numpy and ensure it is 2D (Batch, Features)
+        # Reshape to (Batch_Size, Everything Else)
+        pred_np = outputs.cpu().numpy().reshape(outputs.shape[0], -1)
+        preds_list.append(pred_np)
+        
+    # vstack will now reliably return (Total_Samples, Features)
     return test_error / len(loader), np.vstack(preds_list)
+
+
+class EarlyStopping:
+    """
+    Early stops the training if validation loss doesn't improve after a given patience.
+    """
+    def __init__(self, patience=20, verbose=False, delta=0, path='checkpoint.pt'):
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.val_loss_min = np.inf
+        self.delta = delta
+        self.path = path
+
+    def __call__(self, val_loss, model):
+        score = -val_loss
+
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+        elif score < self.best_score + self.delta:
+            print((score,self.best_score))
+            print('counter increased',self.counter)
+            self.counter += 1
+            if self.verbose:
+                print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+            self.counter = 0
+            print((score,self.best_score))
+            print('counter reset',self.counter)
+
+    def save_checkpoint(self, val_loss, model):
+        '''Saves model when validation loss decreases.'''
+        if self.verbose:
+            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}). Saving model...')
+        torch.save(model.state_dict(), self.path)
+        self.val_loss_min = val_loss
 
 def save_training_plots(epoch, test_dataset, transformed_preds, image_plots, image_dates, size, path, model_name):
     """Handles the 4x4 grid plotting logic."""
@@ -195,11 +245,21 @@ def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_dat
     ds.to_netcdf(f"{path}{model_name}/sample_predictions_training.nc")
     print("NetCDF file saved.")
 
-def run_full_training(model, train_loader, test_loader, optimizer, criterion, criterion_test, 
+def run_full_training(model,parameters, train_loader, test_loader, optimizer, criterion, criterion_test, 
                       test_dataset, test_data, device, epoch_so_far, losses, 
                       flux_evaluation, image_plots, image_dates, size, path, model_name, lr, NMAE_function):
+    print(parameters['epochs'])
+    num_epochs = parameters['epochs']['training']
+    visualize_epochs = parameters['epochs']['visualize']
+    saving_epochs = parameters['epochs']['model_saving']
+    patience_epochs = parameters['epochs']['patience']
+
+    # Initialize Early Stopping
+    best_model_path = f"{path}{model_name}/{model_name}_best.pt"
+    early_stopping = EarlyStopping(patience=patience_epochs, verbose=True, path=best_model_path)
     
-    for epoch_idx in range(302):
+
+    for epoch_idx in range(num_epochs):
         epoch = epoch_idx + epoch_so_far
         print(f"\n--- Start Epoch: {epoch} ---")
         
@@ -236,17 +296,25 @@ def run_full_training(model, train_loader, test_loader, optimizer, criterion, cr
             flux_metrics = test_dataset.evaluate_flux(mode=flux_mode)
             losses[f"flux_{flux_mode}"]["MAE"].append(flux_metrics["MAE"])
             losses[f"flux_{flux_mode}"]["R2"].append(flux_metrics["R2"])
+        
+        # 5. EARLY STOPPING CHECK
+        # We pass the validation loss to the class. It handles the counter and saving.
+        early_stopping(avg_test_loss, model)
+        
+        if early_stopping.early_stop:
+            print("Early stopping triggered. Ending training.")
+            break
 
         # Write to Log File
         log_text = f"Epoch {epoch}, Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}, NMAE: {nmae_val:.4f}"
         write_to_file(log_text, path, model_name)
 
         # 5. Visualizations (Every 5 epochs)
-        if epoch % 5 == 0:
+        if epoch % visualize_epochs == 0:
             save_training_plots(epoch, test_dataset, transformed_preds, image_plots, image_dates, size, path, model_name)
 
         # 6. Checkpoints (Every 50 epochs)
-        if epoch % 50 == 0:
+        if epoch % saving_epochs == 0:
             checkpoint_path = f"{path}{model_name}/{model_name}_{epoch}.pt"
             torch.save({
                 'epoch': epoch,
