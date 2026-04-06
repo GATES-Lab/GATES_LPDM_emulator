@@ -21,8 +21,7 @@ def _make_fp_ds(n_time=100, n_lat=50, n_lon=50, sample_year=SAMPLE_YEAR, sample_
     total_seconds = int((month_end - month_start).total_seconds()) + 1
     second_offsets = np.random.choice(total_seconds, n_time, replace=False)
     times = month_start + pd.to_timedelta(second_offsets, unit="s")
-    print("times:", times   )
-    #times = pd.to_datetime(np.random.choice(pd.date_range("2016-01-01", "2016-01-31", freq="s"), n_time, replace=False))    
+
     lats  = np.linspace(-15.0,  15.0, n_lat)
     lons  = np.linspace(-40.0, 30.0, n_lon)
     ds = xr.Dataset(
@@ -34,7 +33,7 @@ def _make_fp_ds(n_time=100, n_lat=50, n_lon=50, sample_year=SAMPLE_YEAR, sample_
     ds = ds.sortby("time")  # ensure time is sorted for _get_release_idxs
     return ds
 
-def _make_met_ds(n_lat=50, n_lon=50, n_levels=3, sample_year=SAMPLE_YEAR, sample_month=SAMPLE_MONTH):
+def _make_met_ds(n_lat=50, n_lon=50, sample_year=SAMPLE_YEAR, sample_month=SAMPLE_MONTH):
     """Synthetic met dataset matching real data structure."""
     # get three-hourly timestamps for the whole month
     month_start = pd.Timestamp(f"{sample_year}-{sample_month}-01")
@@ -44,6 +43,7 @@ def _make_met_ds(n_lat=50, n_lon=50, n_levels=3, sample_year=SAMPLE_YEAR, sample
     lats   = np.linspace(-15.0,  15.0, n_lat)
     lons   = np.linspace(-40.0, 30.0, n_lon)
     levels = [3, 5, 10]
+    n_levels = len(levels)
     return xr.Dataset(
         {"x_wind": (["time","model_level_number","lat","lon"], np.random.rand(n_time, n_levels, n_lat, n_lon)),
          "y_wind": (["time","model_level_number","lat","lon"], np.random.rand(n_time, n_levels, n_lat, n_lon)),

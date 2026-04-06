@@ -62,8 +62,8 @@ def load_fps(fp_datadir, verbose=False, chunk=False):
     """
     try:           
         if chunk:
-            time_chunk = 25
-            chunk_args = {"chunks" : {"time": time_chunk}, "parallel": True}
+            #time_chunk = 25
+            #chunk_args = {"chunks" : {"time": time_chunk}, "parallel": True}
             chunk_args = {"chunks":"auto", "parallel": True}
         else:
             chunk_args = {}
@@ -645,7 +645,7 @@ class LoadBaseSatelliteData:
         """
         Loads country mask for the domain, and creates a land-sea mask. Interpolates both to the same resolution and domain as the footprints in self.fp_data_full. Stores the country mask in self.countries.country_mask and the land-sea mask in self.countries.land_mask.
         """
-        ## get land-sea mass and country mask, can be used for filtering out footprints/data and during fplotting
+        ## get land-sea mass and country mask, can be used for filtering out footprints/data and during plotting
         if countrymask_path=="default": 
             countrymask_path = "/group/chem/acrg/LPDM/countries/country_"+self.domain+".nc"
         if self.verbose: print(f"trying to load country mask from {countrymask_path}")
@@ -804,12 +804,12 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met = self._process_meteorology(lazy_load=True)
             self.topog_file, self.landcover_file = self.load_topog(**topog_args)
             self.topog = self._process_topog_and_landcover()
-
+        """
         if check_for_nans:
             print("\n Checking if there are any nans in the data")
             self._remove_fp_nans()
             self._remove_met_nans()
-        
+        """
         if verbose: print("---- All done!")       
 
     def _process_footprints(self, lazy_load):
@@ -874,7 +874,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         # if the len is zero, raise an error
         if self.fp_data_full.time.size == 0:
             raise ValueError("All data has been removed after removing nans, cannot continue!")
-
+    """
     def _remove_fp_nans(self):
         ## check if any of the fp entries are nans, and if so remove from met and others
         # can take a long time to run!
@@ -885,7 +885,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.fp_nan_idxs = nan_idxs
         else:
             self.fp_nan_idxs = []
-    
+      
     def _remove_met_nans(self):
         # check if any of the met entries are nans, and if so remove from all objects
         # this shouldnt be hardcoded !!
@@ -898,7 +898,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met_nan_idxs = nan_idxs
         else:
             self.met_nan_idxs=[]
-
+        """  
     
     def plot_cropped_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, plot_wind=False, return_fig=False):
         """

@@ -23,9 +23,8 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
     Stack requested variables into a single variable_name dimension with tuple labels.
     Returns (stacked_dataarray_or_None, warnings).
     """
-    if not var_names:
-        return None, []
-
+    if len(var_names) == 0:
+        return None
     if verbose:
         print(f"Setting up {var_type}: {var_names}")
 
@@ -165,7 +164,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=None, static_va
     if add_timedelta_zero and 0 not in time_deltas:
         time_deltas.append(0)
     time_deltas = sorted(set(time_deltas))
-    print(f"Time deltas: {time_deltas}")
+    if verbose: print(f"Time deltas: {time_deltas}")
 
     met_variables_needed = list(met_variables.keys())
     surface_variables_needed = [var_name for var_name, levs in met_variables.items() if levs == []]
@@ -176,7 +175,7 @@ def get_square_satellite_inputs(data, met_variables, time_deltas=None, static_va
     met_nan_idxs = {}
 
     if len(time_deltas) > 0:
-        print(f"extracting met at t-H for H in: {time_deltas}")
+        if verbose: print(f"extracting met at t-H for H in: {time_deltas}")
         for delta in time_deltas:
             if delta == 0:
                 met = data.met
