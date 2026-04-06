@@ -430,9 +430,6 @@ class InputsDataset:
             self.scaler = DefaultInputsScaler(**scaler_params, verbose=self.verbose)
         else:
             self.scaler = scaler(**scaler_params)
-        
-        def fit(self):
-            self.scaler.fit(self.inputs)
 
     def fit(self):
         if self.fit_on_subsample<0: 
@@ -451,7 +448,7 @@ class InputsDataset:
         elif self.fit_on_subsample>=1:
             self.scaler.fit(self.inputs)
         
-    def transform(self, inputs=None):
+    def transform(self, inputs):
         return self.scaler.transform(inputs)
 
 
@@ -503,7 +500,7 @@ class DefaultInputsScaler:
 
                     # save the scaler for this variable and level for each variable tuple in the multiindex that matches this variable and level
                     for vc in variable_names:
-                        if vc[0] == varname and len(vc)==3:
+                        if vc[0] == varname and vc[1] == level and len(vc)==3:
                             self.scalers[vc] = scaler
 
         

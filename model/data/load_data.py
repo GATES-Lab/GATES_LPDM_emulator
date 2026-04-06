@@ -5,8 +5,6 @@ Can be fed into the GATES model as a dataset, or used for other models
 author: Elena Fillola @elenafillo
 """
 
-from datetime import datetime
-
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -826,17 +824,17 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         ## for now!
         self.padded_domain_coords = padded_domain_coords
 
-    def _process_meteorology(self,rechunk=0,lazy_load=True):
+    def _process_meteorology(self,rechunk=0,lazy_load=True, pad_mode="edge"):
         """
         Call cut_satellite_met to cut the meteorology data around the release point, to the same size as the cut footprints.
-        If the square to extract escapes the met domain, the padded space is filled with nans or zeros according to the fill_outofdomain_with parameter 
+        Pads with mode="edge" 
         """
         if self.verbose: print("----- Cutting met")
         self.metsize=self.size
         #if self.fill_outofdomain_with=="nans" or self.delete_outofdomain:
         #    pad_mode = "nans"
         #if self.fill_outofdomain_with=="zeros":
-        pad_mode = "edge"
+
         self.met = cut_satellite_met(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True)
 
         if rechunk>0:
@@ -865,14 +863,6 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         removes any set of indeces passed as nan_idxs from all the objects in the dataset
         """
         self.fp_data_full = self.fp_data_full.drop_sel(time=nan_idxs)
-        if hasattr(self, "fp_data"):
-        # this should now be redundant and fail!
-            print("this should be redundant")
-            self.fp_lats = np.delete(self.fp_lats, nan_idxs, axis=0)
-            self.fp_lons = np.delete(self.fp_lons, nan_idxs, axis=0)
-            self.fp_data = np.delete(self.fp_data, nan_idxs, axis=0)
-            if self.verbose: print(f"current length: {len(self.release_idxs)}")
-            self.release_idxs = np.delete(self.release_idxs, nan_idxs, axis=0)
         if hasattr(self, "fp_xr"):
             self.fp_xr = self.fp_xr.drop_sel(time=nan_idxs)
         if hasattr(self, "met"): 
@@ -1123,7 +1113,7 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
     # --- 3. Release indices + padding ---
     release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
     flux_matched, domain_lats, domain_lons, release_idxs = _pad_domain(
-        flux_matched, fp, release_idxs, half, pad_mode="nans")
+        flux_matched, fp, release_idxs, half, pad_mode="nans", verbose=verbose)
 
     # --- 4. Vectorised isel ---
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
@@ -1173,7 +1163,6 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
     verbose : bool
         Print progress messages.
     """
-    print("using new cut satellite data!!!")
     if size % 2 != 0:
         raise ValueError("size must be even so the release point is centred")
     half = size // 2
@@ -1272,7 +1261,7 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
     return met, nan_idxs
 
 
-def _pad_domain(data, fp, release_idxs, half, pad_mode):
+def _pad_domain(data, fp, release_idxs, half, pad_mode, verbose=True):
     """
     Extends the spatial domain of an xarray Dataset/DataArray so that a
     (2*half) x (2*half) crop is possible for every footprint release point.
@@ -1301,7 +1290,7 @@ def _pad_domain(data, fp, release_idxs, half, pad_mode):
     if need_S > 0 or need_N > 0:
         pad_S = int(np.max([0, half - np.min(release_idxs[:, 0])]))
         pad_N = int(np.max([0, half - (len(domain_lats) - np.max(release_idxs[:, 0]))]))
-        print(f"Padding lat by ({pad_S}, {pad_N}) cells (S, N) with mode='{pad_mode}'")
+        if verbose: print(f"Padding lat by ({pad_S}, {pad_N}) cells (S, N) with mode='{pad_mode}'")
         extended_lats = (
             sorted([domain_lats[0] - (i + 1) * delta_lat for i in range(pad_S)])
             + list(domain_lats)
@@ -1320,7 +1309,7 @@ def _pad_domain(data, fp, release_idxs, half, pad_mode):
     if need_W > 0 or need_E > 0:
         pad_W = int(np.max([0, half - np.min(release_idxs[:, 1])]))
         pad_E = int(np.max([0, half - (len(domain_lons) - np.max(release_idxs[:, 1]))]))
-        print(f"Padding lon by ({pad_W}, {pad_E}) cells (W, E) with mode='{pad_mode}'")
+        if verbose: print(f"Padding lon by ({pad_W}, {pad_E}) cells (W, E) with mode='{pad_mode}'")
         extended_lons = (
             sorted([domain_lons[0] - (i + 1) * delta_lon for i in range(pad_W)])
             + list(domain_lons)
@@ -1403,7 +1392,7 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
 
     release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
     met, domain_lats, domain_lons, release_idxs = _pad_domain(
-        met, fp, release_idxs, half, pad_mode)
+        met, fp, release_idxs, half, pad_mode, verbose=verbose)
 
     # build integer index arrays: shape (n_times, metsize)
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(metsize)[None, :]
@@ -1549,11 +1538,11 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
 
     # pad both topog and landcover using the same release indices
     topog_file, domain_lats, domain_lons, release_idxs = _pad_domain(
-        topog_file, fp, release_idxs, half, pad_mode=pad_mode)
+        topog_file, fp, release_idxs, half, pad_mode=pad_mode, verbose=False)
     landcover_file, _, _, _ = _pad_domain(
         landcover_file, fp,
         _get_release_idxs(fp, domain_lats=landcover_file.lat.values, domain_lons=landcover_file.lon.values),
-        half, pad_mode=pad_mode)
+        half, pad_mode=pad_mode, verbose=False)
 
     # integer index arrays: shape (n_times, size)
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
