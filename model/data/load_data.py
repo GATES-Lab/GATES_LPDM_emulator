@@ -472,7 +472,7 @@ class LoadBaseSatelliteData:
         # uses the sampling_mode and freq parameters
         self._subsample_frequency(**self.subsample_parameters)
 
-        self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": 500})
+        self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": "auto"})
 
         if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
 
