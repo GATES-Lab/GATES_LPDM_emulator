@@ -4,7 +4,7 @@ This repo implements a new, more user-friendly version of the model described at
 
 
 ## New file structure (currently in construction)
-
+```
 gates_LPDM_emulator/
 ├── gates/
 │   └── data/
@@ -17,6 +17,7 @@ gates_LPDM_emulator/
 ├── notebooks
 │       ├── data_tutorial.ipynb  
 
+```
 
 
 

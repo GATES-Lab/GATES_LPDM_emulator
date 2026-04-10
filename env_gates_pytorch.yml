@@ -29,4 +29,11 @@ dependencies:
   - ipykernel=7.2.0
   - pip=26.0.1
   - pytest=8.3.5
-  ## missing torch_scatter :(
+  - pip:
+      - --find-links https://data.pyg.org/whl/torch-2.3.0+cu121.html
+      - torch-scatter==2.1.2
+
+## NOTE: 
+# if you are running this on a cluster where pytorch-cuda is not available, create the environment using the following:
+
+# CONDA_OVERRIDE_CUDA=12.1 conda env create -f env_gates_pytorch.yml
