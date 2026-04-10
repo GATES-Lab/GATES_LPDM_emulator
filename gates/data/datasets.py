@@ -693,7 +693,7 @@ class FootprintDataset:
         self.scaler = bundle["scaler"]
 
 
-def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42, dataloader_params=None):
+def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42, dataloader_params=None, flatten=False):
     """
     Build a PyTorch dataloader from input and footprint datasets using xbatcher.
 
@@ -713,9 +713,12 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     - randomize: bool, whether to shuffle the dataset along the time dimension. Recommended for training and not for testing
     - random_seed: int, seed for reproducibility of the shuffling when randomize is True
     - dataloader_params: dict, additional parameters to pass to the PyTorch DataLoader
+    - flatten: bool, whether to flatten the input tensors in the lat-lon dimension before passing them to the model
 
     Returns:
         - dataloader: PyTorch DataLoader that yields batches of ``(inputs, fps)``.
+            Inputs has shape (batch_size, lat, lon, variable_name) or (batch_size, flat_lat_lon, variable_name) if flatten is True. 
+            If passing a dataarray as fps, Fps has shape (batch_size, lat, lon) or (batch_size, flat_lat_lon) if flatten is True. If passing a dataset as fps, fps has shape (batch_size, lat, lon, variable_name) or (batch_size, flat_lat_lon, variable_name) if flatten is True.
         - fps_labels: footprint variable labels, as a list
     
     """
@@ -725,6 +728,8 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     if isinstance(fps, xr.Dataset):
         print(f"you passed a fps dataset with multiple variables: {list(fps.data_vars)}. All variables will be returned in the dataloader along a new dimension. ")
         ## but make sure this is what you want! If you only want to return the transformed fps variable, pass fps['fp_transformed'] instead of the whole dataset when calling this function.
+    if not isinstance(fps, (xr.DataArray, xr.Dataset)) and isinstance(inputs, xr.DataArray):
+        raise ValueError("fps must be an xarray DataArray or Dataset, and inputs must be an xarray DataArray")
 
     if randomize:
         print("randomizing dataset!")
@@ -738,10 +743,20 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
 
     inputs = inputs.chunk(fp_time=batch_size)
     inputs = inputs.transpose("fp_time", "lat", "lon", "variable_name")
+
+    assert len(inputs.lat) == len(fps.lat) and len(inputs.lon) == len(fps.lon), "Latitude and longitude dimensions of inputs and fps must match"
+
+    if not flatten:
+        input_dims = {"lat": len(inputs.lat), "lon": len(inputs.lon), "variable_name": len(inputs.variable_name)}
+
+    elif flatten:
+        inputs = inputs.stack(flat_lat_lon=["lat", "lon"])
+        inputs = inputs.transpose("fp_time", "flat_lat_lon", "variable_name")
+        input_dims = {"flat_lat_lon": len(inputs.flat_lat_lon), "variable_name": len(inputs.variable_name)}
     
     X_bgen = xb.BatchGenerator(
         inputs,
-        input_dims={"lat":len(inputs.lat), "lon":len(inputs.lon), "variable_name": len(inputs.variable_name)},
+        input_dims=input_dims,
         batch_dims={'fp_time': batch_size},
         preload_batch=False,
     )
@@ -753,9 +768,16 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
         fps = fps.transpose("time", "lat", "lon", "variable_name")
         fps = fps.chunk(time=batch_size, variable_name=-1)
 
+        if flatten:
+            fps = fps.stack(flat_lat_lon=["lat", "lon"])
+            fps = fps.transpose("time", "flat_lat_lon", "variable_name")
+            input_dims = {"flat_lat_lon": len(fps.flat_lat_lon), "variable_name": len(fps.variable_name)}
+        else:
+            input_dims = {"lat": len(fps.lat), "lon": len(fps.lon), "variable_name": len(fps.variable_name)}
+
         y_bgen = xb.BatchGenerator(
             fps,
-            input_dims={"lat":len(fps.lat), "lon":len(fps.lon), "variable_name": len(fps.variable_name)},
+            input_dims=input_dims,
             batch_dims={'time': batch_size},
             preload_batch=False,
         )
@@ -764,10 +786,15 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
         fps_labels = [fps.name if fps.name is not None else "fp"]
         fps = fps.chunk(time=batch_size)
 
+        if flatten:
+            fps = fps.stack(flat_lat_lon=["lat", "lon"])
+            input_dims = {"flat_lat_lon": len(fps.flat_lat_lon)}
+        else:
+            input_dims = {"lat": len(fps.lat), "lon": len(fps.lon)}
 
         y_bgen = xb.BatchGenerator(
             fps,
-            input_dims={"lat":len(fps.lat), "lon":len(fps.lon)},
+            input_dims=input_dims,
             batch_dims={'time': batch_size},
             preload_batch=False,
         )
