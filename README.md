@@ -1,22 +1,51 @@
-# GATES_LPDM_emulator
-This repo implements the model described at [Enabling Fast Greenhouse Gas Emissions Inference from Satellites with GATES: a Graph-Neural-Network Atmospheric Transport Emulation System (egusphere-2025-2392)](https://egusphere.copernicus.org/preprints/2025/egusphere-2025-2392)  
+# GATES_LPDM_emulator v0.2.0
 
-## Replicating the paper
-1) Download all the necessary data
-2) Set up the environment
-3) Run launch_train.sh to train a model
-4) Run launch_emulate.sh to make predictions at 200x200 size
-5) Run integrate_fps.py file to bias correct (make sure to edit the paths at the top!)
-6) Use the ACRC repo with the bias-corrected, integrated footprints to do inversion
+This repo implements a new, more user-friendly version of the model described at [Enabling Fast Greenhouse Gas Emissions Inference from Satellites with GATES: a Graph-Neural-Network Atmospheric Transport Emulation System (GMD, 2026)](https://gmd.copernicus.org/articles/19/1893/2026/gmd-19-1893-2026.html)  
 
-## Environment - check this section! 
 
-See environment_short.yml
-This file does not contain torch and related packages - this is because you will need to install separately a CUDA-enabled version or not depending on where you are running the code. BluePebble has pytorch+cuda pre-installed, which you can load when you submit jobs to the queue (see the launch_train.sh file). To run notebooks or files on the login node, you will need torch and associated packages installed in a different environment, which I manually import when running notebooks with the following line. Alternatively you could have two parallel envs (graphnet to run on cluster, and graphnet+torch to run on login) but that might get more confusing if you need to install packages! 
+## New file structure (currently in construction)
+
+gates_LPDM_emulator/
+├── gates/
+│   └── data/
+│   |   ├── load_data.py         # LoadSquareSatelliteData, LoadBaseSatelliteData
+│   |   ├── datasets.py          # InputsDataset, FootprintDataset, 
+│   |   └── HOW_TO_DATA.md       # Info on how to use the data files
+|   └── evaluation/
+│       ├── metrics.py         
+│
+├── notebooks
+│       ├── data_tutorial.ipynb  
+
+
+
+
+
+
+## Setting up
+
+### Enviroment
+
+The repo requires `python=3.12`, `xarray=2025.1`, and `pytorch=2.3`. Install the enviroment from [env_gates_pytorch.yml](.env_gates_pytorch.yml). 
+
+
+You might need to make modifications to the enviroment if you want a CPU-only installation, or for different cuda versions.  If you are installing the enviroment on the login node of a cluster with GPUs, use the following to force a CUDA-install.
+
 ```
-sys.path.insert(0, "/path/to/environment_with_torch/env_name/lib/python3.8/site-packages/")
-import torch
+CONDA_OVERRIDE_CUDA=12.1 conda env create -f env_gates_pytorch.yml
+
 ```
+
+### Installing the repo
+To install an editable version of this package in your repository, run the following from the root of the repo
+
+```
+pip install --no-build-isolation --no-deps -e .
+```
+
+
+
+# -----------------To check!-------------------
 
 ## Loading data
 #### `LoadBaseSatelliteData` loads data from the directories (provided or default). It does not crop or interpolate
