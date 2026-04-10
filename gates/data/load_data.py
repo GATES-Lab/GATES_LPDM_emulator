@@ -1036,8 +1036,12 @@ def load_flux_data(domain, year=2016):
         path = f"/group/chem/acrg/LPDM/emissions/NORTHAFRICA/ch4_NORTHAFRICA_{year}.nc"
     else:
         raise ValueError("Domain not recognized")
+    flux = xr.open_dataset(path).flux
 
-    return xr.open_dataset(path).flux
+    flux.attrs["source_file"] = path
+
+    return flux
+    
 
 
 def load_default_brazil_emissions(year=2016):
@@ -1137,6 +1141,10 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
                 coords={"time": fp.time}),
         })
     )
+
+    # if ems has attributes, add them to cropped
+    if hasattr(flux, "attrs"):
+        cropped.attrs = flux.attrs
     return cropped, nan_idxs
 
 

@@ -9,6 +9,7 @@ All public functions return numpy scalars or (N,) numpy arrays.
 """
 
 import numpy as np
+from sklearn.metrics import r2_score
 
 try:
     import torch
@@ -23,126 +24,7 @@ except ImportError:
     _XR_AVAILABLE = False
 
 
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
-
-def _to_numpy(arr) -> np.ndarray:
-    """Convert tensor / DataArray / array-like to a numpy array."""
-    if _TORCH_AVAILABLE and isinstance(arr, torch.Tensor):
-        return arr.detach().cpu().numpy()
-    if _XR_AVAILABLE and isinstance(arr, xr.DataArray):
-        return arr.values
-    return np.asarray(arr)
-
-
-def _spatial_shape_from_xarray(da) -> tuple[int, int]:
-    """Infer (H, W) from a DataArray's dimension names."""
-    lat_dim = next((d for d in da.dims if "lat" in d.lower()), None)
-    lon_dim = next((d for d in da.dims if "lon" in d.lower()), None)
-    if lat_dim is None or lon_dim is None:
-        raise ValueError(
-            f"Cannot infer spatial shape: expected dims containing 'lat'/'lon', "
-            f"got {list(da.dims)}"
-        )
-    return da.sizes[lat_dim], da.sizes[lon_dim]
-
-
-def _to_batched_spatial(arr: np.ndarray, spatial_shape=None) -> np.ndarray:
-    """Reshape any footprint array to canonical (N, H, W).
-
-    Parameters
-    ----------
-    arr:
-        Array of shape (H, W), (HW,), (N, H, W), or (N, HW).
-    spatial_shape:
-        (H, W) tuple — required when arr is flat (1D or 2D with N > 1).
-        If None and arr is 2D, it is assumed to already be (H, W).
-
-    Returns
-    -------
-    np.ndarray of shape (N, H, W).
-    """
-    if arr.ndim == 3:
-        return arr  # already (N, H, W)
-
-    if arr.ndim == 2:
-        if spatial_shape is None:
-            # Treat as a single (H, W) footprint
-            return arr[np.newaxis]
-        else:
-            # Treat as (N, HW) batch-flat
-            return arr.reshape(-1, *spatial_shape)
-
-    if arr.ndim == 1:
-        if spatial_shape is None:
-            raise ValueError(
-                "spatial_shape=(H, W) is required to reshape a 1D flat footprint."
-            )
-        return arr.reshape(1, *spatial_shape)
-
-    raise ValueError(f"Expected ndim in {{1, 2, 3}}, got ndim={arr.ndim}.")
-
-
-def _normalize_ignore_mask(ignore_mask, spatial_shape) -> np.ndarray:
-    """Convert an ignore_mask of any type/shape to (N, H, W) boolean numpy.
-
-    Accepts the same types and shapes as footprint arrays. True means ignore.
-    """
-    if _XR_AVAILABLE and isinstance(ignore_mask, xr.DataArray) and spatial_shape is None:
-        spatial_shape = _spatial_shape_from_xarray(ignore_mask)
-    return _to_batched_spatial(_to_numpy(ignore_mask).astype(bool), spatial_shape)
-
-
-def _resolve_inputs(true, pred, spatial_shape):
-    """Convert true/pred to (N, H, W) numpy, inferring spatial_shape from
-    xarray if not provided."""
-    if _XR_AVAILABLE and isinstance(true, xr.DataArray) and spatial_shape is None:
-        spatial_shape = _spatial_shape_from_xarray(true)
-
-    true_np = _to_batched_spatial(_to_numpy(true), spatial_shape)
-    pred_np = _to_batched_spatial(_to_numpy(pred), spatial_shape)
-
-    if true_np.shape != pred_np.shape:
-        raise ValueError(
-            f"Shape mismatch after normalization: true={true_np.shape}, pred={pred_np.shape}"
-        )
-    return true_np, pred_np
-
-
-# ---------------------------------------------------------------------------
-# Public helpers
-# ---------------------------------------------------------------------------
-
-def valid_mask(*arrays: np.ndarray, threshold=None, nonzero=False, ignore_mask=None) -> np.ndarray:
-    """Boolean mask that is True where all arrays are finite and optionally above a threshold or non-zero.
-
-    Parameters
-    ----------
-    *arrays:
-        One or more numpy arrays of the same shape.
-    threshold:
-        If provided, mask requires arr > threshold.
-    nonzero:
-        If True, mask requires arr != 0 in addition to being finite.
-    ignore_mask:
-        Boolean numpy array of the same shape as the input arrays.
-        True means ignore (exclude from mask).
-
-    Returns
-    -------
-    Boolean numpy array of the same shape as the inputs.
-    """
-    mask = np.ones(arrays[0].shape, dtype=bool)
-    for arr in arrays:
-        mask &= np.isfinite(arr) & ~np.isnan(arr)
-        if threshold is not None:
-            mask &= arr > threshold
-        elif nonzero:
-            mask &= arr != 0
-    if ignore_mask is not None:
-        mask &= ~ignore_mask
-    return mask
+from gates.utils.shape_utils import _to_numpy, _spatial_shape_from_xarray, _to_batched_spatial, _resolve_inputs, _normalize_ignore_mask, valid_mask
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +238,7 @@ def corrcoef(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask
     return float(np.nanmean(scores)) if reduce == "mean" else scores
 
 
-def compute_metrics(true, pred, metrics=["iou", "mse", "mae", "nmae", "corrcoef", "corrcoef_log"], spatial_shape=None, **kwargs):
+def compute_footprint_metrics(true, pred, metrics=["iou", "mse", "mae", "nmae", "corrcoef", "corrcoef_log"], spatial_shape=None, **kwargs):
     """Compute multiple metrics at once and return as a dictionary.
     
     Args:
@@ -391,16 +273,126 @@ def compute_metrics(true, pred, metrics=["iou", "mse", "mae", "nmae", "corrcoef"
     return results
 
 
+def compute_mfs_metrics(mf_true, mf_pred):
+    """Compute summary metrics for two aligned mole-fraction time series.
+
+    Parameters
+    ----------
+    mf_true, mf_pred:
+        xarray DataArrays with a shared time coordinate or two 1D numpy arrays of the same shape.
+
+    Returns
+    -------
+    dict
+        Dictionary with keys:
+        - "corrcoef": Pearson correlation coefficient from ``numpy.corrcoef``.
+        - "mean_absolute_error": mean of ``|mf_pred - mf_true|``.
+        - "mean_bias": mean of ``mf_pred - mf_true``.
+        - "true_mean": mean of ``mf_true``.
+        - "predicted_mean": mean of ``mf_pred``.
+        - "r2_score" from sklearn 
+    """
+    if isinstance(mf_true, xr.DataArray) and isinstance(mf_pred, xr.DataArray):
+        if not mf_true.time.equals(mf_pred.time):
+            raise ValueError("mf_true and mf_pred must share the same time coordinates.")
+
+        true_values = np.asarray(mf_true.values)
+        pred_values = np.asarray(mf_pred.values)
+    
+    elif isinstance(mf_true, np.ndarray) and isinstance(mf_pred, np.ndarray):
+        if mf_true.shape != mf_pred.shape:
+            raise ValueError(f"Shape mismatch: mf_true.shape={mf_true.shape}, mf_pred.shape={mf_pred.shape}")
+        ## assert they are 1d arrays
+        if mf_true.ndim != 1 or mf_pred.ndim != 1:
+            raise ValueError(f"Expected 1D arrays, got mf_true.ndim={mf_true.ndim}, mf_pred.ndim={mf_pred.ndim}")
+        
+        true_values = mf_true
+        pred_values = mf_pred
+    else:
+        raise NotImplementedError("Currently only xarray DataArrays with time coordinates or 1D numpy arrays are supported for compute_mfs_metrics.")
+    
+    valid_mask = np.isfinite(true_values) & np.isfinite(pred_values)
+
+    if np.sum(valid_mask) < 2:
+        raise ValueError("At least 2 valid points are required!")
+    else:
+        corrcoef = np.corrcoef(true_values[valid_mask], pred_values[valid_mask])[0, 1]
+
+    mean_absolute_error = np.mean(np.abs(pred_values[valid_mask] - true_values[valid_mask]))
+    mean_bias = np.mean(pred_values[valid_mask] - true_values[valid_mask])
+    true_mean = np.mean(true_values[valid_mask])
+    predicted_mean = np.mean(pred_values[valid_mask])
+    
+    r2 = r2_score(true_values[valid_mask], pred_values[valid_mask])
+
+
+    return {
+        "corrcoef": float(corrcoef),
+        "mean_absolute_error": float(mean_absolute_error),
+        "mean_bias": float(mean_bias),
+        "true_mean": float(true_mean),
+        "predicted_mean": float(predicted_mean),
+        "r2_score": float(r2),
+    }
+
+
 ##### Flux related metrics 
 
-def calculate_mf(fp, fluxes):
+def calculate_mfs(fp, fluxes, transform_factor=None, spatial_shape=None):
+    """
+    Calculate the mole fraction (mf) by multiplying the footprint (fp) with the fluxes and summing over the spatial dimensions (lat, lon). 
+
+    Inputs:
+    - fp: Footprint array. Can be a numpy array, xarray DataArray, or xarray Dataset. If xarray Dataset, variables containing 'fp' in their name will be included in the calculation (e.g. 'fp', 'fp_pred') and treated separately.
+    - fluxes: Flux array. Can be a numpy array, xarray DataArray, or xarray Dataset. If xarray Dataset, it must contain a variable named 'flux' which will be used in the calculation. The spatial dimensions (lat, lon) must match those of the footprint. Use cut_flux_data() to crop the fluxes to match the footprint dimensions.
+    - transform_factor: Optional factor to change the units of the resulting mole fraction. If "default", it will be attempted to extract the factor from the fluxes units. If None, no transformation is applied.
+    - spatial_shape: (H, W) tuple, required if fp and fluxes are flat numpy arrays. Recommended when possible for better error checking.
+
+    Returns:
+    - If inputs are xarray DataArrays or Datasets, returns an xarray Dataset containing the calculated mole fractions for each variable. If inputs are numpy arrays, returns a numpy array of shape (N,) containing the mole fractions for each sample in the batch.
+    """
+    if isinstance(fp, (xr.DataArray, xr.Dataset)) and isinstance(fluxes, (xr.DataArray, xr.Dataset)):
+        print("going here")
+        return calculate_mfs_xarray(fp, fluxes, transform_factor)
+
+    else:
+
+        fp = _to_batched_spatial(_to_numpy(fp), spatial_shape)
+        fluxes = _to_batched_spatial(_to_numpy(fluxes), spatial_shape)
+
+        if fp.shape != fluxes.shape:
+            raise ValueError(f"Shape mismatch after normalization: fp={fp.shape}, fluxes={fluxes.shape}")
+        mfs = np.nansum(fp * fluxes, axis=(1, 2))
+
+        if transform_factor is not None:
+            if transform_factor == "default":
+                raise NotImplementedError("Default transform factor is only implemented for xarray inputs with units attribute.")
+            elif not isinstance(transform_factor, (int, float)):
+                raise ValueError("transform_factor must be a number or 'default'.")
+            mfs = mfs * transform_factor
+        
+        return mfs
+    
+
+def calculate_mfs_xarray(fp, fluxes, transform_factor=None):
     """
     Calculate the mole fraction (mf) by multiplying the footprint (fp) with the fluxes and summing over the spatial dimensions (lat, lon).
 
     Inputs:
     - fp: xarray DataArray or Dataset containing the footprint values. Must have dimensions 'time', 'lat', and 'lon'. Variables should contain 'fp' in their name (e.g. 'fp', 'fp_pred') to be included in the calculation.
     - fluxes: xarray DataArray containing the flux values. Must have dimensions 'time', 'lat', and 'lon' that match those of the footprint. Use cut_flux_data() to crop the fluxes to match the footprint dimensions.
+    - transform_factor: Optional factor to change the units of the resulting mole fraction. If "default", it will be attempted to extract the factor from the fluxes units. If None, no transformation is applied.
+
+    Returns:
+    - xarray Dataset containing the calculated mole fractions for each variable in the footprint dataset
     """
+    if not isinstance(fp, (xr.DataArray, xr.Dataset)) or not isinstance(fluxes, (xr.DataArray, xr.Dataset)):
+        raise ValueError("fp must be an xarray DataArray or Dataset, and fluxes must be an xarray DataArray or Dataset.")
+
+    if isinstance(fluxes, xr.Dataset):
+        if "flux" not in fluxes.data_vars:
+            raise ValueError("If fluxes is an xarray Dataset, it must contain a variable named 'flux'.")
+        fluxes = fluxes.flux
 
     if not fp.time.equals(fluxes.time):
         raise ValueError("Time dimension of footprint and fluxes must match. \n  Crop the fluxes with cut_flux_data() to match the footprint dimensions.")
@@ -414,17 +406,152 @@ def calculate_mf(fp, fluxes):
 
     mfs = {}
 
+    ## create the new variable label by removing "fp" from the original variable name, e.g. "fp_pred" -> "mf_pred", "fp" -> "mf"
     if isinstance(fp, xr.DataArray):
         var_name = fp.name or "fp"
         var_name = _mf_key(var_name)
-        mfs[var_name] = (fp * fluxes).sum(dim=["lat", "lon"]).flux
+        mfs[var_name] = (fp * fluxes).sum(dim=["lat", "lon"])
     elif isinstance(fp, xr.Dataset):
         for var in fp.data_vars:
             if "fp" in var.split("_"):
                 var_name = _mf_key(var)
-                mfs[var_name] = (fp[var] * fluxes).sum(dim=["lat", "lon"]).flux
-    else:
-        raise ValueError("Unsupported type for fp. Expected xarray DataArray or Dataset.")
+                mfs[var_name] = (fp[var] * fluxes).sum(dim=["lat", "lon"])
+
     
-    return xr.Dataset(mfs)
+    flux_attrs = fluxes.attrs.copy() if hasattr(fluxes, "attrs") else {}
+    
+    ## apply the transform factor to the mfs and update the units attribute if it exists. If transform_factor is "default", attempt to infer the factor from the fluxes units (e.g. if units are "mol/m2/s", apply a factor of 1e9 to convert to ppb)
+    if transform_factor is not None:
+        if transform_factor == "default":
+            if hasattr(fluxes, "units"):
+                if "units" in flux_attrs:
+                    units = flux_attrs["units"]
+                    if units=="mol/m2/s":
+                        transform_factor = 1e9  # convert to ppb
+                    else:
+                        print(f"Warning: Unrecognized flux units {units}. No transformation applied.")
+            else:
+                raise ValueError("transform_factor='default' requires fluxes to have 'units' attribute.")
+
+        elif not isinstance(transform_factor, (int, float)):
+            raise ValueError("transform_factor must be a number or 'default'.")
+        for key in mfs:
+            mfs[key] = mfs[key] * transform_factor
+        
+        # write the number in scientific notation to the units attribute, e.g. "1e9 * mol/m2/s"
+        transform_factor_string = f"{transform_factor:.0e}" if isinstance(transform_factor, (int, float)) else "unknown"
+
+        if "units" in flux_attrs:
+            flux_attrs["units"] = f"{transform_factor_string} * {flux_attrs.get('units')} " 
+        else:
+            flux_attrs["units"] = f"{transform_factor_string} * unknown_units"
+
+        
+    mfs_dataset= xr.Dataset(mfs)
+    mfs_dataset.attrs.update(flux_attrs)
+
+    return mfs_dataset
+
+
+
+def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_patterns=None, transform_factor=None):
+    """Compute mole-fraction metrics using static, hand-designed flux patterns.
+
+    For each flux pattern the footprints are multiplied by the flux and summed
+    over the spatial domain (via calculate_mfs), and the resulting mole-fraction
+    time series are compared with compute_mfs_metrics.
+
+    Parameters
+    ----------
+    fp : xr.Dataset, xr.DataArray, or np.ndarray
+        True (and optionally predicted) footprints.
+        - xr.Dataset: must contain variables 'fp' and 'fp_pred'.
+        - xr.DataArray: treated as the true footprint; fp_pred must be supplied.
+        - np.ndarray: treated as the true footprint; fp_pred must be supplied.
+          Shape (H, W), (N, H, W) or flat variants — see spatial_shape.
+    fp_pred : xr.DataArray or np.ndarray, optional
+        Predicted footprints. Required when fp is not an xr.Dataset that
+        already contains fp_pred.
+    spatial_shape : tuple (H, W), optional
+        Required when fp / fp_pred are flat numpy arrays.
+    flux_patterns : dict[str, np.ndarray], optional
+        Mapping of label -> 2-D flux array of shape (H, W).
+        If None, the following defaults are used:
+        - "uniform"     : np.ones((H, W))
+        - "checkerboard": 0/1 checkerboard of shape (H, W)
+        - "checkerboard_10": 0/1 checkerboard of shape (H, W) with 10x10 blocks
+        - "checkerboard_25": 0/1 checkerboard of shape (H, W) with 25x25 blocks
+        - "checkerboard_50": 0/1 checkerboard of shape (H, W) with 50x50 blocks (only if H>100 and W>100)
+    transform_factor : float or "default", optional
+        Passed through to calculate_mfs.
+
+    Returns
+    -------
+    dict[str, dict]
+        {label: metrics_dict} where each metrics_dict is the output of
+        compute_mfs_metrics (keys: corrcoef, mean_absolute_error, mean_bias,
+        true_mean, predicted_mean).
+    """
+    # ------------------------------------------------------------------ #
+    # 1. Resolve inputs to a (true, pred) pair
+    # ------------------------------------------------------------------ #
+    if isinstance(fp_true, xr.Dataset) or isinstance(fp_pred, xr.Dataset):
+        raise ValueError("xarray Datasets are not supported for fp_true or fp_pred. Use xr.DataArrays instead.")
+    elif isinstance(fp_true, xr.DataArray) and isinstance(fp_pred, xr.DataArray):
+        spatial_shape = _spatial_shape_from_xarray(fp_true)
+        fp = _to_batched_spatial(_to_numpy(fp_true), spatial_shape)
+        fp_pred= _to_batched_spatial(_to_numpy(fp_pred), spatial_shape)
+        H, W = spatial_shape
+
+    elif isinstance(fp_true, np.ndarray) and isinstance(fp_pred, np.ndarray):
+        fp = _to_batched_spatial(_to_numpy(fp_true), spatial_shape)
+        fp_pred= _to_batched_spatial(_to_numpy(fp_pred), spatial_shape)
+        H, W = fp.shape[1], fp.shape[2]
+
+    else:
+        raise ValueError("Unsupported combination of input types for fp_true and fp_pred. Both must be either xarray DataArrays or numpy arrays.")
+
+    # ------------------------------------------------------------------ #
+    # 2. Determine spatial shape (H, W) and build default flux patterns
+    # ------------------------------------------------------------------ #
+
+    if flux_patterns is None:
+        rows, cols = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
+
+        checkerboard = ((rows + cols) % 2).astype(float)
+        checkerboard_10 = ((rows // 10) + (cols // 10)) % 2
+        checkerboard_25 = ((rows // 25) + (cols // 25)) % 2
+
+        flux_patterns = {
+            "uniform": np.ones((H, W)),
+            "checkerboard": checkerboard,
+            "checkerboard_10": checkerboard_10.astype(float),
+            "checkerboard_25": checkerboard_25.astype(float),
+        }
+
+        if H>100 and W>100:
+            checkerboard_50 = ((rows // 50) + (cols // 50)) % 2
+            flux_patterns["checkerboard_50"] = checkerboard_50.astype(float)
+
+    # ------------------------------------------------------------------ #
+    # 3. Compute metrics for each flux pattern
+    # ------------------------------------------------------------------ #
+    results = {}
+
+    for label, flux_2d in flux_patterns.items():
+        flux_2d = np.asarray(flux_2d, dtype=float)
+        if flux_2d.shape != (H, W):
+            raise ValueError(
+                f"Flux pattern '{label}' has shape {flux_2d.shape}, expected ({H}, {W})."
+            )
+        N = fp_true.shape[0]
+        flux_tiled = np.tile(flux_2d, (N, 1, 1))  # (N, H, W)
+        mf_true = calculate_mfs(fp_true, flux_tiled, transform_factor)
+        mf_pred = calculate_mfs(fp_pred, flux_tiled, transform_factor)
+
+        results[label] = compute_mfs_metrics(mf_true, mf_pred)
+
+    return results
+
+
    
