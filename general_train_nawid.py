@@ -407,14 +407,14 @@ def train_and_save_model(parameters, path):
     # Select the HPC environment you're using
     env = "bp"
     env_paths = config["data_paths"][env]
-    '''
+    
     # Join paths
     base_data_path = env_paths["base_data_path"]
     fp_datadir = os.path.join(base_data_path, env_paths["fp_datadir"].lstrip("/"))
     met_datadir = os.path.join(base_data_path, env_paths["met_datadir"].lstrip("/"))
     topog_datadir = os.path.join(base_data_path, env_paths["topog_datadir"].lstrip("/"))
     landcover_datadir = os.path.join(base_data_path, env_paths["landcover_datadir"].lstrip("/"))
-    '''
+    
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"), path, model_name)
