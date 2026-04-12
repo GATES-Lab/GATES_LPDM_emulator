@@ -34,6 +34,10 @@ def setup(platform="local"):
 
     default_config = load_default_config()
 
+    # allow both isambard-ai and isambard_ai
+    platform_alias = {"isambard-ai":"isambard_ai"}
+    platform = platform_aliases.get(platform, platform)
+
     if platform not in default_config["data_paths"]:
         raise ValueError(f"Unknown platform '{platform}'. Valid options: {list(default_config['data_paths'].keys())}")
 
@@ -83,7 +87,6 @@ class Config():
             raise ValueError(f"Config file is missing some of the expected keys: {minimum_config_keys}. Please check your config file at {root_dir / 'config.yml'}.")
         
         self.fp_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["fp_datadir"].lstrip("/\\")
-        print(f"Footprint data directory set to: {self.fp_datadir} from {self.data_paths['base_data_path']} and {self.data_paths['fp_datadir']}")
         self.met_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["met_datadir"].lstrip("/\\")
         self.topog_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["topog_datadir"].lstrip("/\\")
         self.landcover_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["landcover_datadir"].lstrip("/\\")
