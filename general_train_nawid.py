@@ -67,7 +67,33 @@ def load_file(file_name, file_path):
     except Exception as e:
         print(f"An error occurred while loading the file: {str(e)}")
         return None
+
+def log_object_as_artifact(obj, name, folder, model_name, file_type="pickle", description=""):
+    """
+    Saves an object locally and logs it to WandB as an artifact.
+    """
+    ext = "pickle" if file_type == "pickle" else "json"
+    filename = f"{name}_{model_name}.{ext}"
+    path = os.path.join(folder, filename)
+
+    # 1. Save locally
+    if file_type == "pickle":
+        with open(path, 'wb') as f:
+            pickle.dump(obj, f)
+    else:
+        with open(path, 'w') as f:
+            json.dump(obj, f, indent=2)
+
+    # 2. Log to WandB
+    artifact = wandb.Artifact(
+        name=f"{model_name}-{name.replace('_', '-')}", 
+        type=file_type,
+        description=description
+    )
+    artifact.add_file(path)
+    wandb.log_artifact(artifact)
     
+    return path
 
 def set_reproducibility(parameters, default_seed=34):
     """
@@ -242,7 +268,8 @@ def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_dat
     }
 
     ds = xr.Dataset(data_vars=data_vars, coords=coords, attrs={'creation_date': str(datetime.now()), "model": model_name})
-    ds.to_netcdf(f"{path}{model_name}/sample_predictions_training.nc")
+    netcdf_save_path = f"{path}{model_name}/sample_predictions_training.nc"
+    ds.to_netcdf(netcdf_save_path)
     print("NetCDF file saved.")
     
     # Log to W&B as a versioned artifact with explicit name
@@ -256,8 +283,9 @@ def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_dat
 
 def run_full_training(model,parameters, train_loader, test_loader, optimizer, criterion, criterion_test, 
                       test_dataset, test_data, device, epoch_so_far, losses, 
-                      flux_evaluation, image_plots, image_dates, size, path, model_name, lr, NMAE_function):
+                      flux_evaluation, image_plots, image_dates, size, path, model_name, NMAE_function):
     print(parameters['epochs'])
+    lr = parameters['learning_rate']
     num_epochs = parameters['epochs']['training']
     visualize_epochs = parameters['epochs']['visualize']
     saving_epochs = parameters['epochs']['model_saving']
@@ -359,8 +387,8 @@ def run_full_training(model,parameters, train_loader, test_loader, optimizer, cr
             break
         '''
         
-        if epoch == 1:
-            export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_data, size, path, model_name)
+        
+    export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_data, size, path, model_name)
 
     print("Finished Training.")
 
@@ -369,8 +397,16 @@ def train_and_save_model(parameters, path):
     """
     Train GATES model. Check readme.md for more information on the parameters.
     """
+    NMAE_function = NMAE
+    #NMAE_function = NMAE_nans
+    
+    env = parameters['env']
+    # 1. Get the current time
+    # Format: YYYYMMDD_HHMMSS (e.g., 20260412_114530)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    model_name = parameters["model_name"]
+    # 2. Append it to your model name
+    model_name = f"{parameters['model_name']}_{timestamp}"
     print(model_name)
 
     set_reproducibility(parameters)
@@ -405,9 +441,7 @@ def train_and_save_model(parameters, path):
         config = yaml.safe_load(f)
 
     # Select the HPC environment you're using
-    env = "bp"
     env_paths = config["data_paths"][env]
-    
     # Join paths
     base_data_path = env_paths["base_data_path"]
     fp_datadir = os.path.join(base_data_path, env_paths["fp_datadir"].lstrip("/"))
@@ -426,10 +460,10 @@ def train_and_save_model(parameters, path):
     # load train parameters and upload with any changes to test data
     test_load_data = copy.deepcopy(parameters["train_load_data"])
     test_load_data.update(parameters["test_load_data"])
-    '''
+    
     shared_data_args = dict(
         load_everything=True,
-        #base_data_path=base_data_path,
+        base_data_path=base_data_path,
         fp_datadir=fp_datadir,
         met_datadir=met_datadir,
         topog_args={
@@ -446,11 +480,10 @@ def train_and_save_model(parameters, path):
     print("Load test met and fp data")
     test_data = LoadSquareSatelliteData(**test_load_data, **shared_data_args)
     write_to_file("Successfully load test met and fp data",path, model_name)
-    import ipdb; ipdb.set_trace()
     '''
     data = LoadSquareSatelliteData(**train_load_data, load_everything=True)
     test_data = LoadSquareSatelliteData(**test_load_data,load_everything=True)
-    
+    '''
     write_to_file("setting up data", path, model_name)
 
     # extract inputs
@@ -489,55 +522,22 @@ def train_and_save_model(parameters, path):
     if data.dataset_format == "domain":
         size = data.domain_size
     
-    grid_path = os.path.join(training_outputs_path, f"grid_{model_name}.pickle")
-    with open(grid_path, 'wb') as handle:
-        pickle.dump(grid, handle)
+    # Save and log the Grid
+    log_object_as_artifact(grid, "grid", training_outputs_path, model_name, 
+                        description="Grid object used during training")
 
-    grid_artifact = wandb.Artifact(
-        name=f"{model_name}-grid",           # e.g. myModel-grid:v0
-        type="pickle",
-        description="Grid object used during training"
-    )
-    grid_artifact.add_file(grid_path)
-    wandb.log_artifact(grid_artifact)
+    # Save and log Transform Parameters
+    log_object_as_artifact(train_dataset.transform_parameters, "transform_parameters", 
+                        training_outputs_path, model_name, description="Transform parameters used in training")
 
-    # -------------------------------------------------------------
-
-    transform_path = os.path.join(training_outputs_path, f"transform_parameters_{model_name}.pickle")
-    with open(transform_path, 'wb') as handle:
-        pickle.dump(train_dataset.transform_parameters, handle)
-
-    transform_artifact = wandb.Artifact(
-    name=f"{model_name}-transform-parameters",   # e.g. myModel-transform-parameters:v0
-    type="pickle",
-    description="Transform parameters used in training"
-    )
-    transform_artifact.add_file(transform_path)
-    wandb.log_artifact(transform_artifact)
-
-    # -------------------------------------------------------------
+    # Save and log Settings
+    log_object_as_artifact(parameters, "training_settings", training_outputs_path, model_name, 
+                        file_type="json", description="Training settings and hyperparameters")
     
-
-    settings_path = os.path.join(training_outputs_path, f"training_settings_{model_name}.json")
-    with open(settings_path, 'w') as handle:
-        json.dump(parameters, handle, indent=2)
-
-    settings_artifact = wandb.Artifact(
-        name=f"{model_name}-training-settings",   # e.g. myModel-training-settings:v0
-        type="json",
-        description="Training settings and hyperparameters"
-    )
-    settings_artifact.add_file(settings_path)
-    wandb.log_artifact(settings_artifact)
-
-    # ------------
-
     write_to_file("setting up model", path, model_name)
     print("setting up model")
 
-
     # all the necessary data is already in the loaders, so we can delete the objects
-
     image_plots = random.sample(list(range(len(test_inputs))), k=4)
     image_dates = np.datetime_as_string(test_data.fp_data_full.time.values[image_plots])
 
@@ -552,26 +552,16 @@ def train_and_save_model(parameters, path):
     feature_dim=np.shape(inputs)[-1]
     aux_dim = 0
 
-
-
     # Should probably update the name!!
     model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim, **parameters["model_parameters"])
-
     criterion = eval(parameters["loss_functions"]["criterion"])
-
     criterion_test = eval(parameters["loss_functions"]["criterion_test"])
-
     optimizer = optim.AdamW(model.parameters(), lr=lr)
-
     flux_evaluation=["uniform", "checkerboard_10", "checkerboard_5"]
-
     losses = {"train":[], "test":[], "NMAE_test":[], "MSE_test_transformed":[], "NMAE_test_transformed":[], "accuracy":[], "IoU":[]}
-
     losses.update({f"flux_{f}":{"MAE":[], "R2":[]} for f in flux_evaluation})
 
-
-    NMAE_function = NMAE
-    NMAE_function = NMAE_nans
+    
 
     #### 3 Dump info
     print("saving grids etc")
@@ -594,57 +584,10 @@ def train_and_save_model(parameters, path):
     #### 4 Train loop
     run_full_training(model,parameters, train_loader, test_loader, optimizer, criterion, criterion_test, 
     test_dataset, test_data, device, epoch_so_far, losses, 
-    flux_evaluation, image_plots, image_dates, size, path, model_name, parameters["learning_rate"], NMAE_function=NMAE_nans)
+    flux_evaluation, image_plots, image_dates, size, path, model_name, NMAE_function=NMAE_function)
     wandb.finish()
 
-        ## save checkpoint every 50 epochs
-    '''   
-    if epoch % 50 ==0:
-        torch.save({
-                        'epoch': epoch,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': losses,
-                        'learning_rate':lr,
-                        }, f"{path}{model_name}/{model_name}_{epoch}.pt")
-
-        if epoch == 350:
-            test_out = np.reshape(np.squeeze(test_out), (len(test_out), size[0],size[1]))
-            data_vars = {'predictions':(['time', "lat", "lon"], test_out, 
-                                    {'space': 'transformed', 'type':"prediction", 'emulated_with': model_name}),
-                        'trans_predictions':(['time', "lat", "lon"], transformed_preds, 
-                                    {'space': 'original', 'type':"prediction",'emulated_with': model_name}),
-                        'fp':(['time', "lat", "lon"], np.reshape(fps, (len(test_dataset.fp),size[0],size[1])), 
-                                    {'space': 'original', 'type':"truth"}),
-                        'trans_fp':(['time', "lat", "lon"], np.reshape(test_dataset.fp, (len(test_dataset.fp), size[0],size[1])), 
-                                    {'space': 'transformed', 'type':"truth"})}
-
-            # define coordinates
-            coords = {'time': (['time'], test_data.met.time.values),
-                    'lat': (['lat'], list(range(size[0]))),
-                    'lon': (['lon'],  list(range(size[1])))}
-
-            # define global attributes
-            attrs = {'creation_date':str(datetime.now()), "model":model_name}
-            
-
-            # create dataset
-            ds = xr.Dataset(data_vars=data_vars, 
-                            coords=coords, 
-                            attrs=attrs)
-            
-
-            ds.to_netcdf(f"{path}{model_name}/sample_predictions_training.nc")
-            
-        if epoch == 102:
-            ## replaced NMAE with NMAE_nans in the whole file!
-            if NMAE_nans(test_out,truths) == 1:
-                print("no learning is happening! early stopping")
-                break
-
-
-    print("Finished Training")
-    '''
+    ## save checkpoint every 50 epochs
 
 if __name__ == "__main__":
     os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<-- REPLACE THIS
@@ -653,12 +596,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Load parameters")
     parser.add_argument("file_name", help="parameter file name")
     parser.add_argument("--file_path", help="parameter file path")
-    parser.add_argument("--output_dir", type=str, default="training_output")
 
     args = parser.parse_args()
     file_name = args.file_name
     file_path = args.file_path
-    #output_path = args.output_dir
 
     print(file_name, file_path)
 

@@ -1,4 +1,5 @@
 {
+    "env":"bp",
     "model_name" : "test_run",
     "train_load_data" : {
         "year":"2015",
