@@ -1,0 +1,57 @@
+data_paths:
+  local:
+    base_data_path: "./data"
+    fp_datadir: "/fp_archive"
+    met_datadir: "/met_archive"
+    topog_datadir: "/ancillary_data/topog_file.nc"
+    landcover_datadir: "/ancillary_data/landcover_file.nc"
+  bp:
+    base_data_path:  "/group/chem/acrg"
+    fp_datadir: "/LPDM/fp_NAME_pre20210701/"
+    met_datadir: "/met_archive/UM/"
+    topog_datadir: "/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+    landcover_datadir: "/LPDM/topog_NAME/land_cover.nc"
+  oracle:
+    base_data_path: "./data"
+    fp_datadir: "/fp_archive"
+    met_datadir: "/met_archive/"
+    topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+    landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
+  isambard_ai:
+    base_data_path: "/projects/b5s/data"
+    fp_datadir: "/fp_archive"
+    met_datadir: "/met_archive"
+    topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+    landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
+
+domains:
+  BRAZIL:
+    domain_name: "SOUTHAMERICA"
+    footprint: "GOSAT-BRAZIL-column_SOUTHAMERICA_201801.nc"
+
+  SOUTHAMERICA:
+    domain_name: "SOUTHAMERICA"
+    footprint: "GOSAT-SOUTHAMERICA-column_SOUTHAMERICA_201801.nc"
+
+  SAHARA:
+    domain_name: "NORTHAFRICA"
+    footprint: "GOSAT-SAHARA-column_NORTHAFRICA_201611.nc"
+
+  CHINA:
+    domain_name: "CHINA"
+    footprint: "GOSAT-CHINA-column_EASTASIA_201605.nc"
+
+  INDIA:
+    domain_name: "INDIA"
+    footprint: "GOSAT-INDIA-SAM-column_SOUTHASIA_201503.nc"
+
+bad_files:
+- "GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201501.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201502.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201503.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201504.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201609.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201610.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201612.nc"
