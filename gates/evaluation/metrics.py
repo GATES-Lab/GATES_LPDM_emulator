@@ -11,17 +11,8 @@ All public functions return numpy scalars or (N,) numpy arrays.
 import numpy as np
 from sklearn.metrics import r2_score
 
-try:
-    import torch
-    _TORCH_AVAILABLE = True
-except ImportError:
-    _TORCH_AVAILABLE = False
-
-try:
-    import xarray as xr
-    _XR_AVAILABLE = True
-except ImportError:
-    _XR_AVAILABLE = False
+import torch
+import xarray as xr
 
 
 from gates.utils.shape_utils import _to_numpy, _spatial_shape_from_xarray, _to_batched_spatial, _resolve_inputs, _normalize_ignore_mask, valid_mask

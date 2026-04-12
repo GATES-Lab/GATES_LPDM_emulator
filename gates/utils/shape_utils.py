@@ -1,17 +1,10 @@
 import numpy as np
 from sklearn.metrics import r2_score
 
-try:
-    import torch
-    _TORCH_AVAILABLE = True
-except ImportError:
-    _TORCH_AVAILABLE = False
 
-try:
-    import xarray as xr
-    _XR_AVAILABLE = True
-except ImportError:
-    _XR_AVAILABLE = False
+import torch
+import xarray as xr
+
 
 
 # ---------------------------------------------------------------------------
@@ -20,9 +13,9 @@ except ImportError:
 
 def _to_numpy(arr) -> np.ndarray:
     """Convert tensor / DataArray / array-like to a numpy array."""
-    if _TORCH_AVAILABLE and isinstance(arr, torch.Tensor):
+    if isinstance(arr, torch.Tensor):
         return arr.detach().cpu().numpy()
-    if _XR_AVAILABLE and isinstance(arr, xr.DataArray):
+    if isinstance(arr, xr.DataArray):
         return arr.values
     return np.asarray(arr)
 
@@ -80,7 +73,7 @@ def _normalize_ignore_mask(ignore_mask, spatial_shape) -> np.ndarray:
 
     Accepts the same types and shapes as footprint arrays. True means ignore.
     """
-    if _XR_AVAILABLE and isinstance(ignore_mask, xr.DataArray) and spatial_shape is None:
+    if isinstance(ignore_mask, xr.DataArray) and spatial_shape is None:
         spatial_shape = _spatial_shape_from_xarray(ignore_mask)
     return _to_batched_spatial(_to_numpy(ignore_mask).astype(bool), spatial_shape)
 
@@ -88,7 +81,7 @@ def _normalize_ignore_mask(ignore_mask, spatial_shape) -> np.ndarray:
 def _resolve_inputs(true, pred, spatial_shape):
     """Convert true/pred to (N, H, W) numpy, inferring spatial_shape from
     xarray if not provided."""
-    if _XR_AVAILABLE and isinstance(true, xr.DataArray) and spatial_shape is None:
+    if isinstance(true, xr.DataArray) and spatial_shape is None:
         spatial_shape = _spatial_shape_from_xarray(true)
 
     true_np = _to_batched_spatial(_to_numpy(true), spatial_shape)
