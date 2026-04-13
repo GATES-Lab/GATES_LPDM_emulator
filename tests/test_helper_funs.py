@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from model.data.load_data import LoadBaseSatelliteData, LoadSquareSatelliteData
+from gates.data.load_data import LoadBaseSatelliteData, LoadSquareSatelliteData
 
 
 def make_square_satellite_obj(

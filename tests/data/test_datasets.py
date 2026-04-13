@@ -3,13 +3,15 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from model.data.datasets import get_square_satellite_inputs
-from model.data.datasets import make_dataloader
-from model.data.datasets import InputsDataset
-from model.data.datasets import XarrayScaler
-from model.data.datasets import LogAndShiftFpScaler
-from model.data.datasets import LogAndShiftMeanFpScaler
-from model.data.datasets import FootprintDataset
+from gates.data.datasets import (
+    get_square_satellite_inputs,
+    make_dataloader,
+    InputsDataset,
+    XarrayScaler,
+    LogAndShiftFpScaler,
+    LogAndShiftMeanFpScaler,
+    FootprintDataset,
+)
 from ..test_helper_funs import make_square_satellite_obj
 from ..conftest import SAMPLE_YEAR, SAMPLE_MONTH
 
