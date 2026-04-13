@@ -5,6 +5,7 @@ import yaml
 import warnings
 import argparse
 
+config_cache = None
 
 # Path to the root directories of the project
 root_dir = Path(__file__).parent.parent
@@ -12,7 +13,18 @@ package_dir = root_dir / "gates"
 
 minimum_config_keys = ["data_paths", "domains", "bad_files"]
 
-def load_default_config():
+def get_config():
+    """
+    Get the global Config object, which holds the repository-wide configuration settings. 
+    This function uses a simple caching mechanism to ensure that the Config object is only created once, and subsequent calls to get_config() will return the same Config instance.
+    """
+    global config_cache
+    if config_cache is None:
+        print("loading from file")
+        config_cache = Config()
+    return config_cache
+
+def _load_default_config():
     """Load the default configuration from a YAML file."""
     config_path = package_dir / "utils" / "config_defaults.yml"
     if not config_path.exists():
@@ -32,7 +44,7 @@ def setup(platform="local"):
     # Create empty config file
     config_path = root_dir / "config.yml"
 
-    default_config = load_default_config()
+    default_config = _load_default_config()
 
     # allow both isambard-ai and isambard_ai
     platform_alias = {"isambard-ai":"isambard_ai"}
@@ -66,11 +78,18 @@ class Config():
     - domains: Dictionary of domain definitions, loaded from the config file.
     - bad_files: List of known footprint files that have to be loaded using a workaround in load_fps, loaded from the config file.
     """
-
+    
+    def __setattr__(self, name, value):
+        if getattr(self, "_locked", False):
+            raise AttributeError("Config is read-only after initialization.")
+        object.__setattr__(self, name, value)
+        
     def __init__(self):
-
         if not (root_dir / "config.yml").exists():
             raise FileNotFoundError(f"Config file not found at {root_dir / 'config.yml'}. Please run `python gates/config.py ` to create a new config file.")
+
+        # after the class is initialised it is "locked" to prevent modifications to a cached config
+        object.__setattr__(self, "_locked", False)
         
         self.root_dir = root_dir
         self.package_dir = package_dir
@@ -90,6 +109,7 @@ class Config():
         self.met_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["met_datadir"].lstrip("/\\")
         self.topog_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["topog_datadir"].lstrip("/\\")
         self.landcover_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["landcover_datadir"].lstrip("/\\")
+        object.__setattr__(self, "_locked", True)
 
 
 
