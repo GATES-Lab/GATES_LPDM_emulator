@@ -6,7 +6,7 @@ import pandas as pd
 import xarray as xr
 from unittest.mock import patch
 
-from model.data.load_data import (
+from gates.data.load_data import (
     remove_duplicates,
     _wrap_longitudes,
     _rename_latlon,

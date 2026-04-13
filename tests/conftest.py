@@ -4,8 +4,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-# Make the project root importable so tests can do `from model.data.load_data import ...`
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "sample_data")
 SAMPLE_YEAR = "2016"
