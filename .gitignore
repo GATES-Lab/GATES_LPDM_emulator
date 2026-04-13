@@ -12,3 +12,6 @@ test_run
 general_train_nawid_old.py
 model/data/load_data_old.py
 model_runs
+*.pyc
+
+
