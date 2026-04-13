@@ -41,7 +41,7 @@ def iou(true, pred, *, threshold=0, spatial_shape=None, ignore_mask=None, reduce
     reduce:
         "mean" to return a scalar, None to return per-sample (N,) array.
     nonzero:
-        Ignored parameter, used for compatibility with compute_metrics kwargs. To exclude zero cells, set threshold > 0.
+        Ignored. For compatibility with compute_metrics kwargs.
 
     Returns
     -------
@@ -66,9 +66,42 @@ def iou(true, pred, *, threshold=0, spatial_shape=None, ignore_mask=None, reduce
 
     return float(np.nanmean(scores)) if reduce == "mean" else scores
 
+def bias(true, pred, *, spatial_shape=None, ignore_mask=None, reduce="mean", nonzero=False, threshold=None):
+    """Mean bias: mean(pred - true) over valid cells.
+
+    Parameters:
+    true, pred:
+        Footprint arrays. Accepted types: numpy, tensor, xarray DataArray.
+        Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW). 
+    spatial_shape:
+        (H, W) — required only for flat inputs that are not xarray DataArrays.
+    ignore_mask:
+        Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
+    reduce:
+        "mean" to return a scalar, None to return per-sample (N,) array.
+    nonzero:
+        If True, exclude cells where either array is zero.
+    threshold:
+        Ignored. For compatibility with compute_metrics kwargs.
+
+    Returns:
+    float or np.ndarray of shape (N,).
+    """    
+
+    true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
+    ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
+
+    mask = valid_mask(true_np, pred_np, nonzero=nonzero, ignore_mask=ignore_np)
+    
+    bias_map = pred_np - true_np
+    bias_masked = np.where(mask, bias_map, np.nan)
+    scores = np.nanmean(bias_masked, axis=(1, 2))
+    
+    return float(np.nanmean(scores)) if reduce == "mean" else scores
+
 
 def mse(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None,
-        nonzero=False, reduce="mean"):
+        nonzero=False, reduce="mean", threshold=None):
     """Mean Squared Error, computed on valid cells.
 
     Parameters
@@ -86,6 +119,8 @@ def mse(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None
         If True, exclude cells where either array is zero.
     reduce:
         "mean" to return a scalar, None to return per-sample (N,) array.
+    threshold:
+        Ignored. For compatibility with compute_metrics kwargs.
 
     Returns
     -------
@@ -94,22 +129,22 @@ def mse(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
 
-    scores = np.full(true_np.shape[0], np.nan)
-    for i in range(true_np.shape[0]):
-        ig = ignore_np[i] if ignore_np is not None else None
-        mask = valid_mask(true_np[i], pred_np[i], nonzero=nonzero, ignore_mask=ig)
-        if not np.any(mask):
-            continue
-        t, p = true_np[i][mask], pred_np[i][mask]
-        if log_transform:
-            t, p = np.log10(t), np.log10(p)
-        scores[i] = np.mean((t - p) ** 2)
+    t_np, p_np = true_np, pred_np
+    if log_transform:
+        t_np = np.log10(true_np)
+        p_np = np.log10(pred_np)
+    
+    mask = valid_mask(t_np, p_np, nonzero=nonzero, ignore_mask=ignore_np)
+    
+    se = (t_np - p_np) ** 2
+    se_masked = np.where(mask, se, np.nan)
+    scores = np.nanmean(se_masked, axis=(1, 2))
 
     return float(np.nanmean(scores)) if reduce == "mean" else scores
 
 
 def mae(true, pred, *, spatial_shape=None, ignore_mask=None,
-        nonzero=False, reduce="mean"):
+        nonzero=False, reduce="mean", threshold=None):
     """Mean Absolute Error, computed on valid cells.
 
     Parameters
@@ -125,6 +160,8 @@ def mae(true, pred, *, spatial_shape=None, ignore_mask=None,
         If True, exclude cells where either array is zero.
     reduce:
         "mean" to return a scalar, None to return per-sample (N,) array.
+    threshold:
+        Ignored. For compatibility with compute_metrics kwargs.
 
     Returns
     -------
@@ -133,20 +170,17 @@ def mae(true, pred, *, spatial_shape=None, ignore_mask=None,
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
 
-    scores = np.full(true_np.shape[0], np.nan)
-    for i in range(true_np.shape[0]):
-        ig = ignore_np[i] if ignore_np is not None else None
-        mask = valid_mask(true_np[i], pred_np[i], nonzero=nonzero, ignore_mask=ig)
-        if not np.any(mask):
-            continue
-        t, p = true_np[i][mask], pred_np[i][mask]
-        scores[i] = np.mean(np.abs(t - p))
+    mask = valid_mask(true_np, pred_np, nonzero=nonzero, ignore_mask=ignore_np)
+
+    ae = np.abs(true_np - pred_np)
+    ae_masked = np.where(mask, ae, np.nan)
+    scores = np.nanmean(ae_masked, axis=(1, 2))
 
     return float(np.nanmean(scores)) if reduce == "mean" else scores
 
 
 def nmae(true, pred, *, spatial_shape=None, ignore_mask=None,
-         nonzero=False, reduce="mean"):
+         nonzero=False, reduce="mean", threshold=None):
     """Normalised Mean Absolute Error: sum(|true - pred|) / sum(true) per sample.
 
     Normalising by the sum of true values makes this scale-independent and
@@ -165,6 +199,8 @@ def nmae(true, pred, *, spatial_shape=None, ignore_mask=None,
         If True, exclude cells where either array is zero.
     reduce:
         "mean" to return a scalar, None to return per-sample (N,) array.
+    threshold:
+        Ignored. For compatibility with compute_metrics kwargs.
 
     Returns
     -------
@@ -173,22 +209,21 @@ def nmae(true, pred, *, spatial_shape=None, ignore_mask=None,
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
 
-    scores = np.full(true_np.shape[0], np.nan)
-    for i in range(true_np.shape[0]):
-        ig = ignore_np[i] if ignore_np is not None else None
-        mask = valid_mask(true_np[i], pred_np[i], nonzero=nonzero, ignore_mask=ig)
-        if not np.any(mask):
-            continue
-        t, p = true_np[i][mask], pred_np[i][mask]
-        norm = np.sum(t)
-        if norm == 0:
-            continue
-        scores[i] = np.sum(np.abs(t - p)) / norm
+    mask = valid_mask(true_np, pred_np, nonzero=nonzero, ignore_mask=ignore_np)
+
+    ae = np.abs(true_np - pred_np)
+    ae_masked = np.where(mask, ae, np.nan)
+    true_masked = np.where(mask, true_np, np.nan)
+    
+    ae_sum = np.nansum(ae_masked, axis=(1, 2))
+    true_sum = np.nansum(true_masked, axis=(1, 2))
+    
+    scores = np.divide(ae_sum, true_sum, where=true_sum != 0, out=np.full_like(ae_sum, np.nan))
 
     return float(np.nanmean(scores)) if reduce == "mean" else scores
 
 
-def corrcoef(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None,
+def corrcoef(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None, threshold=None,
              nonzero=False, reduce="mean"):
     """Pearson correlation coefficient, computed on valid cells.
 
@@ -204,9 +239,11 @@ def corrcoef(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask
     ignore_mask:
         Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
     nonzero:
-        If True, exclude cells where either array is zero.
+        If True, exclude cells where either array is zero. Also forced True when log_transform=True.
     reduce:
         "mean" to return a scalar, None to return per-sample (N,) array.
+    threshold:
+        Ignored. For compatibility with compute_metrics kwargs.
 
     Returns
     -------
@@ -215,43 +252,56 @@ def corrcoef(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
 
+    # Determine if we need nonzero for log_transform
+    nonzero_eff = nonzero or log_transform
+    
+    # Compute mask once for all samples
+    mask = valid_mask(true_np, pred_np, nonzero=nonzero_eff, ignore_mask=ignore_np)
+    
+    # Use the mask per sample
     scores = np.full(true_np.shape[0], np.nan)
     for i in range(true_np.shape[0]):
-        ig = ignore_np[i] if ignore_np is not None else None
-        mask = valid_mask(true_np[i], pred_np[i], nonzero=nonzero, ignore_mask=ig)
-        if np.sum(mask) < 2:  # corrcoef needs at least 2 points
+        if np.sum(mask[i]) < 2:  # corrcoef needs at least 2 points
             continue
-        t, p = true_np[i][mask], pred_np[i][mask]
+        t, p = true_np[i][mask[i]], pred_np[i][mask[i]]
         if log_transform:
             t, p = np.log10(t), np.log10(p)
         scores[i] = np.corrcoef(t, p)[0, 1]
 
     return float(np.nanmean(scores)) if reduce == "mean" else scores
 
-
-def compute_footprint_metrics(true, pred, metrics=["iou", "mse", "mae", "nmae", "corrcoef", "corrcoef_log"], spatial_shape=None, **kwargs):
-    """Compute multiple metrics at once and return as a dictionary.
-    
-    Args:
-        true: Ground truth footprint, or footprint dataset (as array, xarray or tensor).
-        pred: Predicted footprint array (as above)
-        metrics: List of metric names to compute. Supported: "iou", "mse", "mae", "nmae", "corrcoef", "corrcoef_log".
-        spatial_shape: (H, W) tuple, required if true/pred are flat arrays that are not xarray DataArrays. Recommended when possible for better error checking, but will be inferred from dims if not provided. 
-        **kwargs: Additional keyword arguments to pass to each metric function (e.g. threshold, ignore_mask).
-
-    """
-    metric_funcs = {
+_all_metrics = {
         "iou": iou,
         "mse": mse,
         "mae": mae,
         "nmae": nmae,
         "corrcoef": corrcoef,
         "corrcoef_log": corrcoef,
+        "bias": bias,
     }
+
+def compute_footprint_metrics(true, pred, metrics=list(_all_metrics.keys()), spatial_shape=None, ignore_mask=None, **kwargs):
+    """Compute multiple metrics at once and return as a dictionary.
+    
+    Args:
+        true: Ground truth footprint, or footprint dataset (as array, xarray or tensor).
+        pred: Predicted footprint array (as above)
+        metrics: List of metric names to compute. Supported: "iou", "mse", "mae", "nmae", "corrcoef", "corrcoef_log", "bias".
+        spatial_shape: (H, W) tuple, required if true/pred are flat arrays that are not xarray DataArrays. Recommended when possible for better error checking, but will be inferred from dims if not provided. 
+        ignore_mask: Array indicating areas to ignore.
+        **kwargs: Additional keyword arguments to pass to each metric function (e.g. threshold, ignore_mask).
+
+    """
+
     results = {}
+
+    true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
+
+    ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
+
     for metric in metrics:
-        if metric not in metric_funcs:
-            raise ValueError(f"Unsupported metric '{metric}'. Supported: {list(metric_funcs.keys())}")
+        if metric not in _all_metrics:
+            raise ValueError(f"Unsupported metric '{metric}'. Supported: {list(_all_metrics.keys())}")
         metric_kwargs = dict(kwargs)
         if metric != "iou":
             metric_kwargs.pop("threshold", None)
@@ -260,8 +310,78 @@ def compute_footprint_metrics(true, pred, metrics=["iou", "mse", "mae", "nmae", 
             metric_kwargs["log_transform"] = False
         elif metric == "corrcoef_log":
             metric_kwargs["log_transform"] = True
-        results[metric] = metric_funcs[metric](true, pred, spatial_shape=spatial_shape, **metric_kwargs)
+        results[metric] = _all_metrics[metric](true_np, pred_np, spatial_shape=spatial_shape, ignore_mask=ignore_np, **metric_kwargs)
     return results
+
+
+def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ignore_mask=None):
+    """Compute metrics separately for each bin defined by the given thresholds.
+
+    Splits the true footprint into value-range bins and computes all metrics
+    within each bin. IoU is computed using each bin's lower bound as the
+    activation threshold over the full spatial domain.
+
+    Parameters
+    ----------
+    true, pred:
+        Footprint arrays. Accepted types: numpy, tensor, xarray DataArray.
+        Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
+    thresholds:
+        A single number or list/array of numbers defining bin edges. Values
+        are inserted between -inf and +inf, e.g. [a, b] produces bins
+        (-inf, a], (a, b], (b, +inf).
+    spatial_shape:
+        (H, W) — required only for flat inputs that are not xarray DataArrays.
+    ignore_mask:
+        Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
+
+    Usage:
+    >>> compute_metrics_by_threshold(true_fp, pred_fp, thresholds=[0, 1e-4, 1e-2], spatial_shape=(H, W))
+    {
+        "-inf_to_0": {"iou": ..., "mse": ..., ...},
+        "0_to_0.0001": {"iou": ..., "mse": ..., ...},
+        "0.0001_to_0.01": {"iou": ..., "mse": ..., ...},
+        "0.01_to_inf": {"iou": ..., "mse": ..., ...},
+    }
+
+    Returns
+    -------
+    dict[str, dict]
+        Keys are bin range strings (e.g. "-inf_to_0.01"). Each value is a
+        metrics dict from compute_footprint_metrics plus "iou" and
+        "threshold_range" keys.
+    """
+    if isinstance(thresholds, (int, float)):
+        thresholds = [thresholds]
+    elif not isinstance(thresholds, (list, np.ndarray)):
+        raise ValueError("thresholds must be a number or a list/array of numbers.")
+    bins = [-float('inf')] + thresholds + [float('inf')]
+
+    true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
+
+    ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
+
+    scores_by_threshold = {}
+    for bin_start, bin_end in zip(bins[:-1], bins[1:]):
+        # let's do a mask that keeps only values between bins
+        # calculate the iou separately
+        iou_here = iou(true_np, pred_np, threshold=bin_start, spatial_shape=spatial_shape, ignore_mask=ignore_np, reduce="mean")
+
+        mask = valid_mask(true_np, pred_np, ignore_mask=ignore_np)
+        # mask + mask where true np is between bin_start and bin_end
+        mask = mask & (true_np > bin_start) & (true_np <= bin_end)
+        metrics_except_iou = _all_metrics.copy()
+        metrics_except_iou.pop("iou")
+
+        scores_by_threshold[f"{bin_start}_to_{bin_end}"] = compute_footprint_metrics(
+            true_np, pred_np, spatial_shape=spatial_shape, ignore_mask=~mask, metrics=metrics_except_iou, nonzero=False,
+        )
+        scores_by_threshold[f"{bin_start}_to_{bin_end}"]["iou"] = iou_here
+        scores_by_threshold[f"{bin_start}_to_{bin_end}"]["threshold_range"] = (bin_start, bin_end)
+
+    return scores_by_threshold
+
+
 
 
 def compute_mfs_metrics(mf_true, mf_pred):
@@ -454,17 +574,12 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
 
     Parameters
     ----------
-    fp : xr.Dataset, xr.DataArray, or np.ndarray
-        True (and optionally predicted) footprints.
-        - xr.Dataset: must contain variables 'fp' and 'fp_pred'.
-        - xr.DataArray: treated as the true footprint; fp_pred must be supplied.
-        - np.ndarray: treated as the true footprint; fp_pred must be supplied.
-          Shape (H, W), (N, H, W) or flat variants — see spatial_shape.
-    fp_pred : xr.DataArray or np.ndarray, optional
-        Predicted footprints. Required when fp is not an xr.Dataset that
-        already contains fp_pred.
+    fp_true : xr.DataArray or np.ndarray
+        True footprints. Shape (H, W), (N, H, W) or flat variants — see spatial_shape.
+    fp_pred : xr.DataArray or np.ndarray
+        Predicted footprints. Must match fp_true in type and shape.
     spatial_shape : tuple (H, W), optional
-        Required when fp / fp_pred are flat numpy arrays.
+        Required when fp_true / fp_pred are flat numpy arrays.
     flux_patterns : dict[str, np.ndarray], optional
         Mapping of label -> 2-D flux array of shape (H, W).
         If None, the following defaults are used:
