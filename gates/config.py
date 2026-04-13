@@ -20,7 +20,6 @@ def get_config():
     """
     global config_cache
     if config_cache is None:
-        print("loading from file")
         config_cache = Config()
     return config_cache
 
