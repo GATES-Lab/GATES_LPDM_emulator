@@ -47,14 +47,16 @@ def setup(platform="local"):
 
     # allow both isambard-ai and isambard_ai
     platform_alias = {"isambard-ai":"isambard_ai"}
-    platform = platform_aliases.get(platform, platform)
+    platform = platform_alias.get(platform, platform)
 
     if platform not in default_config["data_paths"]:
         raise ValueError(f"Unknown platform '{platform}'. Valid options: {list(default_config['data_paths'].keys())}")
 
     data_paths = default_config["data_paths"].get(platform)
 
-    configs_from_default = {"data_paths": data_paths, "domains": default_config["domains"], "bad_files": default_config["bad_files"]}
+    # copy all the default config values, but replace the data_paths with the selected platform's paths
+    configs_from_default = default_config.copy()
+    configs_from_default["data_paths"] = data_paths
 
     with open(config_path, "w") as f:
         # save as yml not json
