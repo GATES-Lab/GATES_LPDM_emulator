@@ -45,15 +45,10 @@ def load_fps(fp_datadir, verbose=False):
         path = os.path.split(fp_datadir)[0] + "/"
         filenames = [os.path.split(x)[1] for x in fp_files]
 
-        bad_files = ["GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
-            "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc", 
-            'GOSAT-SAHARA-column_NORTHAFRICA_201501.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201502.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201503.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201504.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201609.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201610.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201612.nc']
+        with open("config.yml") as f:
+            CONFIG = yaml.safe_load(f)
+
+        bad_files = CONFIG.get("bad_files", [])
         # remove any files from the list that were in the bad files list
 
         

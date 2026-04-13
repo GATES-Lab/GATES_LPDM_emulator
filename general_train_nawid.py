@@ -43,12 +43,33 @@ import wandb
 import yaml
 
 def write_to_file(message, path, model_name):
+    """
+    Appends a timestamped message to a model-specific log file.
+
+    Args:
+        message (str): The message to log.
+        path (str): The base directory path where the model folder is located.
+        model_name (str): The name of the model, used to locate the subfolder and name the log file.
+
+    Returns:
+        None
+    """
     f = open(f"{path}{model_name}/{model_name}_updates.txt", "a")
     f.write(datetime.now().strftime("%d/%m/%y %H:%M:%S") + " " + message + "\n")
     f.close()
 
 
 def load_file(file_name, file_path):
+    """
+    Loads and parses a JSON file from a given path, falling back to a default directory if no path is provided.
+
+    Args:
+        file_name (str): The name of the file to load (including extension).
+        file_path (str or bool): The directory path containing the file. If False, a hardcoded default path is used.
+
+    Returns:
+        dict or list: The parsed JSON contents of the file, or None if the file was not found or an error occurred.
+    """
     # file_path=False if no argument was passed to the parser
     if not file_path:
        file_path ="/user/work/ef17148/GCN/graphnet/graph_weather/train_satellite_files/"
@@ -70,7 +91,18 @@ def load_file(file_name, file_path):
 
 def log_object_as_artifact(obj, name, folder, model_name, file_type="pickle", description=""):
     """
-    Saves an object locally and logs it to WandB as an artifact.
+    Serialises an object to disk as either a pickle or JSON file, then logs it to Weights & Biases as a versioned artifact.
+
+    Args:
+        obj (any): The Python object to save and log.
+        name (str): A descriptive name for the artifact, used in both the filename and the W&B artifact name.
+        folder (str): The local directory in which to save the file.
+        model_name (str): The name of the model, included in the filename and W&B artifact name.
+        file_type (str): Serialisation format — either "pickle" (default) or "json".
+        description (str): An optional description string attached to the W&B artifact.
+
+    Returns:
+        str: The local file path where the object was saved.
     """
     ext = "pickle" if file_type == "pickle" else "json"
     filename = f"{name}_{model_name}.{ext}"
@@ -97,7 +129,15 @@ def log_object_as_artifact(obj, name, folder, model_name, file_type="pickle", de
 
 def set_reproducibility(parameters, default_seed=34):
     """
-    Sets seeds for reproducibility, with safety checks for CUDA availability.
+    Sets random seeds across Python, NumPy, and PyTorch to ensure reproducible training runs.
+    If a GPU is available, CUDA seeds are also set and cuDNN is switched to deterministic mode.
+
+    Args:
+        parameters (dict): A dictionary of training parameters; expected to optionally contain a "seed" key.
+        default_seed (int): The seed value to use if "seed" is not present in parameters. Defaults to 34.
+
+    Returns:
+        int: The seed value that was applied.
     """
     seed = parameters.get("seed", default_seed)
     print(f"Using seed: {seed}")
@@ -124,6 +164,22 @@ def set_reproducibility(parameters, default_seed=34):
 
 
 def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device, epoch):
+    """
+    Runs a single training epoch, iterating over all batches, computing the loss, and updating model weights.
+    A separate display loss (criterion_test) is tracked for monitoring without affecting gradients.
+
+    Args:
+        model (torch.nn.Module): The model to train.
+        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, labels, true_fp).
+        optimizer (torch.optim.Optimizer): The optimiser used to update model weights.
+        criterion (callable): The training loss function, called as criterion(outputs, labels, true_fp).
+        criterion_test (callable): A secondary loss function used for display purposes only, called as criterion_test(outputs, labels).
+        device (torch.device): The device (CPU or GPU) on which to run computation.
+        epoch (int): The current epoch number, used for progress logging.
+
+    Returns:
+        float: The mean display loss across all batches in the epoch.
+    """
     model.train()
     running_loss = 0.0
     start_time = time.time()
@@ -150,6 +206,21 @@ def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device,
 
 @torch.no_grad()
 def validate_and_predict(model, loader, criterion_test, device):
+    """
+    Evaluates the model on a validation or test set, collecting predictions and computing the mean loss.
+    Runs under torch.no_grad() to disable gradient computation for efficiency.
+
+    Args:
+        model (torch.nn.Module): The model to evaluate.
+        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, labels).
+        criterion_test (callable): The loss function used to score predictions against labels.
+        device (torch.device): The device (CPU or GPU) on which to run computation.
+
+    Returns:
+        tuple:
+            - float: The mean loss across all batches.
+            - np.ndarray: A 2D array of shape (total_samples, features) containing all model predictions.
+    """
     model.eval()
     test_error = 0.0
     preds_list = []
@@ -171,9 +242,17 @@ def validate_and_predict(model, loader, criterion_test, device):
 
 class EarlyStopping:
     """
-    Early stops the training if validation loss doesn't improve after a given patience.
+    Monitors validation loss during training and halts training when no improvement is seen
+    for a given number of consecutive epochs. Also saves the best model checkpoint to disk.
     """
     def __init__(self, patience=20, verbose=False, delta=0, path='checkpoint.pt'):
+        """
+        Args:
+            patience (int): Number of epochs with no improvement to wait before stopping. Defaults to 20.
+            verbose (bool): If True, prints a message each time the counter increments or the model is saved. Defaults to False.
+            delta (float): Minimum change in validation loss to qualify as an improvement. Defaults to 0.
+            path (str): File path at which to save the best model checkpoint. Defaults to 'checkpoint.pt'.
+        """
         self.patience = patience
         self.verbose = verbose
         self.counter = 0
@@ -184,6 +263,16 @@ class EarlyStopping:
         self.path = path
 
     def __call__(self, val_loss, model):
+        """
+        Evaluates the current validation loss and updates the early-stopping state.
+
+        Args:
+            val_loss (float): The validation loss for the current epoch.
+            model (torch.nn.Module): The model to checkpoint if validation loss has improved.
+
+        Returns:
+            None
+        """
         score = -val_loss
 
         if self.best_score is None:
@@ -205,14 +294,39 @@ class EarlyStopping:
             print('counter reset',self.counter)
 
     def save_checkpoint(self, val_loss, model):
-        '''Saves model when validation loss decreases.'''
+        """
+        Saves the model's state dict to disk when validation loss reaches a new minimum.
+
+        Args:
+            val_loss (float): The new best validation loss.
+            model (torch.nn.Module): The model whose weights should be saved.
+
+        Returns:
+            None
+        """
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}). Saving model...')
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
 
 def save_training_plots(epoch, test_dataset, transformed_preds, image_plots, image_dates, size, path, model_name):
-    """Handles the 4x4 grid plotting logic."""
+    """
+    Generates and saves a 4×4 grid of images comparing model predictions against ground truth
+    at a selection of test samples, for visual inspection during training.
+
+    Args:
+        epoch (int): The current epoch number, used in the output filename.
+        test_dataset: A dataset object exposing fp, fp_untransformed, and predictions attributes.
+        transformed_preds (np.ndarray): Model predictions mapped back into the original (untransformed) space.
+        image_plots (list of int): Indices of the test samples to visualise, should contain exactly 4 values.
+        image_dates (list of str): Date strings corresponding to each sample index in image_plots.
+        size (tuple of int): The spatial dimensions (height, width) used to reshape flat arrays into images.
+        path (str): The base directory path for saving output images.
+        model_name (str): The model name used to locate the output subfolder and name the saved file.
+
+    Returns:
+        None
+    """
     og_fps = test_dataset.fp_untransformed
     fps = test_dataset.fp.detach().numpy()
     fig, ax = plt.subplots(4, 4, figsize=(10, 10))
@@ -245,7 +359,22 @@ def save_training_plots(epoch, test_dataset, transformed_preds, image_plots, ima
     
 
 def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_data, size, path, model_name):
-    """Handles the Xarray dataset creation and NetCDF export."""
+    """
+    Reshapes model predictions and ground truth arrays into (time, lat, lon) format, writes them to
+    a NetCDF file via Xarray, and logs the file to Weights & Biases as a versioned dataset artifact.
+
+    Args:
+        test_out (np.ndarray): Raw model predictions in transformed space, shape (N, flat_spatial).
+        transformed_preds (np.ndarray): Predictions mapped back to the original space, shape (N, flat_spatial).
+        test_dataset: A dataset object exposing fp (transformed truth) and fp_untransformed attributes.
+        test_data: An object exposing met.time.values, providing the time coordinates for the NetCDF file.
+        size (tuple of int): The spatial dimensions (height, width) used to reshape flat arrays into (lat, lon) grids.
+        path (str): The base directory path for saving the NetCDF file.
+        model_name (str): The model name used to locate the output subfolder and tag the artifact.
+
+    Returns:
+        None
+    """
     fps = test_dataset.fp.detach().numpy()
     
     # Reshape arrays for NetCDF (Time, Lat, Lon)
@@ -284,6 +413,39 @@ def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_dat
 def run_full_training(model,parameters, train_loader, test_loader, optimizer, criterion, criterion_test, 
                       test_dataset, test_data, device, epoch_so_far, losses, 
                       flux_evaluation, image_plots, image_dates, size, path, model_name, NMAE_function):
+    """
+    Executes the full training loop for a given number of epochs, including training and validation passes,
+    metric logging, early stopping, periodic visualisation, and model checkpointing. At the end of training,
+    predictions are exported to a NetCDF file and logged to Weights & Biases.
+
+    Args:
+        model (torch.nn.Module): The model to train.
+        parameters (dict): A dictionary of training configuration values. Expected keys include:
+            - 'learning_rate' (float): The learning rate used for logging in checkpoints.
+            - 'epochs' (dict): Sub-keys 'training' (int), 'visualize' (int), 'model_saving' (int),
+              and 'patience' (int) controlling loop behaviour.
+        train_loader (torch.utils.data.DataLoader): DataLoader for the training set.
+        test_loader (torch.utils.data.DataLoader): DataLoader for the validation/test set.
+        optimizer (torch.optim.Optimizer): The optimiser used to update model weights.
+        criterion (callable): The training loss function, called as criterion(outputs, labels, true_fp).
+        criterion_test (callable): A secondary loss function used for validation and display metrics.
+        test_dataset: A dataset object exposing fp, inverse_transform(), and evaluate() / evaluate_flux() methods.
+        test_data: An object exposing met.time.values, used when exporting results to NetCDF.
+        device (torch.device): The device (CPU or GPU) on which to run computation.
+        epoch_so_far (int): The epoch count to start from, allowing training to resume from a checkpoint.
+        losses (dict): A dictionary of lists used to accumulate per-epoch metrics across the run.
+        flux_evaluation (list of str): Flux evaluation mode names (e.g. "uniform", "checkerboard_10") passed to evaluate_flux().
+        image_plots (list of int): Indices of test samples to visualise at each visualisation epoch.
+        image_dates (list of str): Date strings corresponding to each index in image_plots.
+        size (tuple of int): Spatial dimensions (height, width) used to reshape predictions for plotting and export.
+        path (str): Base directory path for saving logs, plots, and checkpoints.
+        model_name (str): The model name used for subfolder paths, filenames, and W&B artifact names.
+        NMAE_function (callable): A function to compute the Normalised Mean Absolute Error,
+            called as NMAE_function(predictions, truths).
+
+    Returns:
+        None
+    """
     print(parameters['epochs'])
     lr = parameters['learning_rate']
     num_epochs = parameters['epochs']['training']
@@ -395,10 +557,30 @@ def run_full_training(model,parameters, train_loader, test_loader, optimizer, cr
 
 def train_and_save_model(parameters, path):
     """
-    Train GATES model. Check readme.md for more information on the parameters.
+    Top-level entry point for a full model training run. Handles all setup steps — including directory
+    creation, W&B initialisation, data loading, dataset construction, model instantiation, and
+    loss/optimiser configuration — before delegating to run_full_training() to execute the training loop.
+    The model name is automatically timestamped to keep each run uniquely identifiable.
+
+    Args:
+        parameters (dict): A dictionary of all training configuration values. Expected top-level keys include:
+            - 'model_name' (str): Base name for the model; a timestamp is appended at runtime.
+            - 'env' (str): Environment identifier used to select data paths from config.yml.
+            - 'learning_rate' (float): Learning rate passed to the AdamW optimiser.
+            - 'epochs' (dict): Epoch control settings (see run_full_training for sub-keys).
+            - 'variables' (dict): Keyword arguments forwarded to get_square_satellite_inputs().
+            - 'dataloader_parameters' (dict): Keyword arguments forwarded to FootprintsDatasetV3().
+            - 'model_parameters' (dict): Keyword arguments forwarded to GraphSatelliteForecaster().
+            - 'loss_functions' (dict): Contains 'criterion' and 'criterion_test' as eval-able strings.
+            - 'train_load_data' (dict): Keyword arguments for loading the training dataset.
+            - 'test_load_data' (dict): Overrides applied on top of train_load_data for the test dataset.
+        path (str): Base directory path under which all model output folders and files will be created.
+
+    Returns:
+        None
     """
-    NMAE_function = NMAE
-    #NMAE_function = NMAE_nans
+    #NMAE_function = NMAE
+    NMAE_function = NMAE_nans
     
     env = parameters['env']
     # 1. Get the current time
@@ -616,7 +798,7 @@ if __name__ == "__main__":
 
     ## make this importable!
    
-    path="/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/model_runs"
+    path="/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/model_runs/"
 
     # Train the model with the loaded parameters
     train_and_save_model(parameters, path=path)
