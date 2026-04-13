@@ -24,6 +24,10 @@ data_paths:
     topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
     landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
 
+user_paths:
+  save_models_dir: "path/to/folder/where/models/should/be/saved"
+  parameter_files_dir: "path/to/folder/with/parameter_files"
+  
 domains:
   BRAZIL:
     domain_name: "SOUTHAMERICA"
