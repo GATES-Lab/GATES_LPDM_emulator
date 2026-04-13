@@ -616,7 +616,7 @@ if __name__ == "__main__":
 
     ## make this importable!
    
-    path="/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/"
+    path="/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/model_runs"
 
     # Train the model with the loaded parameters
     train_and_save_model(parameters, path=path)
