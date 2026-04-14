@@ -116,7 +116,7 @@ def mse(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None
     ignore_mask:
         Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
     nonzero:
-        If True, exclude cells where either array is zero.
+        If True, exclude cells where either array is zero. It is also forced to be True when log_transform is True, since log10(0) is undefined.
     reduce:
         "mean" to return a scalar, None to return per-sample (N,) array.
     threshold:
@@ -130,11 +130,15 @@ def mse(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
 
     t_np, p_np = true_np, pred_np
+
+    if log_transform:
+        nonzero=True # force nonzero when log_transform is True
+
+    mask = valid_mask(t_np, p_np, nonzero=nonzero, ignore_mask=ignore_np)
+
     if log_transform:
         t_np = np.log10(true_np)
         p_np = np.log10(pred_np)
-    
-    mask = valid_mask(t_np, p_np, nonzero=nonzero, ignore_mask=ignore_np)
     
     se = (t_np - p_np) ** 2
     se_masked = np.where(mask, se, np.nan)
@@ -370,8 +374,17 @@ def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ign
         mask = valid_mask(true_np, pred_np, ignore_mask=ignore_np)
         # mask + mask where true np is between bin_start and bin_end
         mask = mask & (true_np > bin_start) & (true_np <= bin_end)
+
         metrics_except_iou = _all_metrics.copy()
         metrics_except_iou.pop("iou")
+        
+        if np.sum(mask) == 0:
+            print(f"Warning: No valid cells in bin ({bin_start}, {bin_end}]! Metrics will be NaN.")
+            scores_by_threshold[f"{bin_start}_to_{bin_end}"] = {metric: np.nan for metric in _all_metrics}
+            scores_by_threshold[f"{bin_start}_to_{bin_end}"]["iou"] = iou_here
+            scores_by_threshold[f"{bin_start}_to_{bin_end}"]["threshold_range"] = (bin_start, bin_end)
+            continue
+
 
         scores_by_threshold[f"{bin_start}_to_{bin_end}"] = compute_footprint_metrics(
             true_np, pred_np, spatial_shape=spatial_shape, ignore_mask=~mask, metrics=metrics_except_iou, nonzero=False,

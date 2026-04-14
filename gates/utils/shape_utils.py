@@ -93,7 +93,7 @@ def _resolve_inputs(true, pred, spatial_shape):
         )
     return true_np, pred_np
 
-def valid_mask(*arrays: np.ndarray, threshold=None, nonzero=False, ignore_mask=None) -> np.ndarray:
+def valid_mask(*arrays: np.ndarray, threshold=None, nonzero=False, ignore_mask=None, first_array_threshold=None) -> np.ndarray:
     """Boolean mask that is True where all arrays are finite and optionally above a threshold or non-zero.
 
     Parameters
@@ -101,24 +101,28 @@ def valid_mask(*arrays: np.ndarray, threshold=None, nonzero=False, ignore_mask=N
     *arrays:
         One or more numpy arrays of the same shape.
     threshold:
-        If provided, mask requires arr > threshold.
+        If provided, mask requires all arrays > threshold.
     nonzero:
         If True, mask requires arr != 0 in addition to being finite.
     ignore_mask:
         Boolean numpy array of the same shape as the input arrays.
         True means ignore (exclude from mask).
+    first_array_threshold:
+        If provided, mask requires only the first array > first_array_threshold. Use this for example to calculate metric scores for each value bin in the true footprint.
 
     Returns
     -------
     Boolean numpy array of the same shape as the inputs.
     """
     mask = np.ones(arrays[0].shape, dtype=bool)
-    for arr in arrays:
+    for i, arr in enumerate(arrays):
         mask &= np.isfinite(arr) & ~np.isnan(arr)
         if threshold is not None:
             mask &= arr > threshold
         elif nonzero:
             mask &= arr != 0
+        if i == 0 and first_array_threshold is not None:
+            mask &= arr > first_array_threshold
     if ignore_mask is not None:
         mask &= ~ignore_mask
     return mask
