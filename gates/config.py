@@ -109,7 +109,11 @@ class Config():
         self.fp_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["fp_datadir"].lstrip("/\\")
         self.met_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["met_datadir"].lstrip("/\\")
         self.topog_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["topog_datadir"].lstrip("/\\")
-        self.landcover_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["landcover_datadir"].lstrip("/\\")
+        # the landcover file is optional
+        if "landcover_datadir" in self.data_paths and self.data_paths["landcover_datadir"] is not None:
+            self.landcover_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["landcover_datadir"].lstrip("/\\")
+        else:
+            self.landcover_datadir = None
         object.__setattr__(self, "_locked", True)
 
 
