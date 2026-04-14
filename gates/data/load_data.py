@@ -371,8 +371,7 @@ class LoadBaseSatelliteData:
     
         if landcover_path is None:
             landcover_path = self.topog_args.get("landcover_path", None)
-        # if it is still none...
-        landcover_path = None
+
         if landcover_path is None:
             print("no landcover path was passed, and no default landcover path found in config. skipping loading landcover")
             landcover_file = None
