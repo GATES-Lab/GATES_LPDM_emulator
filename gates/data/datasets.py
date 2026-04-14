@@ -840,7 +840,6 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
         raise ValueError("fps must be an xarray DataArray or Dataset, and inputs must be an xarray DataArray")
 
     if randomize:
-        print("randomizing dataset!")
         # set the random seed for reproducibility
         np.random.seed(random_seed)
         # shuffle the data by permuting the fp_time dimension
@@ -861,12 +860,12 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
             "persistent_workers": True,  # Keep workers alive between epochs for faster subsequent epochs
             #"multiprocessing_context": 'forkserver',  # Use "forkserver" to spawn subprocesses, ensuring stability in multiprocessing
         }
-    print("dataloader params = ", dataloader_params)
+    #print("dataloader params = ", dataloader_params)
     dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=None,  # Using batches defined by the dataset itself (via xbatcher)
         **dataloader_params
     )
 
-
+    
     return dataloader, fps_labels
