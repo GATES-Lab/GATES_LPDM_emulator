@@ -1,5 +1,6 @@
 /model/layers/__pycache__
 /model/data/__pycache__
+/model/__pycache__
 /logs
 /uncertainty_runs
 /training_output

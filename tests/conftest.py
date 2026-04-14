@@ -4,18 +4,22 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-# Make the project root importable so tests can do `from model.data.load_data import ...`
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "sample_data")
 SAMPLE_YEAR = "2016"
 SAMPLE_MONTH = "01"
 
 # ---------- synthetic helpers (hardcoded structure) ----------
-def _make_fp_ds(n_time=100, n_lat=50, n_lon=50):
+def _make_fp_ds(n_time=100, n_lat=50, n_lon=50, sample_year=SAMPLE_YEAR, sample_month=SAMPLE_MONTH):
     """Synthetic footprint dataset matching real data structure."""
+    #times = pd.date_range("2016-01-01", periods=n_time, freq="6h")
     # make timestamps n_time randomly sampled to the nearest second from the whole month
-    times = pd.to_datetime(np.random.choice(pd.date_range(f"{SAMPLE_YEAR}-{SAMPLE_MONTH}-01", f"{SAMPLE_YEAR}-{SAMPLE_MONTH}-28", freq="s"), n_time, replace=False))    
+    month_start = pd.Timestamp(f"{sample_year}-{sample_month}-01")
+    month_end = month_start + pd.offsets.MonthEnd(0)  # get last day of the month
+    total_seconds = int((month_end - month_start).total_seconds()) + 1
+    second_offsets = np.random.choice(total_seconds, n_time, replace=False)
+    times = month_start + pd.to_timedelta(second_offsets, unit="s")
+
     lats  = np.linspace(-15.0,  15.0, n_lat)
     lons  = np.linspace(-40.0, 30.0, n_lon)
     ds = xr.Dataset(
@@ -27,28 +31,32 @@ def _make_fp_ds(n_time=100, n_lat=50, n_lon=50):
     ds = ds.sortby("time")  # ensure time is sorted for _get_release_idxs
     return ds
 
-def _make_met_ds(n_lat=50, n_lon=50, n_levels=3):
+def _make_met_ds(n_lat=50, n_lon=50, sample_year=SAMPLE_YEAR, sample_month=SAMPLE_MONTH):
     """Synthetic met dataset matching real data structure."""
     # get three-hourly timestamps for the whole month
-    times = pd.date_range(f"{SAMPLE_YEAR}-{SAMPLE_MONTH}-01", f"{SAMPLE_YEAR}-{SAMPLE_MONTH}-28", freq="3h")
+    month_start = pd.Timestamp(f"{sample_year}-{sample_month}-01")
+    month_end = month_start + pd.offsets.MonthEnd(0)
+    times = pd.date_range(month_start, month_end, freq="3h")
     n_time = len(times)
     lats   = np.linspace(-15.0,  15.0, n_lat)
     lons   = np.linspace(-40.0, 30.0, n_lon)
-    levels = [1, 5, 10]
+    levels = [3, 5, 10]
+    n_levels = len(levels)
     return xr.Dataset(
-        {"x_wind": (["time","model_level_number","lat","lon"], np.random.rand(n_time, n_levels, n_lat, n_lon).astype("float32")),
-         "y_wind": (["time","model_level_number","lat","lon"], np.random.rand(n_time, n_levels, n_lat, n_lon).astype("float32"))},
+        {"x_wind": (["time","model_level_number","lat","lon"], np.random.rand(n_time, n_levels, n_lat, n_lon)),
+         "y_wind": (["time","model_level_number","lat","lon"], np.random.rand(n_time, n_levels, n_lat, n_lon)),
+         "atmosphere_boundary_layer_thickness": (["time","lat","lon"], np.random.rand(n_time, n_lat, n_lon))},
         coords={"time": times, "model_level_number": levels, "lat": lats, "lon": lons}
     )
 
 def _make_topog_ds(n_lat=100, n_lon=100):
     """Synthetic topography dataset matching real data structure.
     Uses 'latitude'/'longitude' coords (as in the raw file, before rename)."""
-    lats = np.linspace(-25.0, 15.0, n_lat)
-    lons = np.linspace(-70.0, -30.0, n_lon)
+    lats = np.linspace(-20.0, 20.0, n_lat)
+    lons = np.linspace(-50.0, 40.0, n_lon)
     return xr.Dataset(
         {"surface_altitude": (["latitude", "longitude"],
-                              np.random.rand(n_lat, n_lon).astype("float32"))},
+                              np.random.rand(n_lat, n_lon))},
         coords={"latitude": lats, "longitude": lons}
     )
 
@@ -134,9 +142,9 @@ def _load_or_make(request, filename, make_fn, return_path=False):
         resolved_filename = _resolve_sample_filename(filename)
         path = os.path.join(FIXTURE_DIR, resolved_filename)
         if not os.path.exists(path):
-            pytest.skip(
-                f"{resolved_filename} not found in {FIXTURE_DIR} "
-                "- run tests/sample_data/generate_sample_data.py first"
+            pytest.fail(
+                f"{resolved_filename} not found "# in {FIXTURE_DIR} "
+                "- run generate_sample_data.py first, or remove the --sample-files option to use synthetic data"
             )
         if return_path:
             return path
