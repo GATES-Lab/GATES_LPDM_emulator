@@ -229,7 +229,9 @@ class ThresholdedMSELoss(nn.Module):
         # add min and max in batch to threshold to make bins        
         added_loss = 0.0
         for bin_start, bin_end, a in zip(self.bins[:-1], self.bins[1:], self.alpha):
-            mask = (weight_field > bin_start) & (weight_field <= bin_end) & ~nan_mask
+            mask = (weight_field > bin_start) & (weight_field <= bin_end) 
+            if nan_mask is not None:
+                mask = mask & ~nan_mask
             if mask.sum() != 0:
                 mse = torch.nanmean((pred[mask] - target[mask]) ** 2)
                 added_loss += a * mse
