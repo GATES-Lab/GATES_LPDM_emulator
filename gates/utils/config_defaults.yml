@@ -36,19 +36,19 @@ domains:
   BRAZIL:
     domain_name: "SOUTHAMERICA"
     footprint: "GOSAT-BRAZIL-column_SOUTHAMERICA_201801.nc"
-    flux_suffix : 
+    flux_suffix: 
       ch4: "_SWAMPS-v32-5_Saunois-Annual-Mean"
 
   SOUTHAMERICA:
     domain_name: "SOUTHAMERICA"
     footprint: "GOSAT-SOUTHAMERICA-column_SOUTHAMERICA_201801.nc"
-    flux_suffix : 
+    flux_suffix: 
       ch4: "_SWAMPS-v32-5_Saunois-Annual-Mean"
 
   SAHARA:
     domain_name: "NORTHAFRICA"
     footprint: "GOSAT-SAHARA-column_NORTHAFRICA_201611.nc"
-    flux_suffix : 
+    flux_suffix: 
       ch4: ""
 
   CHINA:
