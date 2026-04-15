@@ -1,22 +1,63 @@
-import sys, json
+import sys
+import json
 from netCDF4 import Dataset
 
-if len(sys.argv) != 2:
-    print(json.dumps({"status": "fail", "error": "usage: worker_check_nc.py <path.nc>"}))
-    sys.exit(2)
+def check_netcdf(path):
+    """
+    Check whether a NetCDF file can be opened and return basic metadata.
 
-path = sys.argv[1]
+    Parameters
+    ----------
+    path : str
+        Path to the NetCDF file.
 
-try:
-    with Dataset(path, "r") as ds:
-        info = {
-            "status": "ok",
-            "vars": len(ds.variables),
-            "dims": len(ds.dimensions),
-            "format": ds.file_format,  # e.g. NETCDF4, NETCDF4_CLASSIC
+    Returns
+    -------
+    dict
+        Dictionary containing status and file information.
+        On success:
+            {
+                "status": "ok",
+                "vars": int,
+                "dims": int,
+                "format": str
+            }
+        On failure:
+            {
+                "status": "fail",
+                "error": str
+            }
+    """
+    try:
+        with Dataset(path, "r") as ds:
+            return {
+                "status": "ok",
+                "vars": len(ds.variables),
+                "dims": len(ds.dimensions),
+                "format": ds.file_format,
+            }
+    except Exception as e:
+        return {
+            "status": "fail",
+            "error": str(e),
         }
-    print(json.dumps(info))
-    sys.exit(0)
-except Exception as e:
-    print(json.dumps({"status": "fail", "error": str(e)}))
-    sys.exit(1)
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(
+            json.dumps(
+                {"status": "fail", "error": "usage: worker_check_nc.py <path.nc>"}
+            )
+        )
+        sys.exit(2)
+
+    path = sys.argv[1]
+    result = check_netcdf(path)
+
+    print(json.dumps(result))
+    sys.exit(0 if result["status"] == "ok" else 1)
+
+
+if __name__ == "__main__":
+    main()
