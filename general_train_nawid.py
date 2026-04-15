@@ -575,7 +575,7 @@ def train_and_save_model(parameters, path):
         None
     """
     #NMAE_function = NMAE
-    NMAE_function = NMAE
+    NMAE_function = NMAE_nans
     use_wandb = parameters.get('use_wandb', True)  # defaults to True if not set
 
     env = parameters['env']
