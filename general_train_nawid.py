@@ -736,8 +736,10 @@ if __name__ == "__main__":
     print(parameters)
 
     ## make this importable!
-   
-    path="/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/model_runs/"
+    with open("config.yml", "r") as f:
+        config = yaml.safe_load(f)
+
+    path=config['user_paths']['save_models_dir']
 
     # Train the model with the loaded parameters
     train_and_save_model(parameters, path=path)

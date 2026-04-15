@@ -25,7 +25,7 @@ data_paths:
     landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
 
 user_paths:
-  save_models_dir: "path/to/folder/where/models/should/be/saved"
+  save_models_dir: "/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/model_runs/"
   parameter_files_dir: "path/to/folder/with/parameter_files"
 
 domains:
