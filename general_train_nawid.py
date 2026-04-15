@@ -89,7 +89,7 @@ def load_file(file_name, file_path):
         print(f"An error occurred while loading the file: {str(e)}")
         return None
 
-def log_object_as_artifact(obj, name, folder, model_name, file_type="pickle", description=""):
+def log_object_as_artifact(obj, name, folder, model_name, file_type="pickle", description="", use_wandb=True):
     """
     Serialises an object to disk as either a pickle or JSON file, then logs it to Weights & Biases as a versioned artifact.
 
@@ -100,6 +100,7 @@ def log_object_as_artifact(obj, name, folder, model_name, file_type="pickle", de
         model_name (str): The name of the model, included in the filename and W&B artifact name.
         file_type (str): Serialisation format — either "pickle" (default) or "json".
         description (str): An optional description string attached to the W&B artifact.
+        use_wandb (bool): If True, logs the saved file to W&B as a versioned artifact. Defaults to True.
 
     Returns:
         str: The local file path where the object was saved.
@@ -108,7 +109,6 @@ def log_object_as_artifact(obj, name, folder, model_name, file_type="pickle", de
     filename = f"{name}_{model_name}.{ext}"
     path = os.path.join(folder, filename)
 
-    # 1. Save locally
     if file_type == "pickle":
         with open(path, 'wb') as f:
             pickle.dump(obj, f)
@@ -116,15 +116,15 @@ def log_object_as_artifact(obj, name, folder, model_name, file_type="pickle", de
         with open(path, 'w') as f:
             json.dump(obj, f, indent=2)
 
-    # 2. Log to WandB
-    artifact = wandb.Artifact(
-        name=f"{model_name}-{name.replace('_', '-')}", 
-        type=file_type,
-        description=description
-    )
-    artifact.add_file(path)
-    wandb.log_artifact(artifact)
-    
+    if use_wandb:
+        artifact = wandb.Artifact(
+            name=f"{model_name}-{name.replace('_', '-')}",
+            type=file_type,
+            description=description
+        )
+        artifact.add_file(path)
+        wandb.log_artifact(artifact)
+
     return path
 
 def set_reproducibility(parameters, default_seed=34):
@@ -243,15 +243,18 @@ def validate_and_predict(model, loader, criterion_test, device):
 class EarlyStopping:
     """
     Monitors validation loss during training and halts training when no improvement is seen
-    for a given number of consecutive epochs. Also saves the best model checkpoint to disk.
+    for a given number of consecutive epochs. Also saves the best model checkpoint to disk,
+    and optionally logs it to Weights & Biases as a versioned artifact.
     """
-    def __init__(self, patience=20, verbose=False, delta=0, path='checkpoint.pt'):
+    def __init__(self, patience=20, verbose=False, delta=0, path='checkpoint.pt', use_wandb=True, model_name="model"):
         """
         Args:
             patience (int): Number of epochs with no improvement to wait before stopping. Defaults to 20.
             verbose (bool): If True, prints a message each time the counter increments or the model is saved. Defaults to False.
             delta (float): Minimum change in validation loss to qualify as an improvement. Defaults to 0.
             path (str): File path at which to save the best model checkpoint. Defaults to 'checkpoint.pt'.
+            use_wandb (bool): If True, logs the best model checkpoint to W&B as a versioned artifact each time it improves. Defaults to True.
+            model_name (str): The model name used for the W&B artifact name. Defaults to "model".
         """
         self.patience = patience
         self.verbose = verbose
@@ -261,6 +264,8 @@ class EarlyStopping:
         self.val_loss_min = np.inf
         self.delta = delta
         self.path = path
+        self.use_wandb = use_wandb
+        self.model_name = model_name
 
     def __call__(self, val_loss, model):
         """
@@ -279,8 +284,6 @@ class EarlyStopping:
             self.best_score = score
             self.save_checkpoint(val_loss, model)
         elif score < self.best_score + self.delta:
-            print((score,self.best_score))
-            print('counter increased',self.counter)
             self.counter += 1
             if self.verbose:
                 print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
@@ -290,12 +293,11 @@ class EarlyStopping:
             self.best_score = score
             self.save_checkpoint(val_loss, model)
             self.counter = 0
-            print((score,self.best_score))
-            print('counter reset',self.counter)
 
     def save_checkpoint(self, val_loss, model):
         """
-        Saves the model's state dict to disk when validation loss reaches a new minimum.
+        Saves the model's state dict to disk when validation loss reaches a new minimum,
+        and optionally logs it to W&B as a versioned artifact.
 
         Args:
             val_loss (float): The new best validation loss.
@@ -308,6 +310,15 @@ class EarlyStopping:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}). Saving model...')
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
+
+        if self.use_wandb:
+            best_artifact = wandb.Artifact(
+                name=f"{self.model_name}-best",
+                type="model",
+                description=f"Best model checkpoint (val_loss: {val_loss:.6f})"
+            )
+            best_artifact.add_file(self.path)
+            wandb.log_artifact(best_artifact)
 
 def save_training_plots(epoch, test_dataset, transformed_preds, image_plots, image_dates, size, path, model_name):
     """
@@ -358,7 +369,7 @@ def save_training_plots(epoch, test_dataset, transformed_preds, image_plots, ima
     plt.close()
     
 
-def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_data, size, path, model_name):
+def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_data, size, path, model_name, use_wandb=True):
     """
     Reshapes model predictions and ground truth arrays into (time, lat, lon) format, writes them to
     a NetCDF file via Xarray, and logs the file to Weights & Biases as a versioned dataset artifact.
@@ -371,13 +382,12 @@ def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_dat
         size (tuple of int): The spatial dimensions (height, width) used to reshape flat arrays into (lat, lon) grids.
         path (str): The base directory path for saving the NetCDF file.
         model_name (str): The model name used to locate the output subfolder and tag the artifact.
-
+        use_wandb (bool): If True, logs the NetCDF file to W&B as a versioned artifact. Defaults to True.
     Returns:
         None
     """
     fps = test_dataset.fp.detach().numpy()
-    
-    # Reshape arrays for NetCDF (Time, Lat, Lon)
+
     test_out_reshaped = np.reshape(test_out, (len(test_out), size[0], size[1]))
     trans_preds_reshaped = np.reshape(transformed_preds, (len(transformed_preds), size[0], size[1]))
     fps_reshaped = np.reshape(fps, (len(fps), size[0], size[1]))
@@ -389,7 +399,7 @@ def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_dat
         'fp': (['time', "lat", "lon"], fps_reshaped, {'type': "truth"}),
         'trans_fp': (['time', "lat", "lon"], trans_fp_reshaped, {'space': 'transformed'})
     }
-    
+
     coords = {
         'time': (['time'], test_data.met.time.values),
         'lat': (['lat'], list(range(size[0]))),
@@ -400,15 +410,15 @@ def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_dat
     netcdf_save_path = f"{path}{model_name}/sample_predictions_training.nc"
     ds.to_netcdf(netcdf_save_path)
     print("NetCDF file saved.")
-    
-    # Log to W&B as a versioned artifact with explicit name
-    preds_artifact = wandb.Artifact(
-        name=f"{model_name}-predictions",   # e.g. myModel-predictions:v0
-        type="dataset",
-        description="Sample predictions saved during training"
+
+    if use_wandb:
+        preds_artifact = wandb.Artifact(
+            name=f"{model_name}-predictions",
+            type="dataset",
+            description="Sample predictions saved during training"
         )
-    preds_artifact.add_file(netcdf_save_path)
-    wandb.log_artifact(preds_artifact)
+        preds_artifact.add_file(netcdf_save_path)
+        wandb.log_artifact(preds_artifact)
 
 def run_full_training(model,parameters, train_loader, test_loader, optimizer, criterion, criterion_test, 
                       test_dataset, test_data, device, epoch_so_far, losses, 
@@ -446,84 +456,73 @@ def run_full_training(model,parameters, train_loader, test_loader, optimizer, cr
     Returns:
         None
     """
-    print(parameters['epochs'])
     lr = parameters['learning_rate']
     num_epochs = parameters['epochs']['training']
     visualize_epochs = parameters['epochs']['visualize']
     saving_epochs = parameters['epochs']['model_saving']
     patience_epochs = parameters['epochs']['patience']
+    use_wandb = parameters.get('use_wandb', True)  # defaults to True if not set
 
-    # Initialize Early Stopping
     best_model_path = f"{path}{model_name}/{model_name}_best.pt"
-    early_stopping = EarlyStopping(patience=patience_epochs, verbose=True, path=best_model_path)
-    
+    early_stopping = EarlyStopping(
+    patience=patience_epochs,
+    verbose=True,
+    path=best_model_path,
+    use_wandb=use_wandb,   
+    model_name=model_name
+    )
 
     for epoch_idx in range(num_epochs):
         epoch = epoch_idx + epoch_so_far
         print(f"\n--- Start Epoch: {epoch} ---")
-        
-        # 1. Training Pass
+
         avg_train_loss = train_one_epoch(model, train_loader, optimizer, criterion, criterion_test, device, epoch)
-        
-        # 2. Validation Pass
         avg_test_loss, test_out = validate_and_predict(model, test_loader, criterion_test, device)
-        
-        # 3. Store Primary Metrics
+
         losses["train"].append(avg_train_loss)
         losses["test"].append(avg_test_loss)
-        
-        # 4. Evaluation & Logging
-        #truths = torch.squeeze(test_dataset.fp).detach().numpy()
+
         truths = test_dataset.fp.squeeze(-1).detach().numpy()
-        
-        print(truths.shape)
-        print(test_out.shape)
-        
         nmae_val = NMAE_function(test_out, truths)
         losses["NMAE_test"].append(nmae_val)
-        
+
         transformed_preds = test_dataset.inverse_transform(test_out)
         eval_metrics = test_dataset.evaluate()
-        
+
         losses["NMAE_test_transformed"].append(eval_metrics["NMAE"])
         losses["MSE_test_transformed"].append(eval_metrics["MSE"])
         losses["accuracy"].append(eval_metrics["Accuracy"])
         losses["IoU"].append(eval_metrics["IOU"])
 
-        # Flux Evaluation
         for flux_mode in flux_evaluation:
             flux_metrics = test_dataset.evaluate_flux(mode=flux_mode)
             losses[f"flux_{flux_mode}"]["MAE"].append(flux_metrics["MAE"])
             losses[f"flux_{flux_mode}"]["R2"].append(flux_metrics["R2"])
-        
-        wandb.log({
-        "epoch": epoch + 1,
-        "train/loss": avg_train_loss,
-        "test/loss": avg_test_loss,
-        "test/NMAE": nmae_val,
-        "test/NMAE_transformed": eval_metrics['NMAE'],
-        "test/MSE": eval_metrics['MSE'],
-        "test/IoU": eval_metrics['IOU'],
-        **{f"flux/{k}": v for k, v in flux_metrics.items()}
-    }, step=epoch)
 
-        # 5. EARLY STOPPING CHECK
-        # We pass the validation loss to the class. It handles the counter and saving.
+        if use_wandb:
+            wandb.log({
+                "epoch": epoch + 1,
+                "train/loss": avg_train_loss,
+                "test/loss": avg_test_loss,
+                "test/NMAE": nmae_val,
+                "test/NMAE_transformed": eval_metrics['NMAE'],
+                "test/MSE": eval_metrics['MSE'],
+                "test/IoU": eval_metrics['IOU'],
+                **{f"flux/{k}": v for k, v in flux_metrics.items()}
+            }, step=epoch)
+
         early_stopping(avg_test_loss, model)
-        
+
         if early_stopping.early_stop:
             print("Early stopping triggered. Ending training.")
             break
 
-        # Write to Log File
         log_text = f"Epoch {epoch}, Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}, NMAE: {nmae_val:.4f}"
         write_to_file(log_text, path, model_name)
 
-        # 5. Visualizations (Every 5 epochs)
         if epoch % visualize_epochs == 0:
             save_training_plots(epoch, test_dataset, transformed_preds, image_plots, image_dates, size, path, model_name)
 
-        # 6. Checkpoints (Every 50 epochs)
         if epoch % saving_epochs == 0:
             checkpoint_path = f"{path}{model_name}/{model_name}_{epoch}.pt"
             torch.save({
@@ -534,26 +533,23 @@ def run_full_training(model,parameters, train_loader, test_loader, optimizer, cr
                 'learning_rate': lr,
             }, checkpoint_path)
 
-            # Log to W&B as a versioned artifact
-            checkpoint_artifact = wandb.Artifact(
-                name=f"{model_name}-checkpoint",   # e.g. myModel-checkpoint:v0
-                type="model",
-                description="Model checkpoint saved during training"
-            )
-            checkpoint_artifact.add_file(checkpoint_path)
-            wandb.log_artifact(checkpoint_artifact)   
-        '''
-        # 7. Special Epoch Conditions
-        if epoch == 102 and NMAE_nans(test_out, truths) == 1:
-            print("No learning detected. Early stopping.")
-            break
-        '''
-        
-        
-    export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_data, size, path, model_name)
+            if use_wandb:
+                checkpoint_artifact = wandb.Artifact(
+                    name=f"{model_name}-checkpoint",
+                    type="model",
+                    description="Model checkpoint saved during training"
+                )
+                checkpoint_artifact.add_file(checkpoint_path)
+                wandb.log_artifact(checkpoint_artifact)
+                '''
+                # 7. Special Epoch Conditions
+                if epoch == 102 and NMAE_nans(test_out, truths) == 1:
+                print("No learning detected. Early stopping.")
+                break
+                '''
 
-    print("Finished Training.")
-
+    export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_data, size, path, model_name, use_wandb=use_wandb)
+    print("Finished Training.") 
 
 def train_and_save_model(parameters, path):
     """
@@ -580,36 +576,23 @@ def train_and_save_model(parameters, path):
         None
     """
     #NMAE_function = NMAE
-    NMAE_function = NMAE_nans
-    
-    env = parameters['env']
-    # 1. Get the current time
-    # Format: YYYYMMDD_HHMMSS (e.g., 20260412_114530)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    NMAE_function = NMAE
+    use_wandb = parameters.get('use_wandb', True)  # defaults to True if not set
 
-    # 2. Append it to your model name
+    env = parameters['env']
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_name = f"{parameters['model_name']}_{timestamp}"
     print(model_name)
 
     set_reproducibility(parameters)
 
-    #### wandb
-    wandb.init(
-        project="BoundaryCondition-Prediction",
-        config=parameters,
-        tags=[
-            #"experiment",
-            #"baseline",
-            #"reproducibility",
-            #"lr_0.01"
-            #"levels",
-            #"time_deltas",
-            #"uncertainty",
-            #"grid_size",
-            ]
+    if use_wandb:
+        wandb.init(
+            project="BoundaryCondition-Prediction",
+            config=parameters,
+            tags=[]
+        )
 
-    )
-    # make files
     os.makedirs(f"{path}{model_name}", exist_ok=True)
     os.mkdir(f"{path}{model_name}/training_imgs")
     training_outputs_path = f"{path}{model_name}/training_outputs"
@@ -617,32 +600,24 @@ def train_and_save_model(parameters, path):
     f = open(f"{path}{model_name}/{model_name}_updates.txt", "x")
     f.close()
 
-
-    # Load config
     with open("config.yml", "r") as f:
         config = yaml.safe_load(f)
 
-    # Select the HPC environment you're using
     env_paths = config["data_paths"][env]
-    # Join paths
     base_data_path = env_paths["base_data_path"]
     fp_datadir = os.path.join(base_data_path, env_paths["fp_datadir"].lstrip("/"))
     met_datadir = os.path.join(base_data_path, env_paths["met_datadir"].lstrip("/"))
     topog_datadir = os.path.join(base_data_path, env_paths["topog_datadir"].lstrip("/"))
     landcover_datadir = os.path.join(base_data_path, env_paths["landcover_datadir"].lstrip("/"))
-    
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"), path, model_name)
-    #write_to_file("loading data")
     write_to_file("loading data", path, model_name)
 
-    #### 2 Load Data
     train_load_data = copy.deepcopy(parameters["train_load_data"])
-    # load train parameters and upload with any changes to test data
     test_load_data = copy.deepcopy(parameters["train_load_data"])
     test_load_data.update(parameters["test_load_data"])
-    
+
     shared_data_args = dict(
         load_everything=True,
         base_data_path=base_data_path,
@@ -653,47 +628,33 @@ def train_and_save_model(parameters, path):
             "landcover_path": landcover_datadir
         }
     )
-    
+
     print("Load training met and fp data")
-    write_to_file("Load training met and fp data",path, model_name)
+    write_to_file("Load training met and fp data", path, model_name)
     data = LoadSquareSatelliteData(**train_load_data, **shared_data_args)
-    write_to_file("Successfully load training met and fp data",path, model_name)
-    write_to_file("Now load test met and fp data",path, model_name)
+    write_to_file("Successfully load training met and fp data", path, model_name)
+    write_to_file("Now load test met and fp data", path, model_name)
     print("Load test met and fp data")
     test_data = LoadSquareSatelliteData(**test_load_data, **shared_data_args)
-    write_to_file("Successfully load test met and fp data",path, model_name)
-    '''
-    data = LoadSquareSatelliteData(**train_load_data, load_everything=True)
-    test_data = LoadSquareSatelliteData(**test_load_data,load_everything=True)
-    '''
+    write_to_file("Successfully load test met and fp data", path, model_name)
     write_to_file("setting up data", path, model_name)
 
-    # extract inputs
-
     input_variables = parameters["variables"]
-
     inputs, names = get_square_satellite_inputs(data, **input_variables, return_variable_names=True, return_asarray=True)
-    # Checking for NaNs
+
     nan_indices_train = np.argwhere(np.isnan(inputs))
     if nan_indices_train.size > 0:
-        print(f"NaNs found in training set at indices: {nan_indices_train[:10]}")  # show just first 10 for now
+        print(f"NaNs found in training set at indices: {nan_indices_train[:10]}")
 
     test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=True)
     nan_indices = np.argwhere(np.isnan(test_inputs))
     if nan_indices.size > 0:
-        print(f"NaNs found in test set at indices: {nan_indices[:10]}")  # show just first 10 for now
-    
-    # the model gets built with respect to a "reference footprint", and all predictions are done on this grid. An improvement would be to explore a way to select the best reference footrpint, or to find a way to do this dynamically for each footprint
+        print(f"NaNs found in test set at indices: {nan_indices[:10]}")
+
     grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
 
-    
-    test_batch_size=10
-
-    # transform data - 
     train_dataset = FootprintsDatasetV3(inputs, data.fp_data, input_names=names, **parameters["dataloader_parameters"])
-
     print(train_dataset.transform_parameters)
-
     test_dataset = FootprintsDatasetV3(test_inputs, test_data.fp_data, input_names=names, test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
 
     train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
@@ -703,71 +664,49 @@ def train_and_save_model(parameters, path):
         size = [data.size, data.size]
     if data.dataset_format == "domain":
         size = data.domain_size
-    
-    # Save and log the Grid
-    log_object_as_artifact(grid, "grid", training_outputs_path, model_name, 
-                        description="Grid object used during training")
 
-    # Save and log Transform Parameters
-    log_object_as_artifact(train_dataset.transform_parameters, "transform_parameters", 
-                        training_outputs_path, model_name, description="Transform parameters used in training")
+    log_object_as_artifact(grid, "grid", training_outputs_path, model_name,
+                           description="Grid object used during training", use_wandb=use_wandb)
+    log_object_as_artifact(train_dataset.transform_parameters, "transform_parameters",
+                           training_outputs_path, model_name, description="Transform parameters used in training", use_wandb=use_wandb)
+    log_object_as_artifact(parameters, "training_settings", training_outputs_path, model_name,
+                           file_type="json", description="Training settings and hyperparameters", use_wandb=use_wandb)
 
-    # Save and log Settings
-    log_object_as_artifact(parameters, "training_settings", training_outputs_path, model_name, 
-                        file_type="json", description="Training settings and hyperparameters")
-    
     write_to_file("setting up model", path, model_name)
     print("setting up model")
 
-    # all the necessary data is already in the loaders, so we can delete the objects
     image_plots = random.sample(list(range(len(test_inputs))), k=4)
     image_dates = np.datetime_as_string(test_data.fp_data_full.time.values[image_plots])
 
-    #del data, test_data
-
     lr = parameters["learning_rate"]
     print(lr)
-    #### 3 Make model
 
-    # this is leftover from the previous model and actually shouldnt make a difference
-    #aux_dim = len(input_variables["others"]) 
-    feature_dim=np.shape(inputs)[-1]
+    feature_dim = np.shape(inputs)[-1]
     aux_dim = 0
 
-    # Should probably update the name!!
     model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim, **parameters["model_parameters"])
     criterion = eval(parameters["loss_functions"]["criterion"])
     criterion_test = eval(parameters["loss_functions"]["criterion_test"])
     optimizer = optim.AdamW(model.parameters(), lr=lr)
-    flux_evaluation=["uniform", "checkerboard_10", "checkerboard_5"]
-    losses = {"train":[], "test":[], "NMAE_test":[], "MSE_test_transformed":[], "NMAE_test_transformed":[], "accuracy":[], "IoU":[]}
-    losses.update({f"flux_{f}":{"MAE":[], "R2":[]} for f in flux_evaluation})
+    flux_evaluation = ["uniform", "checkerboard_10", "checkerboard_5"]
+    losses = {"train": [], "test": [], "NMAE_test": [], "MSE_test_transformed": [], "NMAE_test_transformed": [], "accuracy": [], "IoU": []}
+    losses.update({f"flux_{f}": {"MAE": [], "R2": []} for f in flux_evaluation})
 
-    
-
-    #### 3 Dump info
     print("saving grids etc")
-    '''
-    # save transform parameters, grid and training settings
-    with open(f"{path}{model_name}/grid_{model_name}.pickle", 'wb') as handle:
-        pickle.dump(grid, handle)
 
-    with open(f"{path}{model_name}/transform_parameters_{model_name}.pickle", 'wb') as handle:
-        pickle.dump(train_dataset.transform_parameters, handle)
+    if use_wandb:
+        wandb.watch(model, log="all", log_freq=100)
 
-    with open(f"{path}{model_name}/training_settings_{model_name}.json", 'w') as handle:
-        json.dump(parameters, handle)
-    '''
-    wandb.watch(model, log="all", log_freq=100)  # 👈 Track gradients and weights
     epoch_so_far = 0
     if torch.cuda.is_available():
         model.cuda()
-    
-    #### 4 Train loop
-    run_full_training(model,parameters, train_loader, test_loader, optimizer, criterion, criterion_test, 
-    test_dataset, test_data, device, epoch_so_far, losses, 
-    flux_evaluation, image_plots, image_dates, size, path, model_name, NMAE_function=NMAE_function)
-    wandb.finish()
+
+    run_full_training(model, parameters, train_loader, test_loader, optimizer, criterion, criterion_test,
+                      test_dataset, test_data, device, epoch_so_far, losses,
+                      flux_evaluation, image_plots, image_dates, size, path, model_name, NMAE_function=NMAE_function)
+
+    if use_wandb:
+        wandb.finish()
 
     ## save checkpoint every 50 epochs
 

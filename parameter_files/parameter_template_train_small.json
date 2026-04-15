@@ -43,6 +43,7 @@
     },
 
     "learning_rate":5e-5,
+    "use_wandb":false,
 
     "epochs" : {
         "training": 300,
