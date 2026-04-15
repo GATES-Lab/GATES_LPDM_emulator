@@ -59,7 +59,7 @@ def write_to_file(message, path, model_name):
     f.close()
 
 
-def load_file(file_name, file_path):
+def load_file(file_path):
     """
     Loads and parses a JSON file from a given path, falling back to a default directory if no path is provided.
 
@@ -73,7 +73,6 @@ def load_file(file_name, file_path):
     # file_path=False if no argument was passed to the parser
     if not file_path:
        file_path ="/user/work/ef17148/GCN/graphnet/graph_weather/train_satellite_files/"
-    file_path = f"{file_path}{file_name}"
     try:
         with open(file_path, 'r') as file:
             if file_path.endswith('.json'):
@@ -714,19 +713,15 @@ if __name__ == "__main__":
     os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<-- REPLACE THIS
     wandb.login()
 
-    parser = argparse.ArgumentParser(description="Load parameters")
-    parser.add_argument("file_name", help="parameter file name")
-    parser.add_argument("--file_path", help="parameter file path")
+    ## make this importable!
+    with open("config.yml", "r") as f:
+        config = yaml.safe_load(f)
 
-    args = parser.parse_args()
-    file_name = args.file_name
-    file_path = args.file_path
-
-    print(file_name, file_path)
+    path=config['user_paths']['save_models_dir']
+    file_path = config['user_paths']['parameter_files_dir']
 
     #### 1 Set up
-
-    parameters = load_file(file_name, file_path)
+    parameters = load_file(file_path)
     
     if parameters is None:
         print("Error loading parameters. Exiting.")
@@ -735,11 +730,7 @@ if __name__ == "__main__":
     print("PARAMETERS:")
     print(parameters)
 
-    ## make this importable!
-    with open("config.yml", "r") as f:
-        config = yaml.safe_load(f)
-
-    path=config['user_paths']['save_models_dir']
+    
 
     # Train the model with the loaded parameters
     train_and_save_model(parameters, path=path)
