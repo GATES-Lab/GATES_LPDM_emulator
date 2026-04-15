@@ -5,14 +5,25 @@ import yaml
 import warnings
 import argparse
 
+config_cache = None
 
 # Path to the root directories of the project
 root_dir = Path(__file__).parent.parent
 package_dir = root_dir / "gates"
 
-minimum_config_keys = ["data_paths", "domains", "bad_files"]
+minimum_config_keys = ["data_paths", "domains", "bad_files", "user_paths"]
 
-def load_default_config():
+def get_config():
+    """
+    Get the global Config object, which holds the repository-wide configuration settings. 
+    This function uses a simple caching mechanism to ensure that the Config object is only created once, and subsequent calls to get_config() will return the same Config instance.
+    """
+    global config_cache
+    if config_cache is None:
+        config_cache = Config()
+    return config_cache
+
+def _load_default_config():
     """Load the default configuration from a YAML file."""
     config_path = package_dir / "utils" / "config_defaults.yml"
     if not config_path.exists():
@@ -32,21 +43,33 @@ def setup(platform="local"):
     # Create empty config file
     config_path = root_dir / "config.yml"
 
-    default_config = load_default_config()
+    default_config = _load_default_config()
+
+    # allow flexibility in platform names
+    platform = platform.lower()
+    platform_alias = {
+        "isambard-ai": "isambard_ai",
+        "bluepebble": "bp",
+    }
+    platform = platform_alias.get(platform, platform)
+
+    available_platforms = list(default_config["data_paths"].keys())
 
     if platform not in default_config["data_paths"]:
-        raise ValueError(f"Unknown platform '{platform}'. Valid options: {list(default_config['data_paths'].keys())}")
+        raise ValueError(f"Unknown platform '{platform}'. Valid options: {available_platforms}")
 
     data_paths = default_config["data_paths"].get(platform)
 
-    configs_from_default = {"data_paths": data_paths, "domains": default_config["domains"], "bad_files": default_config["bad_files"]}
+    # copy all the default config values, but replace the data_paths with the selected platform's paths
+    configs_from_default = default_config.copy()
+    configs_from_default["data_paths"] = data_paths
 
     with open(config_path, "w") as f:
         # save as yml not json
         yaml.dump(configs_from_default, f, sort_keys=False)
     
     if platform == "local":
-        print(f"Config file created at {config_path}. Please check the paths and update as needed.")
+        print(f"Config file created at {config_path}. Please check the paths and update as needed.\nYou have currently selected the default paths option for running GATES locally, if you are using GATES on another platform make sure you have specified this with the --platform flag.\nCurrently valid arguments are: {available_platforms}")
     else:
         print(f"Config file created at {config_path} with default paths for platform '{platform}'. Please check the paths and update as needed.")
 
@@ -62,11 +85,18 @@ class Config():
     - domains: Dictionary of domain definitions, loaded from the config file.
     - bad_files: List of known footprint files that have to be loaded using a workaround in load_fps, loaded from the config file.
     """
-
+    
+    def __setattr__(self, name, value):
+        if getattr(self, "_locked", False):
+            raise AttributeError("Config is read-only after initialization.")
+        object.__setattr__(self, name, value)
+        
     def __init__(self):
-
         if not (root_dir / "config.yml").exists():
             raise FileNotFoundError(f"Config file not found at {root_dir / 'config.yml'}. Please run `python gates/config.py ` to create a new config file.")
+
+        # after the class is initialised it is "locked" to prevent modifications to a cached config
+        object.__setattr__(self, "_locked", False)
         
         self.root_dir = root_dir
         self.package_dir = package_dir
@@ -83,10 +113,19 @@ class Config():
             raise ValueError(f"Config file is missing some of the expected keys: {minimum_config_keys}. Please check your config file at {root_dir / 'config.yml'}.")
         
         self.fp_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["fp_datadir"].lstrip("/\\")
-        print(f"Footprint data directory set to: {self.fp_datadir} from {self.data_paths['base_data_path']} and {self.data_paths['fp_datadir']}")
         self.met_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["met_datadir"].lstrip("/\\")
         self.topog_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["topog_datadir"].lstrip("/\\")
-        self.landcover_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["landcover_datadir"].lstrip("/\\")
+        # the landcover file is optional
+        if "landcover_datadir" in self.data_paths and self.data_paths["landcover_datadir"] is not None:
+            self.landcover_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["landcover_datadir"].lstrip("/\\")
+        else:
+            self.landcover_datadir = None
+
+        self.flux_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["flux_datadir"].lstrip("/\\")
+
+        self.save_models_dir = Path(self.user_paths["save_models_dir"])
+        self.parameter_files_dir = Path(self.user_paths["parameter_files_dir"])
+        object.__setattr__(self, "_locked", True)
 
 
 
