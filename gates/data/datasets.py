@@ -851,7 +851,13 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
         inputs = inputs.sel(fp_time=permuted_time)
         fps = fps.sel(time=permuted_time)
 
-    assert len(inputs.lat) == len(fps.lat) and len(inputs.lon) == len(fps.lon), "Latitude and longitude dimensions of inputs and fps must match"
+    if len(inputs.lat) != len(fps.lat) or len(inputs.lon) != len(fps.lon):
+         raise ValueError(
+             "Latitude and longitude dimensions of inputs and fps must match: "
+             f"inputs(lat={len(inputs.lat)}, lon={len(inputs.lon)}), "
+             f"fps(lat={len(fps.lat)}, lon={len(fps.lon)})"
+         )
+
 
     X_bgen = make_inputs_batcher(inputs, batch_size=batch_size, flatten=flatten)
     y_bgen, fps_labels = make_fps_batcher(fps, batch_size=batch_size, flatten=flatten)

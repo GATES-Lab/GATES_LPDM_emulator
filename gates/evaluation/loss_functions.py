@@ -393,15 +393,15 @@ class MSEPlusSumLoss(nn.Module):
 
     Usage::
         # Penalise error in total footprint mass (fp_label='ones' is the default):
-        criterion = MSEPlusIntegralLoss(alpha=1.0)
+        criterion = MSEPlusSumLoss(alpha=1.0)
         loss = criterion(pred, target)
 
         # Penalise error in flux-weighted integral:
-        criterion = MSEPlusIntegralLoss(fp_labels, weight_label='flux', alpha=1.0)
+        criterion = MSEPlusSumLoss(fp_labels, weight_label='flux', alpha=1.0)
         loss = criterion(pred, target, fp_batch)
 
         # With dataset-level normalisation of the integral:
-        criterion = MSEPlusIntegralLoss(fp_labels, weight_label='flux',  normalize_fn=normalize_by_mean(integral_mean),
+        criterion = MSEPlusSumLoss(fp_labels, weight_label='flux',  normalize_fn=normalize_by_mean(integral_mean),
          alpha=1.0)
         loss = criterion(pred, target, fp_batch)
 
