@@ -198,6 +198,13 @@ class LoadBaseSatelliteData:
         NOTE: Update dict of region-domain using config rather than being hard-coded
     -  load_everything: bool, if True, loads all data (footprints, meteorology and topography) at once when initializing the class. If False, only loads footprints, and meteorology and topography can be loaded later with the load_meteorology() and load_topog() functions. Default is False 
 
+    Paths:
+        The paths to the files are by default loaded from the config file, where the file structure is expected to be path/to/footprints/domain/region_*domain*_yearmonth.nc for the footprints, and path/to/meteorology/domain/domain_Met_yearmonth.nc for the meteorology. 
+        The config paths are superceded by passing the paths as arguments, as strings or path objects:
+        - fp_datadir for the footprints, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
+        - met_args = {"met_datadir": "path/to/meteorology/domain/domain_Met_"}, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
+        - topog_args = {"topog_path": "path/to/topography/file.nc", "landcover_path": "path/to/landcover/file.nc"}, which should point to the specific files for topography and landcover. These files will be interpolated to the same resolution and domain as the footprints, so they can be from a different source and with a different original resolution.
+
     other inputs
         - freq: int, frequency of the data to load. 
         freq=1 will load all the datapoints, freq=2 will load one in every two etc. Useful to reduce memory usage. Many datapoints are very close in time and space (and therefore very similar) so using freq particularly in low values (<10) does not affect much the quality of the dataset for testing
@@ -207,10 +214,9 @@ class LoadBaseSatelliteData:
         if using sampling_mode="regular", offsets the start of the regular sampling, e.g. freq=2 and freq_offset=0 will sample even footprints, and freq_offset=1 will sample uneven footprints
         - select_time_index: list or 1D np array of timestamps to be selected as datapoints. 
         Applied after sampling with freq (or pass freq=1 to load all footprints)
-        - fp_datadir: str, directory for footprints. default directs to ACRG folder. 
-        If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
         - verbose: if True, prints out the steps throughout the data loading process
         - lazy_load: if True, does not load the met data into memory (lazy array), False, loads the met data into memory.
+        - cfg: a gates.config.Config object containing the config values. If None, the config will be loaded from the config file. If passing as an argument, this supercedes loading from the config file, and allows you to pass a custom config object with custom paths and settings.
     
     met_args:
         see load_meteorology()
@@ -232,13 +238,25 @@ class LoadBaseSatelliteData:
         self.dataset_format = "base" 
         self.data_type="satellite"
 
+        needs_cfg = (
+             domain is None
+             or fp_datadir is None
+             or "met_datadir" not in met_args
+             or "topog_path" not in topog_args
+         )
+
         if cfg is None:
-            cfg = get_config()
-            self.cfg = cfg
+            if needs_cfg:
+                try:
+                    self.cfg = get_config()
+                except Exception as e:
+                    raise FileNotFoundError(f"{e}\nTo avoid needing the config file, pass all necessary paths as arguments when initializing the class. Check the function inputs for details.")
+            else:
+                self.cfg = None
         elif isinstance(cfg, gates.config.Config):
             self.cfg = cfg
         else:
-            raise ValueError("cfg should be either None or a gates.config.Config object. If None, the config will be loaded from the config file. If dict, the values in the dict will be used as config values. Check your input!")
+            raise ValueError("cfg should be either None or a gates.config.Config instance. If None, the config will be loaded from the config file. Check your input!")
 
         #### check domains
         self.region = region
@@ -305,7 +323,9 @@ class LoadBaseSatelliteData:
         if topog_args.get("topog_path", None) is None:
             self.topog_args["topog_path"] = Path(cfg.topog_datadir)
         if topog_args.get("landcover_path", None) is None:
-            if cfg.landcover_datadir is not None:
+            if cfg is None:
+                self.topog_args["landcover_path"] = None
+            elif cfg.landcover_datadir is not None:
                 self.topog_args["landcover_path"] = Path(cfg.landcover_datadir)
     
 
@@ -373,7 +393,7 @@ class LoadBaseSatelliteData:
             landcover_path = self.topog_args.get("landcover_path", None)
 
         if landcover_path is None:
-            print("no landcover path was passed, and no default landcover path found in config. skipping loading landcover")
+            if self.verbose: print("no landcover path was passed, and no default landcover path found in config. skipping loading landcover")
             landcover_file = None
         
         else:
@@ -795,12 +815,16 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     main inputs:
         - year: can be an int (eg 2016) or a string, including combinations of years (eg "2016", "201[4-5]")
         - month: str in format "01" for January etc, None if loading a whole year
-        - region: region identifyer, as a string. Default is Brazil. Current set-up has regions "BRAZIL", "SOUTHAMERICA", "SAHARA" and "INDIA"
-        (note - Brazil is a subset of South America!)
-        - domain: Domain related to the region, used for file search (due to existing filenaming conventions). Set-up regions ("BRAZIL", "SOUTHAMERICA", "SAHARA" and "INDIA") have a default domain, all others need domain passed
-        NOTE: Update dict of region-domain using config rather than being hard-coded
+        - region: region identifyer, as a string. 
+        - domain: Spatial domain related to the region. It can be extracted automatically from the config file if the region-domain pair is specified there, or it can be passed directly as an argument. The domain is used to find the files to load.
         - size: size for footprint to be cut to, as an int. Resolution of the footprint is maintained, cut to a sizexsize square around the release point. 
     
+    Paths:
+        The paths to the files are by default loaded from the config file, where the file structure is expected to be path/to/footprints/domain/region_*domain*_yearmonth.nc for the footprints, and path/to/meteorology/domain/domain_Met_yearmonth.nc for the meteorology. 
+        The config paths are superceded by passing the paths as arguments, as strings or path objects:
+        - fp_datadir for the footprints, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
+        - met_args = {"met_datadir": "path/to/meteorology/domain/domain_Met_"}, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
+        - topog_args = {"topog_path": "path/to/topography/file.nc", "landcover_path": "path/to/landcover/file.nc"}, which should point to the specific files for topography and landcover. These files will be interpolated to the same resolution and domain as the footprints, so they can be from a different source and with a different original resolution.
 
     other inputs
         - freq: int, frequency of the data to load. 
@@ -811,14 +835,13 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         if using sampling_mode="regular", offsets the start of the regular sampling, e.g. freq=2 and freq_offset=0 will sample even footprints, and freq_offset=1 will sample uneven footprints
         - select_time_index: list or 1D np array of timestamps to be selected as datapoints. 
         Applied after sampling with freq (or pass freq=1 to load all footprints)
-        - fp_datadir: str, directory for footprints. default directs to ACRG folder. 
-        If passing the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass fp_datadir="/path/name_of_your_choice_"
         - verbose: if True, prints out the steps throughout the data loading process
         - lazy_load: if True, does not load the met data into memory (lazy array), False, loads the met data into memory.
         - fill_outofdomain_with: str, out of "nans" and "zeros". Determines what to do if any part of the square cut around the footprint is outside of the domain. "nans" and "zeros" fill only the out of domain areas with nans and zeros respectively. 
         - delete_outofdomain: bool, if True delete all footprints (and associated datapoints) where the extracted area size x size escapes the domain. Default is False, which means that the cut footprints will be kept and the out of domain areas will be filled according to fill_outofdomain_with.
         - verbose: if True, prints out the steps throughout the data loading process
         - load_everything: bool, if True, loads all data (footprints, meteorology and topography) at once when initializing the class. If False, only loads footprints, and meteorology and topography can be loaded later with the load_meteorology() and load_topog() functions. Default is False
+        - cfg: a gates.config.Config object containing the config values. If None, the config will be loaded from the config file. If passing as an argument, this supercedes loading from the config file, and allows you to pass a custom config object with custom paths and settings.
     
     met_args:
         see load_meteorology()
@@ -830,13 +853,25 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         self.dataset_format = "square" 
         self.data_type = "satellite"
         
+        needs_cfg = (
+             domain is None
+             or fp_datadir is None
+             or "met_datadir" not in met_args
+             or "topog_path" not in topog_args
+         )
+
         if cfg is None:
-            cfg = get_config()
-            self.cfg = cfg
+            if needs_cfg:
+                try:
+                    self.cfg = get_config()
+                except Exception as e:
+                    raise FileNotFoundError(f"{e}\nTo avoid needing the config file, pass all necessary paths as arguments when initializing the class. Check the function inputs for details.")
+            else:
+                self.cfg = None
         elif isinstance(cfg, gates.config.Config):
             self.cfg = cfg
         else:
-            raise ValueError("cfg should be either None or a dict. If None, the config will be loaded from the config file. If dict, the values in the dict will be used as config values. Check your input!")
+            raise ValueError("cfg should be either None or a gates.config.Config instance. If None, the config will be loaded from the config file. Check your input!")
     
         #### check domains
         self.region = region
@@ -1102,7 +1137,13 @@ def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
 
 def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None):
     """
-    Load emissions for the given domain and year. Returns a lazy xarray DataArray (time, lat, lon) with all months in the file. Hardcoded paths should be replaced by a config file .
+    Load emissions for the given domain and year. Returns a lazy xarray DataArray (time, lat, lon) with all months in the file. Loads the file in flux_path if provided, otherwise looks up the file based on the config, domain and species. 
+    Inputs:
+    - domain: str, domain to load emissions for. Should match the domain_name in the config file. Case-insensitive. If not found, will try to match against the region name in the config file. If still not found, raises an error with the available domain names in the config file.
+    - year: int or str, year to load emissions for. If str, should be in the format "2016" or "201[4-5]" to match multiple years. Default is 2016.
+    - species: str, species to load emissions for. Default is "ch4". Should match the species used in the flux_suffix in the config file if flux_suffix is a dict.
+    - flux_path: str, optional path to the flux file to load. If provided, this will be used instead of looking up the file based on the config, domain and species.
+    - cfg: gates.config.Config instance or None. If None, the config will be loaded from the config file. If provided, should be an instance of gates.config.Config. Used to look up the flux file if flux_path is not provided.
     """
     if flux_path is not None:
         # assert that there is a file at flux path
@@ -1113,7 +1154,7 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None):
     if cfg is None:
         cfg = get_config()
     elif not isinstance(cfg, gates.config.Config):
-        raise ValueError("cfg should be either None or a gates.config.Config object. If None, the config will be loaded from the config file. If dict, the values in the dict will be used as config values. Check your input!")
+        raise ValueError("cfg should be either None or a gates.config.Config instance. If None, the config will be loaded from the config file. Check your input!")
     
     domains = cfg.domains
 
