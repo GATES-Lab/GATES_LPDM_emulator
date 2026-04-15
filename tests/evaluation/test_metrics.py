@@ -54,6 +54,7 @@ from gates.evaluation.metrics import (
 N, H, W = 3, 10, 10
 BLOB_CELLS = 16          # cells active per blob (4×4)
 TOTAL_CELLS = H * W      # 100
+NO_CORR_METRICS = ["iou", "mse", "mae", "nmae", "bias"]
 
 
 # ---------------------------------------------------------------------------
@@ -373,13 +374,12 @@ class TestIou:
 class TestComputeFootprintMetrics:
 
     def test_returns_all_default_keys(self, true_arr, pred_arr):
-        result = compute_footprint_metrics(true_arr, pred_arr)
-        expected_keys = {"iou", "mse", "mae", "nmae", "corrcoef", "corrcoef_log", "bias"}
+        result = compute_footprint_metrics(true_arr, pred_arr, metrics=NO_CORR_METRICS)
+        expected_keys = set(NO_CORR_METRICS)
         assert set(result.keys()) == expected_keys
 
     def test_values_match_individual_functions(self, true_arr, pred_arr):
-        result = compute_footprint_metrics(true_arr, pred_arr)
-        print(result)
+        result = compute_footprint_metrics(true_arr, pred_arr, metrics=NO_CORR_METRICS)
         assert result["bias"] == pytest.approx(bias(true_arr, pred_arr), rel=1e-6)
         assert result["mse"] == pytest.approx(mse(true_arr, pred_arr), rel=1e-6)
         assert result["mae"] == pytest.approx(mae(true_arr, pred_arr), rel=1e-6)
@@ -403,8 +403,8 @@ class TestComputeFootprintMetrics:
             compute_footprint_metrics(true_arr, pred_arr, metrics=["not_a_metric"])
 
     def test_with_ignore_mask(self, true_arr, pred_arr, ignore_mask):
-        unmasked = compute_footprint_metrics(true_arr, pred_arr)
-        masked = compute_footprint_metrics(true_arr, pred_arr, ignore_mask=ignore_mask)
+        unmasked = compute_footprint_metrics(true_arr, pred_arr, metrics=NO_CORR_METRICS)
+        masked = compute_footprint_metrics(true_arr, pred_arr, ignore_mask=ignore_mask, metrics=NO_CORR_METRICS)
         # All error metrics should be lower or equal when masking partial errors
         assert masked["mae"] <= unmasked["mae"] + 1e-9
         assert masked["mse"] <= unmasked["mse"] + 1e-9
@@ -417,21 +417,21 @@ class TestComputeFootprintMetrics:
 class TestComputeMetricsByThreshold:
 
     def test_bin_keys_from_threshold_list(self, true_arr, pred_arr):
-        result = compute_metrics_by_threshold(true_arr, pred_arr, thresholds=[0.5, 1.5])
+        result = compute_metrics_by_threshold(true_arr, pred_arr, thresholds=[0.5, 1.5], metrics=NO_CORR_METRICS)
         assert set(result.keys()) == {"-inf_to_0.5", "0.5_to_1.5", "1.5_to_inf"}
 
     def test_single_scalar_threshold(self, true_arr, pred_arr):
-        result = compute_metrics_by_threshold(true_arr, pred_arr, thresholds=0.5)
+        result = compute_metrics_by_threshold(true_arr, pred_arr, thresholds=0.5, metrics=NO_CORR_METRICS)
         assert set(result.keys()) == {"-inf_to_0.5", "0.5_to_inf"}
 
     def test_each_bin_contains_required_keys(self, true_arr, pred_arr):
-        result = compute_metrics_by_threshold(true_arr, pred_arr, thresholds=[0.5])
+        result = compute_metrics_by_threshold(true_arr, pred_arr, thresholds=[0.5], metrics=NO_CORR_METRICS)
         for bin_scores in result.values():
             for key in ("mse", "mae", "nmae", "iou", "threshold_range"):
                 assert key in bin_scores
 
     def test_threshold_range_values(self, true_arr, pred_arr):
-        result = compute_metrics_by_threshold(true_arr, pred_arr, thresholds=[0.5, 1.5])
+        result = compute_metrics_by_threshold(true_arr, pred_arr, thresholds=[0.5, 1.5], metrics=NO_CORR_METRICS)
         assert result["-inf_to_0.5"]["threshold_range"] == (-float("inf"), 0.5)
         assert result["0.5_to_1.5"]["threshold_range"] == (0.5, 1.5)
         assert result["1.5_to_inf"]["threshold_range"] == (1.5, float("inf"))

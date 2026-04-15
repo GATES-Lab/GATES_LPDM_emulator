@@ -1,6 +1,23 @@
 # HOW TO TESTS
 
-This note describes how test data is currently configured in this repository.
+## Running tests
+You can run the tests either with realistic sample data (see #2 below on how to generate it) or with synthetic data. Use the following commands:
+
+- synthetic (default):
+
+```bash
+python -m pytest tests/ -v
+```
+
+- real sample files:
+
+```bash
+python -m pytest tests/ --sample-files
+```
+
+To avoid deprecation warnings, add `-Wignore::DeprecationWarning` to the commands above.
+
+The rest of this file describes how test data is currently configured in this repository.
 
 ## 1) Expected sample files and coordinate conventions
 
@@ -150,23 +167,6 @@ Behavior:
 - if all sample paths are available, it constructs `LoadSquareSatelliteData` from real files
 - otherwise, it patches loader methods and uses synthetic fixtures
 
-### Running tests in each mode
-
-- synthetic (default):
-
-```bash
-python -m pytest tests/ -v
-```
-
-- real sample files:
-
-```bash
-python -m pytest tests/ --sample-files
-```
-
-Pytest header reports mode:
-- `dataset mode: synthetic in-memory data`
-- `dataset mode: real .nc sample files (tests/sample_data/)`
 
 ### Practical tip
 

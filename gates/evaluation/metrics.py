@@ -62,9 +62,21 @@ def iou(true, pred, *, threshold=0, spatial_shape=None, ignore_mask=None, reduce
     union = np.nansum(true_bin | pred_bin, axis=(1, 2))
 
     # Avoid division by zero for empty footprints
-    scores = np.where(union > 0, intersection / union, np.nan)
-
-    return float(np.nanmean(scores)) if reduce == "mean" else scores
+    #scores = np.where(union > 0, intersection / union, np.nan)
+    scores = np.full_like(union, np.nan, dtype=float)
+    scores = np.divide(
+    intersection,
+    union,
+    out=scores,
+    where=np.isfinite(union) & (union > 0),
+)
+    
+    if reduce == "mean" and np.isnan(scores).all():
+        return np.nan
+    elif reduce == "mean":
+        return float(np.nanmean(scores))
+    else:
+        return scores
 
 def bias(true, pred, *, spatial_shape=None, ignore_mask=None, reduce="mean", nonzero=False, threshold=None):
     """Mean bias: mean(pred - true) over valid cells.
@@ -97,7 +109,12 @@ def bias(true, pred, *, spatial_shape=None, ignore_mask=None, reduce="mean", non
     bias_masked = np.where(mask, bias_map, np.nan)
     scores = np.nanmean(bias_masked, axis=(1, 2))
     
-    return float(np.nanmean(scores)) if reduce == "mean" else scores
+    if reduce == "mean" and np.isnan(scores).all():
+        return np.nan
+    elif reduce == "mean":
+        return float(np.nanmean(scores))
+    else:
+        return scores
 
 
 def mse(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None,
@@ -144,7 +161,12 @@ def mse(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None
     se_masked = np.where(mask, se, np.nan)
     scores = np.nanmean(se_masked, axis=(1, 2))
 
-    return float(np.nanmean(scores)) if reduce == "mean" else scores
+    if reduce == "mean" and np.isnan(scores).all():
+        return np.nan
+    elif reduce == "mean":
+        return float(np.nanmean(scores))
+    else:
+        return scores
 
 
 def mae(true, pred, *, spatial_shape=None, ignore_mask=None,
@@ -180,7 +202,12 @@ def mae(true, pred, *, spatial_shape=None, ignore_mask=None,
     ae_masked = np.where(mask, ae, np.nan)
     scores = np.nanmean(ae_masked, axis=(1, 2))
 
-    return float(np.nanmean(scores)) if reduce == "mean" else scores
+    if reduce == "mean" and np.isnan(scores).all():
+        return np.nan
+    elif reduce == "mean":
+        return float(np.nanmean(scores))
+    else:
+        return scores
 
 
 def nmae(true, pred, *, spatial_shape=None, ignore_mask=None,
@@ -224,7 +251,12 @@ def nmae(true, pred, *, spatial_shape=None, ignore_mask=None,
     
     scores = np.divide(ae_sum, true_sum, where=true_sum != 0, out=np.full_like(ae_sum, np.nan))
 
-    return float(np.nanmean(scores)) if reduce == "mean" else scores
+    if reduce == "mean" and np.isnan(scores).all():
+        return np.nan
+    elif reduce == "mean":
+        return float(np.nanmean(scores))
+    else:
+        return scores
 
 
 def corrcoef(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None, threshold=None,
@@ -272,7 +304,12 @@ def corrcoef(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask
             t, p = np.log10(t), np.log10(p)
         scores[i] = np.corrcoef(t, p)[0, 1]
 
-    return float(np.nanmean(scores)) if reduce == "mean" else scores
+    if reduce == "mean" and np.isnan(scores).all():
+        return np.nan
+    elif reduce == "mean":
+        return float(np.nanmean(scores))
+    else:
+        return scores
 
 _all_metrics = {
         "iou": iou,
@@ -318,7 +355,7 @@ def compute_footprint_metrics(true, pred, metrics=list(_all_metrics.keys()), spa
     return results
 
 
-def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ignore_mask=None):
+def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ignore_mask=None, metrics=None):
     """Compute metrics separately for each bin defined by the given thresholds.
 
     Splits the true footprint into value-range bins and computes all metrics
@@ -338,6 +375,9 @@ def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ign
         (H, W) — required only for flat inputs that are not xarray DataArrays.
     ignore_mask:
         Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
+    metrics:
+        Optional list of metric names to compute within each threshold bin.
+        If None, uses all metrics in _all_metrics.
 
     Usage:
     >>> compute_metrics_by_threshold(true_fp, pred_fp, thresholds=[0, 1e-4, 1e-2], spatial_shape=(H, W))
@@ -359,6 +399,16 @@ def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ign
         thresholds = [thresholds]
     elif not isinstance(thresholds, (list, np.ndarray)):
         raise ValueError("thresholds must be a number or a list/array of numbers.")
+
+    if metrics is None:
+        metrics = list(_all_metrics.keys())
+    else:
+        unknown_metrics = [m for m in metrics if m not in _all_metrics]
+        if unknown_metrics:
+            raise ValueError(
+                f"Unsupported metric(s) {unknown_metrics}. Supported: {list(_all_metrics.keys())}"
+            )
+
     bins = [-float('inf')] + thresholds + [float('inf')]
 
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
@@ -368,20 +418,28 @@ def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ign
     scores_by_threshold = {}
     for bin_start, bin_end in zip(bins[:-1], bins[1:]):
         # let's do a mask that keeps only values between bins
-        # calculate the iou separately
-        iou_here = iou(true_np, pred_np, threshold=bin_start, spatial_shape=spatial_shape, ignore_mask=ignore_np, reduce="mean")
+        # calculate IoU only when explicitly requested
+        if "iou" in metrics:
+            iou_here = iou(
+                true_np,
+                pred_np,
+                threshold=bin_start,
+                spatial_shape=spatial_shape,
+                ignore_mask=ignore_np,
+                reduce="mean",
+            )
 
         mask = valid_mask(true_np, pred_np, ignore_mask=ignore_np)
         # mask + mask where true np is between bin_start and bin_end
         mask = mask & (true_np > bin_start) & (true_np <= bin_end)
 
-        metrics_except_iou = _all_metrics.copy()
-        metrics_except_iou.pop("iou")
+        metrics_except_iou = [m for m in metrics if m != "iou"]
         
         if np.sum(mask) == 0:
             print(f"Warning: No valid cells in bin ({bin_start}, {bin_end}]! Metrics will be NaN.")
-            scores_by_threshold[f"{bin_start}_to_{bin_end}"] = {metric: np.nan for metric in _all_metrics}
-            scores_by_threshold[f"{bin_start}_to_{bin_end}"]["iou"] = iou_here
+            scores_by_threshold[f"{bin_start}_to_{bin_end}"] = {metric: np.nan for metric in metrics}
+            if "iou" in metrics:
+                scores_by_threshold[f"{bin_start}_to_{bin_end}"]["iou"] = iou_here
             scores_by_threshold[f"{bin_start}_to_{bin_end}"]["threshold_range"] = (bin_start, bin_end)
             continue
 
@@ -389,7 +447,8 @@ def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ign
         scores_by_threshold[f"{bin_start}_to_{bin_end}"] = compute_footprint_metrics(
             true_np, pred_np, spatial_shape=spatial_shape, ignore_mask=~mask, metrics=metrics_except_iou, nonzero=False,
         )
-        scores_by_threshold[f"{bin_start}_to_{bin_end}"]["iou"] = iou_here
+        if "iou" in metrics:
+            scores_by_threshold[f"{bin_start}_to_{bin_end}"]["iou"] = iou_here
         scores_by_threshold[f"{bin_start}_to_{bin_end}"]["threshold_range"] = (bin_start, bin_end)
 
     return scores_by_threshold
@@ -476,7 +535,6 @@ def calculate_mfs(fp, fluxes, transform_factor=None, spatial_shape=None):
     - If inputs are xarray DataArrays or Datasets, returns an xarray Dataset containing the calculated mole fractions for each variable. If inputs are numpy arrays, returns a numpy array of shape (N,) containing the mole fractions for each sample in the batch.
     """
     if isinstance(fp, (xr.DataArray, xr.Dataset)) and isinstance(fluxes, (xr.DataArray, xr.Dataset)):
-        print("going here")
         return calculate_mfs_xarray(fp, fluxes, transform_factor)
 
     else:
@@ -547,15 +605,16 @@ def calculate_mfs_xarray(fp, fluxes, transform_factor=None):
     ## apply the transform factor to the mfs and update the units attribute if it exists. If transform_factor is "default", attempt to infer the factor from the fluxes units (e.g. if units are "mol/m2/s", apply a factor of 1e9 to convert to ppb)
     if transform_factor is not None:
         if transform_factor == "default":
-            if hasattr(fluxes, "units"):
+            if "units" in flux_attrs:
                 if "units" in flux_attrs:
                     units = flux_attrs["units"]
                     if units=="mol/m2/s":
                         transform_factor = 1e9  # convert to ppb
                     else:
                         print(f"Warning: Unrecognized flux units {units}. No transformation applied.")
+                        transform_factor = 1.0
             else:
-                raise ValueError("transform_factor='default' requires fluxes to have 'units' attribute.")
+                raise ValueError("transform_factor='default' requires fluxes to have 'units' attribute, and a recognizable unit string. Currently only supports 'mol/m2/s'.")
 
         elif not isinstance(transform_factor, (int, float)):
             raise ValueError("transform_factor must be a number or 'default'.")

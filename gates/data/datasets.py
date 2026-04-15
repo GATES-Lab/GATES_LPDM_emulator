@@ -791,7 +791,10 @@ def make_fps_batcher(fps, batch_size=10, flatten=False):
             input_dims = {"flat_lat_lon": len(fps.flat_lat_lon)}
         else:
             input_dims = {"lat": len(fps.lat), "lon": len(fps.lon)}
-
+    else:
+            raise ValueError(
+                f"Unsupported fps type: expected xr.Dataset or xr.DataArray, got {type(fps).__name__}"
+            )    
     y_bgen = xb.BatchGenerator(
         fps,
         input_dims=input_dims,
@@ -836,7 +839,8 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     if isinstance(fps, xr.Dataset):
         print(f"you passed a fps dataset with multiple variables: {list(fps.data_vars)}. All variables will be returned in the dataloader along a new dimension. ")
         ## but make sure this is what you want! If you only want to return the transformed fps variable, pass fps['fp_transformed'] instead of the whole dataset when calling this function.
-    if not isinstance(fps, (xr.DataArray, xr.Dataset)) and isinstance(inputs, xr.DataArray):
+    if not isinstance(fps, (xr.DataArray, xr.Dataset)) or not isinstance(inputs, xr.DataArray):
+        print(f"inputs type: {type(inputs)}, fps type: {type(fps)}")
         raise ValueError("fps must be an xarray DataArray or Dataset, and inputs must be an xarray DataArray")
 
     if randomize:

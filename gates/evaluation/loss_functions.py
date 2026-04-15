@@ -227,7 +227,7 @@ class ThresholdedMSELoss(nn.Module):
         weight_field = fp_batch[..., self.weight_idx]
 
         # add min and max in batch to threshold to make bins        
-        added_loss = 0.0
+        added_loss = torch.zeros((), device=pred.device, dtype=pred.dtype)
         for bin_start, bin_end, a in zip(self.bins[:-1], self.bins[1:], self.alpha):
             mask = (weight_field > bin_start) & (weight_field <= bin_end) 
             if nan_mask is not None:
