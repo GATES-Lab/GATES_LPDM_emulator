@@ -213,4 +213,8 @@ After inference, the footprints might need bias correcting. For the inversion, t
 
 
 
+## See Also
+- [HOW_TO_CONFIG.md](./gates/HOW_TO_CONFIG.md)
+- [HOW_TO_DATA.md](./gates/data/HOW_TO_DATA.md)
+- [HOW_TO_TESTS.md](./tests/HOW_TO_TESTS.md)
 

@@ -1,0 +1,71 @@
+data_paths:
+  local:
+    base_data_path: "./data"
+    fp_datadir: "/fp_archive"
+    met_datadir: "/met_archive"
+    topog_datadir: "/ancillary_data/topog_file.nc"
+    landcover_datadir: "/ancillary_data/landcover_file.nc"
+    flux_datadir: "/fluxes_archive"
+  bp:
+    base_data_path:  "/group/chem/acrg"
+    fp_datadir: "/LPDM/fp_NAME_pre20210701/"
+    met_datadir: "/met_archive/UM/"
+    topog_datadir: "/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+    landcover_datadir: "/LPDM/topog_NAME/land_cover.nc"
+    flux_datadir: "/LPDM/emissions/"
+  oracle:
+    base_data_path: "./data"
+    fp_datadir: "/fp_archive"
+    met_datadir: "/met_archive/"
+    topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+    landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
+    flux_datadir: "/fluxes_archive"
+  isambard_ai:
+    base_data_path: "/projects/b5s/data"
+    fp_datadir: "/fp_archive"
+    met_datadir: "/met_archive"
+    topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
+    landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
+    flux_datadir: "/fluxes_archive"
+
+user_paths:
+  save_models_dir: "path/to/folder/where/models/should/be/saved"
+  parameter_files_dir: "path/to/folder/with/parameter_files"
+  
+domains:
+  BRAZIL:
+    domain_name: "SOUTHAMERICA"
+    footprint: "GOSAT-BRAZIL-column_SOUTHAMERICA_201801.nc"
+    flux_suffix: 
+      ch4: "_SWAMPS-v32-5_Saunois-Annual-Mean"
+
+  SOUTHAMERICA:
+    domain_name: "SOUTHAMERICA"
+    footprint: "GOSAT-SOUTHAMERICA-column_SOUTHAMERICA_201801.nc"
+    flux_suffix: 
+      ch4: "_SWAMPS-v32-5_Saunois-Annual-Mean"
+
+  SAHARA:
+    domain_name: "NORTHAFRICA"
+    footprint: "GOSAT-SAHARA-column_NORTHAFRICA_201611.nc"
+    flux_suffix: 
+      ch4: ""
+
+  CHINA:
+    domain_name: "CHINA"
+    footprint: "GOSAT-CHINA-column_EASTASIA_201605.nc"
+
+  INDIA:
+    domain_name: "INDIA"
+    footprint: "GOSAT-INDIA-SAM-column_SOUTHASIA_201503.nc"
+
+bad_files:
+- "GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201501.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201502.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201503.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201504.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201609.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201610.nc"
+- "GOSAT-SAHARA-column_NORTHAFRICA_201612.nc"
