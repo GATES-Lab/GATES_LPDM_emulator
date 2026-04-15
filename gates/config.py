@@ -45,12 +45,18 @@ def setup(platform="local"):
 
     default_config = _load_default_config()
 
-    # allow both isambard-ai and isambard_ai
-    platform_alias = {"isambard-ai":"isambard_ai"}
+    # allow flexibility in platform names
+    platform = platform.lower()
+    platform_alias = {
+        "isambard-ai": "isambard_ai",
+        "bluepebble": "bp",
+    }
     platform = platform_alias.get(platform, platform)
 
+    available_platforms = list(default_config["data_paths"].keys())
+
     if platform not in default_config["data_paths"]:
-        raise ValueError(f"Unknown platform '{platform}'. Valid options: {list(default_config['data_paths'].keys())}")
+        raise ValueError(f"Unknown platform '{platform}'. Valid options: {available_platforms}")
 
     data_paths = default_config["data_paths"].get(platform)
 
@@ -63,7 +69,7 @@ def setup(platform="local"):
         yaml.dump(configs_from_default, f, sort_keys=False)
     
     if platform == "local":
-        print(f"Config file created at {config_path}. Please check the paths and update as needed.")
+        print(f"Config file created at {config_path}. Please check the paths and update as needed.\nYou have currently selected the default paths option for running GATES locally, if you are using GATES on another platform make sure you have specified this with the --platform flag.\nCurrently valid arguments are: {available_platforms}")
     else:
         print(f"Config file created at {config_path} with default paths for platform '{platform}'. Please check the paths and update as needed.")
 
