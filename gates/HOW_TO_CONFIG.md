@@ -54,4 +54,4 @@ Initialising the config class Config loads `config.yml` and saves the paths. cal
 - **Invalid YAML**: If you've edited `config.yml`, ensure to use consistent indentation
 
 ## See Also
-- [README.md](./README.md)
+- [README.md](../README.md)
