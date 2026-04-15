@@ -1,8 +1,6 @@
 from pathlib import Path
 import numpy as np
-import json
 import yaml
-import warnings
 import argparse
 
 config_cache = None
@@ -84,6 +82,8 @@ class Config():
     - topog_datadir and landcover_datadir: Paths to the topography and landcover data files, constructed from the base_data_path and respective datadir values in the config file.
     - domains: Dictionary of domain definitions, loaded from the config file.
     - bad_files: List of known footprint files that have to be loaded using a workaround in load_fps, loaded from the config file.
+    - save_models_dir: Path to the directory where trained models should be saved, loaded from the config file.
+    - parameter_files_dir: Path to the directory where parameter files for training should be saved, loaded from the config file.
     """
     
     def __setattr__(self, name, value):
@@ -91,9 +91,9 @@ class Config():
             raise AttributeError("Config is read-only after initialization.")
         object.__setattr__(self, name, value)
         
-    def __init__(self):
-        if not (root_dir / "config.yml").exists():
-            raise FileNotFoundError(f"Config file not found at {root_dir / 'config.yml'}. Please run `python gates/config.py ` to create a new config file.")
+    def __init__(self, filename="config.yml"):
+        if not (root_dir / filename).exists():
+            raise FileNotFoundError(f"Config file not found at {root_dir / filename}. Please run `python gates/config.py ` to create a new config file.")
 
         # after the class is initialised it is "locked" to prevent modifications to a cached config
         object.__setattr__(self, "_locked", False)
@@ -104,6 +104,11 @@ class Config():
         # Read user config file
         with open(root_dir / "config.yml", "r") as f:
             config_user = yaml.safe_load(f)
+        
+        if not isinstance(config_user, dict):
+             raise ValueError(
+                 f"Config file at {root_dir / 'config.yml'} is empty or invalid YAML; expected a mapping at the top level."
+             )
 
         # set all the config values as attributes of the Config object
         for key, value in config_user.items():
