@@ -238,7 +238,7 @@ class LoadBaseSatelliteData:
         elif isinstance(cfg, gates.config.Config):
             self.cfg = cfg
         else:
-            raise ValueError("cfg should be either None or a dict. If None, the config will be loaded from the config file. If dict, the values in the dict will be used as config values. Check your input!")
+            raise ValueError("cfg should be either None or a gates.config.Config object. If None, the config will be loaded from the config file. If dict, the values in the dict will be used as config values. Check your input!")
 
         #### check domains
         self.region = region
@@ -1100,17 +1100,55 @@ def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
 
 
 
-def load_flux_data(domain, year=2016):
+def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None):
     """
     Load emissions for the given domain and year. Returns a lazy xarray DataArray (time, lat, lon) with all months in the file. Hardcoded paths should be replaced by a config file .
     """
-    if domain.upper() in ["BRAZIL", "SOUTHAMERICA"]:
-        path = f"/group/chem/acrg/LPDM/emissions/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}_SWAMPS-v32-5_Saunois-Annual-Mean.nc"
-    elif domain.upper() in ["SAHARA", "NORTHAFRICA"]:
-        path = f"/group/chem/acrg/LPDM/emissions/NORTHAFRICA/ch4_NORTHAFRICA_{year}.nc"
-    else:
-        raise ValueError("Domain not recognized")
+    if flux_path is not None:
+        # assert that there is a file at flux path
+        if not os.path.isfile(flux_path):
+            raise ValueError(f"flux_path {flux_path} does not exist or is not a file")
+        return xr.open_dataset(flux_path).flux
+    
+    if cfg is None:
+        cfg = get_config()
+    elif not isinstance(cfg, gates.config.Config):
+        raise ValueError("cfg should be either None or a gates.config.Config object. If None, the config will be loaded from the config file. If dict, the values in the dict will be used as config values. Check your input!")
+    
+    domains = cfg.domains
 
+    domain_match = str(domain).upper()
+    matched_entry = None
+
+    for region_name, region_cfg in domains.items():
+        cfg_domain_name = str(region_cfg.get("domain_name", "")).upper()
+        # Match against the configured domain_name
+        if cfg_domain_name == domain_match or str(region_name).upper() == domain_match:
+            matched_entry = region_cfg
+            break
+
+    if matched_entry is None:
+        available_domains = sorted( {str(region_cfg.get("domain_name", "")).upper()   for region_cfg in domains.values()   })
+        raise ValueError(
+            f"Domain '{domain}' not recognized in cfg.domains domain_name values. "
+            f"Available: {available_domains}")
+
+    resolved_domain_name = str(matched_entry["domain_name"]).upper()
+    flux_suffix_cfg = matched_entry.get("flux_suffix", matched_entry.get("flux_sufflix", ""))
+
+    if isinstance(flux_suffix_cfg, dict):
+        flux_suffix = str(flux_suffix_cfg.get(species, ""))
+    elif flux_suffix_cfg is None:
+        flux_suffix = ""
+    else:
+        flux_suffix = str(flux_suffix_cfg)
+
+    path = Path(cfg.flux_datadir) / resolved_domain_name / f"{species}_{resolved_domain_name}_{year}{flux_suffix}.nc"
+    # make the sorted list a list of strings
+    if not path.is_file():
+        raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_*.nc"))}")
+    else:
+        print(f"Loading flux data from {path}")
     return xr.open_dataset(path).flux
 
 
