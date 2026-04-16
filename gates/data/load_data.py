@@ -54,7 +54,7 @@ def load_fps(fp_datadir, verbose=False, chunk=False):
     note that the list of problematic files is currently updated manually!
 
     Args:
-        - fp_datadir (str): string pointing to the directory with footprints to load, 
+        - fp_datadir (str or Path): string or path pointing to the directory with footprints to load, 
         including special characters (eg "/path/to/footprints/*.nc", or "/path/to/footprints/*2020*.nc")
         Note that fp_datadir is passed directly to glob, so it needs to specify filetype (i.e. finish with .nc)
     
@@ -64,6 +64,7 @@ def load_fps(fp_datadir, verbose=False, chunk=False):
     Potential Improvements:
         - Add capability to ignore any files that couldn't be opened, and return only the successful files 
     """
+    fp_datadir = Path(fp_datadir)
     try:           
         if chunk:
             #time_chunk = 25
