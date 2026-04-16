@@ -368,11 +368,14 @@ class XarrayScaler:
         self.mean = None
         self.std = None
         self.scaler_type = "standard"
+        self.scaler_name = "XarrayScaler"
+        
 
     def fit(self, da: xr.DataArray):
         """Compute stats over all dims except the ones you want to preserve (e.g. variable)."""
         self.mean = da.mean()
         self.std = da.std()
+        self.params = {"mean": self.mean, "std": self.std}
         return self
     
     def transform(self, da: xr.DataArray) -> xr.DataArray:
@@ -391,12 +394,15 @@ class XarrayMinMaxScaler:
         self.max = manual_max
         self.feature_range = feature_range
         self.scaler_type = "minmax"
+        self.scaler_name = "XarrayMinMaxScaler"
 
     def fit(self, da: xr.DataArray):
         if self.min is None:
             self.min = da.min()
         if self.max is None:
             self.max = da.max()
+        
+        self.params = {"min": self.min, "max": self.max, "feature_range": self.feature_range}
         return self
 
     def transform(self, da: xr.DataArray) -> xr.DataArray:
@@ -558,12 +564,14 @@ class LogAndShiftFpScaler:
         self.scaler_name = "LogAndShiftFpScaler"
 
     def fit(self, fp):
+        self.params = {"minimum_oom": self.minimum_oom, "non_negative": self.non_negative}
         pass 
     
     def transform(self, fp):
         transformed_fp = np.log10(fp.where(fp > 0)) + self.minimum_oom  # take the log and add the minimum_oom), leave the zeros as is
         if self.non_negative:
             transformed_fp = transformed_fp.where(transformed_fp > 0, 0) # make all values that are zero or below zero (which can happen if the original fp was between 0 and 10**(-minimum_oom)) zero, to avoid having negative values in the transformed fp
+        
         return transformed_fp
     
     def inverse_transform(self, transformed_fp):
@@ -588,7 +596,7 @@ class LogAndShiftMeanFpScaler:
         
     def fit(self, fp):
         self.logged_mean = np.mean(np.log10(fp.values.flatten()[fp.values.flatten()>0]))
-        self.parameters = {"logged_mean": self.logged_mean, "minimum_oom": self.minimum_oom}
+        self.params = {"logged_mean": self.logged_mean, "minimum_oom": self.minimum_oom}
     
     def transform(self, fp):
         transformed_fp = np.log10(fp+10**(-self.minimum_oom))  # take the log and shift by the logged mean
@@ -600,7 +608,15 @@ class LogAndShiftMeanFpScaler:
         original_fp = 10**(transformed_fp - abs(self.logged_mean)) - 10**(-self.minimum_oom)
         original_fp = original_fp.where(original_fp >= 0, 0)
         return original_fp
-    
+
+
+def add_fp_nan_mask(ds, fill_nans=False, fp_var_name="fp", nan_mask_name="fp_nan_mask"):
+    if nan_mask_name not in ds:
+        ds[nan_mask_name] = np.isnan(ds[fp_var_name])
+    if fill_nans:
+        ds = ds.fillna(0)
+    return ds
+
 class FootprintDataset:
     """
     Wrapper around footprint data that applies a footprint scaler.
@@ -611,12 +627,13 @@ class FootprintDataset:
     accepts either the Dataset returned by ``transform`` or the transformed DataArray.
     """
 
-    def __init__(self, fp, scaler=None, scaler_params={}, add_nan_mask=False):
+    def __init__(self, fp, scaler=None, scaler_params={}, add_nan_mask=False, verbose=False):
         
         fp = self._check_fp_format(fp)
         
         self.fp = fp.copy()
         self.add_nan_mask = add_nan_mask
+        self.verbose = verbose
 
         if scaler is None:
             self.scaler = LogAndShiftMeanFpScaler(**scaler_params)
@@ -646,6 +663,13 @@ class FootprintDataset:
         
         ## check this
         transformed_fp = self.scaler.transform(fp)
+
+        if self.verbose: 
+            if hasattr(self.scaler, "scaler_name"):
+                print(f"Transformed footprints using {self.scaler.scaler_name} scaler.")
+            if hasattr(self.scaler, "params"):
+                print(f"Using scaler parameters: {self.scaler.params}")
+
         transformed_fp = transformed_fp.rename("transformed_fp")
         transformed_fp.attrs = {"transformer": self.scaler.__class__.__name__, "generated_on": str(datetime.datetime.now())}
         ds = xr.Dataset({
@@ -654,7 +678,9 @@ class FootprintDataset:
         })
 
         if self.add_nan_mask:
-            ds["fp_nan_mask"] = xr.where(fp.isnull(), 1, 0)
+            ds = add_fp_nan_mask(ds, fill_nans=True, fp_var_name="fp_original", nan_mask_name="fp_nan_mask")
+            if self.verbose: print("Added fp_nan_mask to the dataset, which indicates where the original fp had NaN values. The transformed_fp has been filled with zeros where the original fp had NaN values.")
+
 
         # add coord linked to time index with idx
         ds = ds.chunk({"time": 1})
@@ -693,7 +719,92 @@ class FootprintDataset:
         self.scaler = bundle["scaler"]
 
 
-def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42, dataloader_params=None):
+def make_inputs_batcher(inputs, batch_size=10, flatten=False):
+    """
+    Build an xbatcher BatchGenerator for the input meteorological fields.
+
+    Inputs:
+    - inputs: xarray DataArray of size (fp_time, lat, lon, variable_name)
+    - batch_size: int, batch size
+    - flatten: bool, whether to stack lat/lon into a single flat_lat_lon dimension
+
+    Returns:
+    - X_bgen: xbatcher BatchGenerator
+    """
+    if not isinstance(inputs, xr.DataArray):
+        raise ValueError("inputs must be an xarray DataArray with dims (fp_time, lat, lon, variable_name)")
+    if not all(dim in inputs.dims for dim in ["fp_time", "lat", "lon", "variable_name"]):
+        raise ValueError("inputs must have dimensions (fp_time, lat, lon, variable_name). Use the get_square_satellite_inputs function to extract inputs in the correct format.")
+    inputs = inputs.chunk(fp_time=batch_size)
+    inputs = inputs.transpose("fp_time", "lat", "lon", "variable_name")
+
+    if flatten:
+        inputs = inputs.stack(flat_lat_lon=["lat", "lon"])
+        inputs = inputs.transpose("fp_time", "flat_lat_lon", "variable_name")
+        input_dims = {"flat_lat_lon": len(inputs.flat_lat_lon), "variable_name": len(inputs.variable_name)}
+    else:
+        input_dims = {"lat": len(inputs.lat), "lon": len(inputs.lon), "variable_name": len(inputs.variable_name)}
+
+    X_bgen = xb.BatchGenerator(
+        inputs,
+        input_dims=input_dims,
+        batch_dims={'fp_time': batch_size},
+        preload_batch=False,
+    )
+    return X_bgen
+
+
+def make_fps_batcher(fps, batch_size=10, flatten=False):
+    """
+    Build an xbatcher BatchGenerator for the footprint labels.
+
+    Inputs:
+    - fps: xarray DataArray of size (time, lat, lon), or xarray Dataset containing
+      one or more footprint variables of size (time, lat, lon)
+    - batch_size: int, batch size
+    - flatten: bool, whether to stack lat/lon into a single flat_lat_lon dimension
+
+    Returns:
+    - y_bgen: xbatcher BatchGenerator
+    - fps_labels: list of footprint variable name(s)
+    """
+    # stack all variables in the fps along a new variable dimension, so that the dataloader returns all variables in the fps dataset. If fps is already an xarray DataArray, this will just add a variable dimension of size 1.
+    if isinstance(fps, xr.Dataset):
+        fps_labels = list(fps.data_vars)
+        fps = fps.to_stacked_array(new_dim="variable_name", sample_dims=["time", "lat", "lon"], name="stacked_fps")
+        fps = fps.transpose("time", "lat", "lon", "variable_name")
+        fps = fps.chunk(time=batch_size, variable_name=-1)
+
+        if flatten:
+            fps = fps.stack(flat_lat_lon=["lat", "lon"])
+            fps = fps.transpose("time", "flat_lat_lon", "variable_name")
+            input_dims = {"flat_lat_lon": len(fps.flat_lat_lon), "variable_name": len(fps.variable_name)}
+        else:
+            input_dims = {"lat": len(fps.lat), "lon": len(fps.lon), "variable_name": len(fps.variable_name)}
+
+    elif isinstance(fps, xr.DataArray):
+        fps_labels = [fps.name if fps.name is not None else "fp"]
+        fps = fps.chunk(time=batch_size)
+
+        if flatten:
+            fps = fps.stack(flat_lat_lon=["lat", "lon"])
+            input_dims = {"flat_lat_lon": len(fps.flat_lat_lon)}
+        else:
+            input_dims = {"lat": len(fps.lat), "lon": len(fps.lon)}
+    else:
+            raise ValueError(
+                f"Unsupported fps type: expected xr.Dataset or xr.DataArray, got {type(fps).__name__}"
+            )    
+    y_bgen = xb.BatchGenerator(
+        fps,
+        input_dims=input_dims,
+        batch_dims={'time': batch_size},
+        preload_batch=False,
+    )
+    return y_bgen, fps_labels
+
+
+def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42, dataloader_params=None, flatten=False):
     """
     Build a PyTorch dataloader from input and footprint datasets using xbatcher.
 
@@ -708,16 +819,19 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
 
     Inputs:
     - inputs: xarray DataArray of size (fp_time, lat, lon, variable_name) from get_square_satellite_inputs or similar function
-    - fps: xarray datarray, or xarray Dataset with variable "fp_transformed" of size (time, lat, lon) 
+    - fps: xarray datarray, or xarray Dataset with variable "fp_transformed" of size (time, lat, lon)
     - batch_size: int, batch size for the dataloader
     - randomize: bool, whether to shuffle the dataset along the time dimension. Recommended for training and not for testing
     - random_seed: int, seed for reproducibility of the shuffling when randomize is True
     - dataloader_params: dict, additional parameters to pass to the PyTorch DataLoader
+    - flatten: bool, whether to flatten the input tensors in the lat-lon dimension before passing them to the model
 
     Returns:
         - dataloader: PyTorch DataLoader that yields batches of ``(inputs, fps)``.
+            Inputs has shape (batch_size, lat, lon, variable_name) or (batch_size, flat_lat_lon, variable_name) if flatten is True.
+            If passing a dataarray as fps, Fps has shape (batch_size, lat, lon) or (batch_size, flat_lat_lon) if flatten is True. If passing a dataset as fps, fps has shape (batch_size, lat, lon, variable_name) or (batch_size, flat_lat_lon, variable_name) if flatten is True.
         - fps_labels: footprint variable labels, as a list
-    
+
     """
     # ensure that both have the right dimensions
     if inputs.sizes["fp_time"] != fps.sizes["time"]:
@@ -725,9 +839,11 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     if isinstance(fps, xr.Dataset):
         print(f"you passed a fps dataset with multiple variables: {list(fps.data_vars)}. All variables will be returned in the dataloader along a new dimension. ")
         ## but make sure this is what you want! If you only want to return the transformed fps variable, pass fps['fp_transformed'] instead of the whole dataset when calling this function.
+    if not isinstance(fps, (xr.DataArray, xr.Dataset)) or not isinstance(inputs, xr.DataArray):
+        print(f"inputs type: {type(inputs)}, fps type: {type(fps)}")
+        raise ValueError("fps must be an xarray DataArray or Dataset, and inputs must be an xarray DataArray")
 
     if randomize:
-        print("randomizing dataset!")
         # set the random seed for reproducibility
         np.random.seed(random_seed)
         # shuffle the data by permuting the fp_time dimension
@@ -735,42 +851,16 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
         inputs = inputs.sel(fp_time=permuted_time)
         fps = fps.sel(time=permuted_time)
 
-
-    inputs = inputs.chunk(fp_time=batch_size)
-    inputs = inputs.transpose("fp_time", "lat", "lon", "variable_name")
-    
-    X_bgen = xb.BatchGenerator(
-        inputs,
-        input_dims={"lat":len(inputs.lat), "lon":len(inputs.lon), "variable_name": len(inputs.variable_name)},
-        batch_dims={'fp_time': batch_size},
-        preload_batch=False,
-    )
-
-    # stack all variables in the fps along a new variable dimension, so that the dataloader returns all variables in the fps dataset. If fps is already an xarray DataArray, this will just add a variable dimension of size 1.
-    if isinstance(fps, xr.Dataset):
-        fps_labels = list(fps.data_vars)
-        fps = fps.to_stacked_array(new_dim="variable_name", sample_dims=["time", "lat", "lon"], name="stacked_fps")
-        fps = fps.transpose("time", "lat", "lon", "variable_name")
-        fps = fps.chunk(time=batch_size, variable_name=-1)
-
-        y_bgen = xb.BatchGenerator(
-            fps,
-            input_dims={"lat":len(fps.lat), "lon":len(fps.lon), "variable_name": len(fps.variable_name)},
-            batch_dims={'time': batch_size},
-            preload_batch=False,
-        )
-
-    else:
-        fps_labels = [fps.name if fps.name is not None else "fp"]
-        fps = fps.chunk(time=batch_size)
+    if len(inputs.lat) != len(fps.lat) or len(inputs.lon) != len(fps.lon):
+         raise ValueError(
+             "Latitude and longitude dimensions of inputs and fps must match: "
+             f"inputs(lat={len(inputs.lat)}, lon={len(inputs.lon)}), "
+             f"fps(lat={len(fps.lat)}, lon={len(fps.lon)})"
+         )
 
 
-        y_bgen = xb.BatchGenerator(
-            fps,
-            input_dims={"lat":len(fps.lat), "lon":len(fps.lon)},
-            batch_dims={'time': batch_size},
-            preload_batch=False,
-        )
+    X_bgen = make_inputs_batcher(inputs, batch_size=batch_size, flatten=flatten)
+    y_bgen, fps_labels = make_fps_batcher(fps, batch_size=batch_size, flatten=flatten)
 
     dataset = xbatcher.loaders.torch.MapDataset(X_bgen, y_bgen)
     if dataloader_params is None:
@@ -780,6 +870,7 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
             "persistent_workers": True,  # Keep workers alive between epochs for faster subsequent epochs
             #"multiprocessing_context": 'forkserver',  # Use "forkserver" to spawn subprocesses, ensuring stability in multiprocessing
         }
+    #print("dataloader params = ", dataloader_params)
     dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=None,  # Using batches defined by the dataset itself (via xbatcher)
