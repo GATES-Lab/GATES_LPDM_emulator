@@ -1,0 +1,39 @@
+name: gates_env
+channels:
+  - pyg
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pytorch=2.3.0
+  - pytorch-cuda=12.1
+  - torchvision=0.18.0
+  - torchaudio=2.3.0
+  - pyg=2.6.1
+  - numpy=1.26.4
+  - scipy=1.13.1
+  - pandas=2.2.2
+  - xarray=2025.1.2
+  - dask=2024.5.0
+  - xbatcher=0.4.0
+  - netcdf4=1.6.2
+  - matplotlib=3.8.4
+  - cartopy=0.25.0
+  - scikit-learn=1.5.1
+  - einops=0.8.0
+  - h3-py=3.7.7
+  - pyyaml=6.0.3
+  - tqdm=4.67.3
+  - ipykernel=7.2.0
+  - pip=26.0.1
+  - pytest=8.3.5
+  - pip:
+      - --find-links https://data.pyg.org/whl/torch-2.3.0+cu121.html
+      - torch-scatter==2.1.2
+
+## NOTE: 
+# if you are running this on a cluster where pytorch-cuda is not available, create the environment using the following:
+
+# CONDA_OVERRIDE_CUDA=12.1 conda env create -f env_gates_pytorch.yml

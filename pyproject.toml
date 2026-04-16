@@ -1,0 +1,29 @@
+[project]
+name = "gates"
+version = "0.2.0"
+description = "GATES: a GNN emulator for LPDM outputs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+keywords = ["LPDM", "GNN", "emulator", "atmospheric transport", "ML"]
+dependencies = [
+"numpy",
+"xarray",
+"torch"
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+"Homepage" = "https://github.com/GATES-Lab/GATES_LPDM_emulator/"
+"Bug Tracker" = "https://github.com/GATES-Lab/GATES_LPDM_emulator/issues"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gates*"]
+exclude = ["tests*"]
