@@ -22,12 +22,6 @@ SEED=${SEED:-34}
 FILE_PATH=./parameter_files/
 
 # --- W&B setup ---------------------------------------------------------------
-# If WANDB_API_KEY is not provided, default to offline to avoid crashes.
-if [[ -z "${WANDB_API_KEY}" ]]; then
-  export WANDB_MODE=offline
-  echo "[wandb] WANDB_API_KEY not set. Using offline mode."
-fi
-
 # Construct a descriptive W&B run name: jobName_jobID
 export WANDB_NAME="${SLURM_JOB_ID}_${SLURM_JOB_NAME}"
 export WANDB_NOTES=""

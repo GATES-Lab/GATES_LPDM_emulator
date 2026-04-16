@@ -710,7 +710,6 @@ def train_and_save_model(parameters, path):
     ## save checkpoint every 50 epochs
 
 if __name__ == "__main__":
-    os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<-- REPLACE THIS
     wandb.login()
 
     ## make this importable!

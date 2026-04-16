@@ -1,59 +1,82 @@
 {
-    "env":"bp",
-    "model_name" : "test_run",
-    "train_load_data" : {
-        "year":"2015",
-        "freq":100,
-        "region":"BRAZIL",
-        "size":50,
-        "verbose":true,
-        "met_args":{"met_levels":[3, 15,21]}
+    "env": "oracle",
+    "model_name": "test_run",
+    "train_load_data": {
+        "year": "20150[1,2]",
+        "freq": 100,
+        "region": "SOUTHAMERICA",
+        "size": 50,
+        "verbose": true,
+        "met_args": {
+            "met_levels": [
+                3,
+                15,
+                21
+            ]
+        }
     },
-
-    "test_load_data" : {
-        "year":"2016",
-        "freq":300
+    "test_load_data": {
+        "year": "20150[3,4]",
+        "freq": 300
     },
-
-    "variables" : {
-        "met_variables":{"x_wind":[3,15], "y_wind":[3,15], "upward_air_velocity":[3,15], "atmosphere_boundary_layer_thickness":[], "surface_air_pressure":[]},
-        "static_variables":["lat_coords", "lon_coords"],
-        "time_deltas":[6]
+    "variables": {
+        "met_variables": {
+            "x_wind": [
+                3,
+                15
+            ],
+            "y_wind": [
+                3,
+                15
+            ],
+            "upward_air_velocity": [
+                3,
+                15
+            ],
+            "atmosphere_boundary_layer_thickness": [],
+            "surface_air_pressure": []
+        },
+        "static_variables": [
+            "lat_coords",
+            "lon_coords"
+        ],
+        "time_deltas": [
+            6
+        ]
     },
-
-    "dataloader_parameters":{
-        "input_transforms":["clever_transform_3"],
-        "output_transforms":["logv4"]  
+    "dataloader_parameters": {
+        "input_transforms": [
+            "clever_transform_3"
+        ],
+        "output_transforms": [
+            "logv4"
+        ]
     },
-
-    "model_parameters":{
-        "num_blocks":4, 
-        "node_dim":64, 
-        "edge_dim":64, 
-        "hidden_layers_processor_node":2, 
-        "hidden_layers_processor_edge":2,  
-        "hidden_layers_decoder":1, 
-        "hidden_dim_processor_node":16, 
-        "hidden_dim_processor_edge":16, 
-        "hidden_dim_decoder":16, 
-        "resolution":4, 
-        "output_dim":1, 
-        "residuals":false, 
-        "attention":false
+    "model_parameters": {
+        "num_blocks": 4,
+        "node_dim": 64,
+        "edge_dim": 64,
+        "hidden_layers_processor_node": 2,
+        "hidden_layers_processor_edge": 2,
+        "hidden_layers_decoder": 1,
+        "hidden_dim_processor_node": 16,
+        "hidden_dim_processor_edge": 16,
+        "hidden_dim_decoder": 16,
+        "resolution": 4,
+        "output_dim": 1,
+        "residuals": false,
+        "attention": false
     },
-
-    "learning_rate":5e-5,
-    "use_wandb":false,
-
-    "epochs" : {
-        "training": 300,
+    "learning_rate": 5e-5,
+    "use_wandb": true,
+    "epochs": {
+        "training": 20,
         "visualize": 5,
         "patience": 3,
         "model_saving": 50
-    },    
-
-    "loss_functions" : {
+    },
+    "loss_functions": {
         "criterion": "MSE_weighted_by_truth_nans(multiply_by_add, w=1000)",
         "criterion_test": "torch.nn.MSELoss()"
-    }    
+    }
 }
