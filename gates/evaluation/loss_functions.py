@@ -90,18 +90,28 @@ def _get_normalize_fn(normalize_fn):
         "Pass None, 'batch', or normalize_by_mean(mean)."
     )
 
+def _resolve_dims(t, dims):
+    """Return dims resolved to a tuple of dimension indices.
+    """
+    if dims is not None and len(t.shape) < len(dims):
+        t = t.unsqueeze(-1).expand(-1,-1,dims[-1])
+    return t
 
-def _resolve_nan_mask(nan_mask_idx, nan_mask, fp_batch):
+def _resolve_nan_mask(nan_mask_idx, nan_mask, fp_batch, dims=None):
     """Return the nan_mask to use, resolving from fp_batch if needed.
 
     Priority: explicit nan_mask argument > nan_mask_label from fp_batch > None.
 
     nan_mask convention: 1 = invalid/NaN, 0 = valid.
     """
+    # make sure that nan_mask has the same number of dimensions as pred,
     if nan_mask is not None:
+        nan_mask = _resolve_dims(nan_mask, dims)
         return nan_mask
     if nan_mask_idx is not None and fp_batch is not None:
-        return fp_batch[..., nan_mask_idx].bool()
+        nan_mask = fp_batch[..., nan_mask_idx].bool()
+        nan_mask = _resolve_dims(nan_mask, dims)
+        return nan_mask       
     return None
 
 
@@ -168,7 +178,8 @@ class MSELoss(nn.Module):
             self.nan_mask_idx = None
 
     def forward(self, pred, target, fp_batch=None, nan_mask=None):
-        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch)
+        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
+
         se = _mask((pred - target) ** 2, nan_mask)
         return torch.nanmean(se)
 
@@ -223,8 +234,10 @@ class ThresholdedMSELoss(nn.Module):
         self.nan_mask_idx = _label_index(fp_labels, nan_mask_label, 'nan_mask_label') if nan_mask_label else None
     
     def forward(self, pred, target, fp_batch, nan_mask=None):
-        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch)
+        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         weight_field = fp_batch[..., self.weight_idx]
+
+        weight_field = _resolve_dims(weight_field, pred.shape)
 
         # add min and max in batch to threshold to make bins        
         added_loss = torch.zeros((), device=pred.device, dtype=pred.dtype)
@@ -286,8 +299,11 @@ class PixelWeightedMSELoss(nn.Module):
             if nan_mask_label else None
 
     def forward(self, pred, target, fp_batch, nan_mask=None):
-        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch)
+        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         weights = fp_batch[..., self.fp_weight_idx]
+
+        weights = _resolve_dims(weights, pred.shape)
+
         if self.transform_fn is not None:
             weights = self.transform_fn(weights, **self.transform_kwargs)
         loss = _mask((pred - target) ** 2 * weights, nan_mask)
@@ -350,15 +366,23 @@ class SumWeightedMSELoss(nn.Module):
             if nan_mask_label else None
 
     def forward(self, pred, target, fp_batch, nan_mask=None):
-        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch)
+        nan_mask_preds = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         spatial = _spatial_dims(pred)
+        print(nan_mask_preds.shape, pred.shape, target.shape)
         # take MSE per sample
-        se = _mask((pred - target) ** 2, nan_mask)
+        se = _mask((pred - target) ** 2, nan_mask_preds)
+        print(se.shape)
         per_sample_mse = torch.nanmean(se, dim=spatial)   # (B,)
+        print(per_sample_mse.shape)
 
         # sum the weight field over space
+        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch)
+        print(nan_mask.shape)
         weights = _mask(fp_batch[..., self.weight_idx], nan_mask)
+        print(nan_mask.shape, weights.shape, pred.shape)
+
         weights_sum = torch.nansum(weights, dim=_spatial_dims(weights))  # (B,)
+        print(weights_sum.shape)
 
         if self.normalize_fn is not None:
             weights_sum = self.normalize_fn(weights_sum)
@@ -438,23 +462,30 @@ class MSEPlusSumLoss(nn.Module):
             if nan_mask_label else None
 
     def forward(self, pred, target, fp_batch=None, nan_mask=None):
-        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch)
+        nan_mask_preds = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         spatial = _spatial_dims(pred)
 
         # calculate the sample-level MSE 
-        se     = _mask((pred - target) ** 2, nan_mask)
+        se     = _mask((pred - target) ** 2, nan_mask_preds)
         mse = torch.nanmean(se)
 
-        pred_m = _mask(pred, nan_mask)
-        tgt_m  = _mask(target, nan_mask)
+        pred_m = _mask(pred, nan_mask_preds)
+        tgt_m  = _mask(target, nan_mask_preds)
+
+        print(pred_m.shape, tgt_m.shape, fp_batch.shape )
 
         if self.weight_idx == "ones":
             w = torch.ones_like(pred_m)
         else:
-            w = _mask(fp_batch[..., self.weight_idx], nan_mask)
+            #w = _resolve_dims(fp_batch[..., self.weight_idx], pred.shape)
+            nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch)
+            w = fp_batch[..., self.weight_idx]
+            w = _mask(w, nan_mask)
 
         if self.transform_fn is not None:
             w = self.transform_fn(w, **self.transform_kwargs)
+        
+        w = _resolve_dims(w, pred.shape)
 
         integral_pred   = torch.nansum(pred_m * w, dim=spatial)    # (B,)
         integral_target = torch.nansum(tgt_m  * w, dim=spatial)    # (B,)
