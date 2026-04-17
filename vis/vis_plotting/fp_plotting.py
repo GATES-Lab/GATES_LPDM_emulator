@@ -84,4 +84,135 @@ def plot_seasonal_footprint_histogram(ds, metric="count", degree_bins=2, vmin_vm
 
     if return_fig:
         return fig
+
+
+def compute_footprint_availability_metrics(ds):
+    """Compute basic data-availability metrics for loaded footprint observations.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Footprint dataset containing a ``time`` coordinate and per-observation
+        release locations.
+
+    Returns
+    -------
+    dict
+        Dictionary containing total count, seasonal counts, monthly counts,
+        and date-range information.
+    """
+    if "time" not in ds:
+        raise ValueError("Dataset must contain a 'time' coordinate for availability metrics.")
+
+    times = pd.DatetimeIndex(ds.time.values)
+    total_footprints = int(len(times))
+
+    metrics = {
+        "total_footprints": total_footprints,
+        "date_start": str(times.min()) if total_footprints else None,
+        "date_end": str(times.max()) if total_footprints else None,
+        "n_unique_days": int(len(pd.unique(times.normalize()))) if total_footprints else 0,
+        "n_unique_months": int(len(pd.unique(times.to_period("M")))) if total_footprints else 0,
+        "seasonal_counts": {"JFM": 0, "AMJ": 0, "JAS": 0, "OND": 0},
+        "monthly_counts": {m: 0 for m in range(1, 13)},
+    }
+
+    if total_footprints == 0:
+        return metrics
+
+    months = pd.Series(times.month)
+    for m in range(1, 13):
+        metrics["monthly_counts"][m] = int((months == m).sum())
+
+    metrics["seasonal_counts"]["JFM"] = int(months.isin([1, 2, 3]).sum())
+    metrics["seasonal_counts"]["AMJ"] = int(months.isin([4, 5, 6]).sum())
+    metrics["seasonal_counts"]["JAS"] = int(months.isin([7, 8, 9]).sum())
+    metrics["seasonal_counts"]["OND"] = int(months.isin([10, 11, 12]).sum())
+
+    return metrics
+
+
+def write_footprint_availability_txt(metrics, out_path, region, domain, date):
+    """Write footprint availability metrics to a plain-text file.
+
+    Parameters
+    ----------
+    metrics : dict
+        Output dictionary from ``compute_footprint_availability_metrics``.
+    out_path : str or pathlib.Path
+        File path for the output text file.
+    region : str
+        Region name used for data loading.
+    domain : str
+        Domain name used for data loading.
+    date : str
+        Date selector used for data loading.
+    """
+    lines = [
+        "Footprint Availability Metrics",
+        "=" * 31,
+        f"Region: {region}",
+        f"Domain: {domain}",
+        f"Date selector: {date}",
+        "",
+        f"Total footprints loaded: {metrics['total_footprints']}",
+        f"Unique days represented: {metrics['n_unique_days']}",
+        f"Unique months represented: {metrics['n_unique_months']}",
+        f"Date range start: {metrics['date_start']}",
+        f"Date range end: {metrics['date_end']}",
+        "",
+        "Seasonal counts:",
+    ]
+
+    for season in ("JFM", "AMJ", "JAS", "OND"):
+        lines.append(f"  - {season}: {metrics['seasonal_counts'][season]}")
+
+    lines.extend(["", "Monthly counts (1-12):"])
+    for month in range(1, 13):
+        lines.append(f"  - {month:02d}: {metrics['monthly_counts'][month]}")
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def plot_footprint_availability(ds, return_fig=True):
+    """Visualize footprint availability as monthly and seasonal bar charts.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Footprint dataset containing a ``time`` coordinate.
+    return_fig : bool, optional
+        If ``True``, return the created figure object.
+
+    Returns
+    -------
+    matplotlib.figure.Figure, optional
+        Figure object containing monthly and seasonal availability plots.
+    """
+    metrics = compute_footprint_availability_metrics(ds)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), dpi=220, constrained_layout=True)
+
+    month_labels = [f"{m:02d}" for m in range(1, 13)]
+    month_values = [metrics["monthly_counts"][m] for m in range(1, 13)]
+    axes[0].bar(month_labels, month_values, color="tab:blue", alpha=0.85)
+    axes[0].set_title("Monthly footprint count")
+    axes[0].set_xlabel("Month")
+    axes[0].set_ylabel("N footprints")
+    axes[0].tick_params(axis="x", rotation=45)
+
+    season_labels = ["JFM", "AMJ", "JAS", "OND"]
+    season_values = [metrics["seasonal_counts"][s] for s in season_labels]
+    axes[1].bar(season_labels, season_values, color="tab:orange", alpha=0.85)
+    axes[1].set_title("Seasonal footprint count")
+    axes[1].set_xlabel("Season")
+    axes[1].set_ylabel("N footprints")
+
+    fig.suptitle(
+        f"Footprint availability (total={metrics['total_footprints']}, unique days={metrics['n_unique_days']})"
+    )
+
+    if return_fig:
+        return fig
     
