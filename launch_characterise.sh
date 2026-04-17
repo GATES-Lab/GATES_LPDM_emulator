@@ -1,11 +1,8 @@
 #!/bin/bash
-#SBATCH --partition=gpu
-#SBATCH --mem=30GB
-#SBATCH --gres=gpu:1
+#SBATCH --mem=150GB
 #SBATCH --job-name=characterise
 #SBATCH --time=01:00:00
 #SBATCH --account=SEMT030444
-#SBATCH --exclude=bp1-gpu030,bp1-gpu035
 #### this is specific to the University of Bristol's BluePebble
 #### make sure you modify to remove/add any relevant modules
 
