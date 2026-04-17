@@ -33,6 +33,10 @@ domains:
     domain_name: "SOUTHAMERICA"
     footprint: "GOSAT-BRAZIL-column_SOUTHAMERICA_201801.nc"
     
+  SOUTHAMERICA:
+    domain_name: "SOUTHAMERICA"
+    footprint: "GOSAT-BRAZIL-column_SOUTHAMERICA_201801.nc"
+    
   SAHARA:
     domain_name: "NORTHAFRICA"
     footprint: "GOSAT-SAHARA-column_NORTHAFRICA_201611.nc"

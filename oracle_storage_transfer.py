@@ -3,6 +3,7 @@ import shutil
 import glob
 import argparse
 from model.data.load_data import *
+import yaml
 
 
 '''
@@ -21,12 +22,6 @@ Typical usage:
 The script relies on a parameter JSON file to determine region and time periods for the data to be staged.
 '''
 
-DOMAINS = {
-    "BRAZIL": "SOUTHAMERICA",
-    "SOUTHAMERICA": "SOUTHAMERICA",
-    "SAHARA": "NORTHAFRICA",
-    "INDIA": "INDIA",
-}
 
 def parse_args():
     """
@@ -51,7 +46,7 @@ def parse_args():
             If True, print planned actions without copying or deleting files.
     """
     p = argparse.ArgumentParser(description="Stage data from cold storage to hot storage, and optionally clean up.")
-    p.add_argument("--param-file", default="./parameter_files/parameter_file_paper.json")
+    p.add_argument("--param-file", default="./parameter_files/parameter_template_train_small.json")
     p.add_argument("--source-dir", default="/mnt/data/")
     p.add_argument("--dest-dir", default="data/")
     p.add_argument("--which", choices=["train", "test", "both"], default="both")
@@ -104,10 +99,14 @@ def main():
         return
 
     # populate mode
+    #Load config and domains
     parameters = load_file("", args.param_file)
 
+    with open("config.yml", "r") as f:
+        config = yaml.safe_load(f)
+
     domain = parameters["train_load_data"]["region"]
-    region = DOMAINS[domain]
+    region = config["domains"][domain]["domain_name"]
 
     create_data_directories(region)
 
