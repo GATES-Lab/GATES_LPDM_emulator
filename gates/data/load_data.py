@@ -48,7 +48,7 @@ def _wrap_longitudes(ds):
     return ds.sortby(lon_name)
 
 
-def load_fps(fp_datadir, verbose=False, chunk=False):
+def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
     """
     Load footprints from datadir, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
     note that the list of problematic files is currently updated manually!
@@ -65,11 +65,12 @@ def load_fps(fp_datadir, verbose=False, chunk=False):
         - Add capability to ignore any files that couldn't be opened, and return only the successful files 
     """
     fp_datadir = Path(fp_datadir)
+    print("WITH CHUNKING")
     try:           
         if chunk:
             #time_chunk = 25
             #chunk_args = {"chunks" : {"time": time_chunk}, "parallel": True}
-            chunk_args = {"chunks":"auto", "parallel": True}
+            chunk_args = {"chunks":"auto", "parallel": parallel_loading}
         else:
             chunk_args = {}
         # check that path exists
@@ -118,12 +119,12 @@ def load_fps(fp_datadir, verbose=False, chunk=False):
             # Add clauses here to catch other known exceptions
             with dask.config.set(**{'array.slicing.split_large_chunks': True}):
                 # load non-problematic arrays all together
-                most = xr.open_mfdataset(sorted(without_bad_files))
+                most = xr.open_mfdataset(sorted(without_bad_files), **chunk_args)
                 bad_arrays = []
                 for badfile in bad_files:
                     if badfile in fp_files:
                         # load each bad file separately
-                        f_bad = xr.open_mfdataset(badfile)
+                        f_bad = xr.open_mfdataset(badfile, **chunk_args)
                         #f_bad = xr.open_mfdataset(badfile)
                         if "NORTHAFRICA_2015" in badfile:
                             try:
@@ -234,10 +235,12 @@ class LoadBaseSatelliteData:
 
 
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, cfg=None):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False):
         
         self.dataset_format = "base" 
         self.data_type="satellite"
+
+        self.parallel_loading = parallel_loading
 
         needs_cfg = (
              domain is None
@@ -331,7 +334,7 @@ class LoadBaseSatelliteData:
     
 
 
-    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True, met_time_chunk=24, parallel=False):
+    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True, parallel=False):
         """
         loads meteorology and selects the met levels and variables if required
 
@@ -346,7 +349,6 @@ class LoadBaseSatelliteData:
         # 1) load from file
         self.met_file = self._get_meteorology_file(
             met_datadir,
-            met_time_chunk=met_time_chunk,
             parallel=parallel,
         )
 
@@ -414,7 +416,7 @@ class LoadBaseSatelliteData:
 
         return topog_file, landcover_file
 
-    def _get_meteorology_file(self, met_datadir, lazy_load=True, met_time_chunk=24, parallel=False):
+    def _get_meteorology_file(self, met_datadir, lazy_load=True, parallel=False):
         """
         Load the meteorology from the directory, concatenating files along the time dimension. If met_datadir is None, uses default directory and file format. If met_datadir is passed, the date will be automatically added, so the files should have format example_name_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/example_name_"
         """
@@ -426,9 +428,10 @@ class LoadBaseSatelliteData:
             raise ValueError(
                 f"No meteorology files found in the specified directory:\n {met_datadir}"
             )
+        print("WITH CHUNKING - met")
+        #chunk_args = {"chunks": {"time": met_time_chunk}} if met_time_chunk is not None else {}
 
-        chunk_args = {"chunks": {"time": met_time_chunk}} if met_time_chunk is not None else {}
-
+        chunk_args = {"chunks": "auto"}
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             met_file = xr.open_mfdataset(
                 met_files,
@@ -545,7 +548,7 @@ class LoadBaseSatelliteData:
         #### load footprint (fp) data from file
         if self.verbose: print("Loading footprint data from " + str(fp_datadir) )
 
-        self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose)  
+        self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose, parallel_loading=self.parallel_loading)
 
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
 
@@ -849,10 +852,14 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False):
+
+        print(dask.__version__)
 
         self.dataset_format = "square" 
         self.data_type = "satellite"
+
+        self.parallel_loading = parallel_loading
         
         needs_cfg = (
              domain is None
@@ -886,8 +893,12 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         self.fill_outofdomain_with = fill_outofdomain_with
         self.delete_outofdomain = delete_outofdomain
 
-        self.year = year
-        self.date = self.year
+        self.date = year
+        if len(str(year)) >4:
+            self.year = int(str(year)[:4])
+        else:
+            self.year = int(year)
+
         self.verbose=verbose
 
 
@@ -910,7 +921,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         self.met_processed = False
 
         if load_everything:
-            self.met_file = self.load_meteorology(**self.met_args,lazy_load=lazy_load)
+            self.met_file = self.load_meteorology(**self.met_args,lazy_load=lazy_load, parallel=parallel_loading)
             self.met = self._process_meteorology(lazy_load=True)
             self.topog_file, self.landcover_file = self.load_topog(**self.topog_args)
             self.topog = self._process_topog_and_landcover()
@@ -968,6 +979,15 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.size, pad_mode="zeros")
         return self.topog
 
+    def get_flux(self, append_to_fp=True):
+        ems = load_flux_data(self.domain, year=self.year)
+        cropped_flux, nan_idxs = cut_flux_data(ems, self.fp_data_full, size=self.size)
+        self.fluxes = cropped_flux
+        self.remove_indeces(nan_idxs)
+        if append_to_fp:
+            self.fp_xr["flux"] = self.fluxes.flux
+        return self.fluxes
+
     def remove_indeces(self, nan_idxs):
         """
         removes any set of indeces passed as nan_idxs from all the objects in the dataset
@@ -979,6 +999,8 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met = self.met.drop_sel(time=nan_idxs)
         if hasattr(self, "topog"):
             self.topog = self.topog.drop_sel(time=nan_idxs)
+        if hasattr(self, "fluxes"):
+            self.fluxes = self.fluxes.drop_sel(time=nan_idxs)
 
         if self.verbose: print(f"Length after removing indeces: {self.fp_data_full.time.size}")
         # if the len is zero, raise an error
@@ -1291,10 +1313,12 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
                 coords={"time": fp.time}),
         })
     )
+    cropped
 
     # if ems has attributes, add them to cropped
     if hasattr(flux, "attrs"):
         cropped.attrs = flux.attrs
+    cropped = cropped.astype("float32", copy=False)
     return cropped, nan_idxs
 
 
@@ -1751,6 +1775,28 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
 
     return result
 
+
+def get_grid(fp_xr, reference_fp=0):
+    """
+    produce reference grid and node indeces.
+    
+    the grid is made from the lat/lon coordinates of the reference footprint, and the indices are centred around the reference footprint (i.e. the release point is at index (size//2, size//2)).
+
+    Inputs:
+    - fp_xr: a xarray Dataset containing the footprint data as fp_xr, with variables fp_lats and fp_lons, and coordinates time, lat, lon
+    - reference_fp: the index of the reference footprint to use for grid generation. Default is 0 (the first footprint).
+    """
+    if reference_fp is None:
+        reference_fp = 0
+        
+    single_meshgrid = np.meshgrid(fp_xr.lat_coords.isel(time=reference_fp), fp_xr.lon_coords.isel(time=reference_fp))  
+
+    latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(fp_xr.lon.size) for j in range(fp_xr.lat.size)]
+
+    idx_meshgrid = np.meshgrid(fp_xr.lat.values, fp_xr.lon.values)
+    idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(fp_xr.lon.size) for j in range(fp_xr.lat.size)]
+
+    return latlons, idx_latlons
 
 
 

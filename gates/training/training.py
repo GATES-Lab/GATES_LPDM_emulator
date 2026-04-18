@@ -1,0 +1,246 @@
+from pyexpat import model
+
+from model.forecast import GraphSatelliteForecaster
+
+
+import torch.optim as optim
+import time
+from datetime import datetime
+import json
+import argparse
+from pathlib import Path
+
+import random
+import yaml
+
+import sys
+
+import matplotlib.pyplot as plt
+
+import numpy as np
+import torch
+import os
+import pickle
+import random
+import xarray as xr
+
+from pathlib import Path
+
+import wandb
+
+
+from gates import LoadSquareSatelliteData, get_square_satellite_inputs
+import gates.data.datasets as gates_datasets
+import gates.evaluation.metrics as gates_metrics
+import gates.evaluation.loss_functions as gates_losses
+
+from .training_helperfuns import save_wandb_artifact, EarlyStopping
+
+from .training_dataclasses import ModelContext
+
+def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbose=True):
+    """
+    Loads training and test datasets for the GATES model using the LoadSquareSatelliteData class.
+
+    Args:
+        data_parameters (dict): A dictionary containing parameters for loading the data, expected to have 'train_load_data' and 'test_load_data' keys.
+        datapath_args (dict): A dictionary of additional arguments required for data loading, such as file paths.
+        verbose (bool): If True, prints verbose output during data loading.
+
+    Returns:
+        tuple: A tuple containing the training dataset and test dataset objects.
+    """
+    ## if the met args dict is in both data_parameters and datapath_args, merge
+    if "met_args" in data_parameters and "met_args" in datapath_args:
+        merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
+        data_parameters["met_args"] = merged_met_args
+        datapath_args.pop("met_args")
+
+    parallel_loading = data_parameters.get("parallel_loading", False)
+
+    data = LoadSquareSatelliteData(**data_parameters, **datapath_args, verbose=verbose, parallel_loading=parallel_loading)
+
+    inputs, data = get_square_satellite_inputs(data, **input_variables, verbose=verbose)
+
+    return data, inputs
+
+def _get_scaler(scaler_name, scaler_module=None):
+    """
+    Dynamically retrieves a scaler class from a specified module based on its name.
+
+    Args:
+        scaler_name (str): The name of the scaler class to retrieve (e.g., "StandardScaler").
+        scaler_module (module): The module from which to retrieve the scaler class. If None, defaults to gates_datasets 
+    """
+    if scaler_module is None:
+        scaler_module = gates_datasets
+
+    if hasattr(scaler_module, scaler_name):
+        return getattr(scaler_module, scaler_name)
+    else:
+        raise ValueError(f"Scaler '{scaler_name}' not found in module '{scaler_module.__name__}'")
+    
+
+def setup_input_dataset(parameters, train_inputs):
+    train_inputs = train_inputs.astype('float32')
+
+    input_scaler_params = parameters.get("input_scaler", {})
+    if input_scaler_params:
+        if "scaler" in input_scaler_params:
+            inputs_scaler = _get_scaler(input_scaler_params["scaler"], gates_datasets)
+            # remove scaler from input_scaler_params
+            input_scaler_params.pop("scaler")
+        else:
+            inputs_scaler = None
+
+    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params)
+    input_dataset.fit()
+
+    return input_dataset
+
+def setup_fp_dataset(parameters, train_fps):
+    fp_scaler_params = parameters.get("fp_scaler", {})
+    if fp_scaler_params:
+        if "scaler" in fp_scaler_params:
+            fp_scaler = _get_scaler(fp_scaler_params["scaler"], gates_datasets)
+            # remove scaler from fp_scaler_params
+            fp_scaler_params.pop("scaler")
+        else:
+            fp_scaler = None
+
+    ## TODO add add_nan_mask option to parameter file, maybe with an alias nan_to_zero
+
+    fp_dataset = gates_datasets.FootprintDataset(train_fps, scaler=fp_scaler, **fp_scaler_params, add_nan_mask=parameters["dataloader"].get("nans_to_zeros", True))
+    fp_dataset.fit()
+
+    return fp_dataset
+
+def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, test_fps):
+
+
+    input_dataset = setup_input_dataset(parameters, train_inputs)
+
+    train_scaled_inputs = input_dataset.transform(train_inputs)
+    test_scaled_inputs = input_dataset.transform(test_inputs)
+
+    fp_dataset = setup_fp_dataset(parameters, train_fps)
+    train_scaled_fp = fp_dataset.transform(train_fps)
+    test_scaled_fp = fp_dataset.transform(test_fps)
+
+    dataloader_info = parameters.get("dataloader", {})
+    batch_size = dataloader_info.get("batch_size", 5)
+    test_batch_size = dataloader_info.get("test_batch_size", 5)
+    dataloader_params = dataloader_info.get("dataloader_params", {})
+    if "prefetch_factor" in dataloader_params and dataloader_params["prefetch_factor"] == 0:
+        dataloader_params["prefetch_factor"] = None 
+
+    train_scaled_inputs, train_scaled_fp = gates_datasets.trim_to_batch_size(train_scaled_inputs, train_scaled_fp, batch_size)
+    test_scaled_inputs, test_scaled_fp = gates_datasets.trim_to_batch_size(test_scaled_inputs, test_scaled_fp, test_batch_size)
+
+    train_loader, fp_labels = gates_datasets.make_dataloader(train_scaled_inputs, train_scaled_fp, batch_size, randomize=True, dataloader_params=dataloader_params, flatten=True)   
+
+    #print("WAAAAAAAAAAAARNING")
+    #print("Loading inputs and footprints for test set into memory!!!")
+    #test_scaled_inputs.load()
+    #test_scaled_fp.load()
+
+    # num_workers=0 avoids a deadlock: the train_loader's persistent forkserver workers
+    # are still alive when validation starts, and xarray's internal threading locks
+    # cannot safely cross the forkserver process boundary on the first batch fetch.
+    
+    test_dataloader_params = {"num_workers": 0, "persistent_workers": False, "prefetch_factor": None}
+    print("SPECIAL TEST PARAMS", test_dataloader_params)
+    # test_dataloader_params = {**dataloader_params, "persistent_workers": False}
+    test_loader, fp_labels_test = gates_datasets.make_dataloader(test_scaled_inputs, test_scaled_fp, test_batch_size, randomize=False, dataloader_params=test_dataloader_params, flatten=True)
+
+    if fp_labels != fp_labels_test:
+        raise ValueError("The labels for the training and test datasets do not match - something went wrong. Please check the data loading and scaling steps to ensure consistency between train and test sets.")  
+
+    scalers = {"inputs_scaler": input_dataset.scaler, "fp_scaler": fp_dataset.scaler}
+
+    return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
+
+# test_outputs and 
+def calculate_losses(losses, test_outputs_xr):
+
+    losses = losses.copy()  # make a copy of the losses dict to avoid modifying the original
+
+    if "fp_nan_mask" in test_outputs_xr:
+        fp_mask = test_outputs_xr.fp_nan_mask
+    else:
+        fp_mask = None
+
+    eval_metrics = gates_metrics.compute_footprint_metrics(
+        test_outputs_xr.fp_original, test_outputs_xr.fp_pred, metrics=["iou", "mae", "mse","bias", "nmae"], nonzero=False, ignore_mask=fp_mask)
+
+    transformed_eval_metrics = gates_metrics.compute_footprint_metrics(
+        test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, metrics=["iou", "mae", "nmae"], ignore_mask=fp_mask, threshold=0, nonzero=False)
+
+    for metric_name, metric_value in transformed_eval_metrics.items():
+        if metric_name in losses["metrics_transformed"]:
+            losses["metrics_transformed"][metric_name].append(metric_value)   
+
+    for metric_name, metric_value in eval_metrics.items():
+        if metric_name in losses["metrics_original"]:
+            losses["metrics_original"][metric_name].append(metric_value)   
+
+    return losses, eval_metrics, transformed_eval_metrics
+"""
+def evaluate_outputs(test_outpts, true_fp, fp_mask):
+    eval_metrics = gates_metrics.compute_footprint_metrics(
+    true_fp, test_outpts,
+    spatial_shape=(H, W),
+    ignore_mask=nan_mask,
+    threshold=1e-4,   # forwarded to iou
+    nonzero=False,
+)"""
+
+def setup_GATES_model(parameters, training_ctx, paths_ctx):
+    lr = parameters["learning_rate"]
+
+    model = GraphSatelliteForecaster(training_ctx.grid, whole_world=False, feature_dim=training_ctx.n_variables, **parameters["model_parameters"])
+
+    loss_fn = eval(parameters["loss_functions"]["criterion"])
+
+    if parameters["dataloader"].get("nans_to_zeros", True):
+        # if nans are being converted to zeros in the dataloader, we need to pass the fp_nan_mask to the loss function so it can ignore those values in the loss calculation
+        nan_mask_label = "fp_nan_mask"
+    else:
+        nan_mask_label = None
+
+    criterion = loss_fn(fp_labels=training_ctx.fp_labels, nan_mask_label=nan_mask_label, **parameters["loss_functions"].get("criterion_params", {}))
+
+    loss_fn_test = eval(parameters["loss_functions"]["criterion_test"])
+    criterion_test = loss_fn_test(fp_labels=training_ctx.fp_labels, nan_mask_label=nan_mask_label, **parameters["loss_functions"].get("criterion_test_params", {}))
+
+    optimizer = optim.AdamW(model.parameters(), lr=lr)
+
+    early_stopping = EarlyStopping(patience=parameters["epochs"]["patience"], verbose=parameters["verbose"], path=paths_ctx.model_path/f"{paths_ctx.model_name}_best.pt", use_wandb=parameters["use_wandb"], model_name=paths_ctx.model_name)
+
+    if torch.cuda.is_available():
+        model.cuda()
+    
+    model_ctx = ModelContext(
+        model_name=parameters["model_name"],
+        use_wandb=parameters["use_wandb"],
+        device=training_ctx.device,
+        optimizer=optimizer,
+        criterion=criterion,
+        criterion_test=criterion_test,
+        lr=lr,
+        early_stopping=early_stopping,
+        epochs_num=parameters["epochs"]["training"],
+        epochs_visualise=parameters["epochs"]["visualize"],
+        epochs_save=parameters["epochs"]["model_save"],
+        epochs_patience=parameters["epochs"]["patience"]
+    )
+
+
+
+    return model, model_ctx
+    
+
+
+    
+
+

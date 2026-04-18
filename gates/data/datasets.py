@@ -364,21 +364,28 @@ class XarrayScaler:
     """
     A simple scaler for xarray DataArrays that applies the standard scaling transformation. 
     """
-    def __init__(self, kwargs={}):
+    def __init__(self, compute=True, kwargs={}):
         self.mean = None
         self.std = None
         self.scaler_type = "standard"
         self.scaler_name = "XarrayScaler"
+        self.compute = compute
         
 
     def fit(self, da: xr.DataArray):
         """Compute stats over all dims except the ones you want to preserve (e.g. variable)."""
+        #da = da.astype("float32", copy=False)
+
         self.mean = da.mean()
         self.std = da.std()
+        if self.compute:
+            self.mean = self.mean.compute().astype("float32").values
+            self.std = self.std.compute().astype("float32").values
         self.params = {"mean": self.mean, "std": self.std}
         return self
     
     def transform(self, da: xr.DataArray) -> xr.DataArray:
+        #da = da.astype("float32", copy=False)
         return (da - self.mean) / (self.std + 1e-8)
 
     def fit_transform(self, da: xr.DataArray) -> xr.DataArray:
@@ -389,23 +396,31 @@ class XarrayMinMaxScaler:
     A simple scaler for xarray DataArrays that applies minmax transformation. 
     Pass manual_min and manual_max to the constructor if you want to specify the min and max values to use for scaling, otherwise they will be computed from the data while fitting. Pass feature_range to specify the range to scale the data to, default is (0, 1).
     """
-    def __init__(self, feature_range=(0, 1), manual_min =None, manual_max=None):
+    def __init__(self, feature_range=(0, 1), manual_min =None, manual_max=None, compute=True):
         self.min = manual_min
         self.max = manual_max
         self.feature_range = feature_range
         self.scaler_type = "minmax"
         self.scaler_name = "XarrayMinMaxScaler"
+        self.compute = compute
 
     def fit(self, da: xr.DataArray):
+        #if self.min is None or self.max is None:
+            #da = da.astype("float32", copy=False)
         if self.min is None:
             self.min = da.min()
+            if self.compute:
+                self.min = self.min.compute().astype("float32").values
         if self.max is None:
             self.max = da.max()
-        
+            if self.compute:
+                self.max = self.max.compute().astype("float32").values
+
         self.params = {"min": self.min, "max": self.max, "feature_range": self.feature_range}
         return self
 
     def transform(self, da: xr.DataArray) -> xr.DataArray:
+        #da = da.astype("float32", copy=False)
         scale = self.feature_range[1] - self.feature_range[0]
         return self.feature_range[0] + scale * (da - self.min) / (self.max - self.min + 1e-8)
 
@@ -424,25 +439,26 @@ class InputsDataset:
      - DefaultInputsScaler, applies a standard scaler to each variable across all timesteps per level for meteorological variables, and a minmax scaler to land cover and topog variables
     - HandcraftedInputsScaler (only a placeholder for now), which applies different scalers to different variables based on some predefined logic
     """
-    def __init__(self, inputs: xr.DataArray, scaler=None, scaler_params={"fit_on_subsample": 1}, verbose=False):
+    def __init__(self, inputs: xr.DataArray, scaler=None, fit_on_subsample=1, scaler_params={}, verbose=False, compute=True):
         self.inputs = inputs
         self.scaler = scaler
         self.verbose = verbose
+        self.compute = compute
 
-        self.fit_on_subsample = scaler_params.pop("fit_on_subsample", 1)
+        self.fit_on_subsample = fit_on_subsample
 
         if scaler is None:
-            self.scaler = DefaultInputsScaler(**scaler_params, verbose=self.verbose)
+            self.scaler = DefaultInputsScaler(**scaler_params, verbose=self.verbose, compute=self.compute)
         else:
             self.scaler = scaler(**scaler_params)
 
     def fit(self):
-        if self.fit_on_subsample<0: 
-            raise ValueError(f"fit_on_subsample should be between 0 and 1, but got {self.fit_on_subsample}. Please provide a valid value for fit_on_subsample.")
+        if self.fit_on_subsample<0 or type(self.fit_on_subsample) not in [int, float] or self.fit_on_subsample>1: 
+            raise ValueError(f"fit_on_subsample should be a float between 0 and 1, but got {self.fit_on_subsample}. Please provide a valid value for fit_on_subsample.")
         elif self.fit_on_subsample<1:
             times = pd.DatetimeIndex(self.inputs.fp_time.values)
             n_samples = int(len(times)*self.fit_on_subsample)
-            if self.verbose: print(f"fit_on_subsample is {self.fit_on_subsample}, so only using {n_samples} samples to fit the scaler")
+            if self.verbose: print(f"fit_on_subsample is {self.fit_on_subsample}, so only using {n_samples} samples to fit the scaler. samples chosen randomly")
 
             selected_times = np.sort(np.random.choice(times, n_samples, replace=False))
 
@@ -454,7 +470,14 @@ class InputsDataset:
             self.scaler.fit(self.inputs)
         
     def transform(self, inputs):
-        return self.scaler.transform(inputs)
+        transformed = self.scaler.transform(inputs)
+        if transformed.dtype != "float32":
+            transformed = transformed.astype("float32", copy=False)
+        return transformed
+
+    def fit_transform(self):
+        self.fit()
+        return self.transform(self.inputs)
 
 
 class HandcraftedInputsScaler:
@@ -469,11 +492,12 @@ class DefaultInputsScaler:
     Variables listed in ``minmax_variables`` are scaled with min-max scaling. The fitted scalers are stored by full variable tuple, and `transform` returns a new DataArray
     named ``stacked_transformed_inputs`` with the same dims and ``variable_name`` labels as the inputs.
     """
-    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords"], verbose=False):
+    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords"], verbose=True, compute=True):
         self.minmax_variables = minmax_variables
         self.scalers = {}
         self.scaler_name = "DefaultInputsScaler"
         self.verbose = verbose
+        self.compute = compute
 
     def fit(self, inputs: xr.DataArray):
 
@@ -486,7 +510,7 @@ class DefaultInputsScaler:
             var_data = inputs.sel(variable=varname)
             if varname in self.minmax_variables:
                 if self.verbose: print(f"fitting minmax scaler for var {varname}")
-                scaler = XarrayMinMaxScaler()
+                scaler = XarrayMinMaxScaler(compute=self.compute)
                 scaler = scaler.fit(var_data)
 
                 # save the scaler
@@ -499,7 +523,8 @@ class DefaultInputsScaler:
                 levels = np.unique(var_data.levels.values)
 
                 for level in levels:
-                    scaler = XarrayScaler()
+                    if self.verbose: print(f"      at level {level}")
+                    scaler = XarrayScaler(compute=self.compute)
                     level_data = var_data.sel(levels=level)
                     scaler = scaler.fit(level_data)
 
@@ -545,6 +570,10 @@ class DefaultInputsScaler:
         transformed = transformed.transpose("fp_time", "lat", "lon", "variable_name")
         return transformed
 
+    def fit_transform(self, inputs: xr.DataArray) -> xr.DataArray:
+        self.fit(inputs)
+        return self.transform(inputs)
+
 ####
 ####
 ####
@@ -568,6 +597,7 @@ class LogAndShiftFpScaler:
         pass 
     
     def transform(self, fp):
+        #fp = fp.astype("float32", copy=False)
         transformed_fp = np.log10(fp.where(fp > 0)) + self.minimum_oom  # take the log and add the minimum_oom), leave the zeros as is
         if self.non_negative:
             transformed_fp = transformed_fp.where(transformed_fp > 0, 0) # make all values that are zero or below zero (which can happen if the original fp was between 0 and 10**(-minimum_oom)) zero, to avoid having negative values in the transformed fp
@@ -580,9 +610,18 @@ class LogAndShiftFpScaler:
         
         #original_fp = transformed_fp.where(transformed_fp <= self.minimum_oom, original_fp)
         # make all negative values zero
-        original_fp = original_fp.where(original_fp >= 0, 0)
-        original_fp = original_fp.where(original_fp > 10**-int(self.minimum_oom), 0)
+        if isinstance(original_fp, xr.DataArray):
+            original_fp = original_fp.where(original_fp >= 0, 0)
+            original_fp = original_fp.where(original_fp > 10**-int(self.minimum_oom), 0)
+        elif isinstance(original_fp, np.ndarray):
+            original_fp = np.where(original_fp >= 0, original_fp, 0)
+            original_fp = np.where(original_fp > 10**-int(self.minimum_oom), original_fp, 0)
         return original_fp
+
+    def get_params(self):
+        if not hasattr(self, "params"):
+            raise ValueError("Scaler has not been fitted yet, so parameters are not available. Please fit the scaler before trying to get parameters.")
+        return self.params
     
 class LogAndShiftMeanFpScaler:
     """
@@ -595,10 +634,11 @@ class LogAndShiftMeanFpScaler:
         self.scaler_name = "LogAndShiftMeanFpScaler"
         
     def fit(self, fp):
-        self.logged_mean = np.mean(np.log10(fp.values.flatten()[fp.values.flatten()>0]))
+        self.logged_mean = np.mean(np.log10(fp.values.flatten()[fp.values.flatten()>0])).astype("float32")
         self.params = {"logged_mean": self.logged_mean, "minimum_oom": self.minimum_oom}
     
     def transform(self, fp):
+        #fp = fp.astype("float32", copy=False)
         transformed_fp = np.log10(fp+10**(-self.minimum_oom))  # take the log and shift by the logged mean
         transformed_fp = transformed_fp + abs(self.logged_mean)
 
@@ -606,13 +646,21 @@ class LogAndShiftMeanFpScaler:
     
     def inverse_transform(self, transformed_fp):
         original_fp = 10**(transformed_fp - abs(self.logged_mean)) - 10**(-self.minimum_oom)
-        original_fp = original_fp.where(original_fp >= 0, 0)
+        if isinstance(original_fp, xr.DataArray):
+            original_fp = original_fp.where(original_fp >= 0, 0)
+        elif isinstance(original_fp, np.ndarray):
+            original_fp = np.where(original_fp >= 0, original_fp, 0)
         return original_fp
+    
+    def get_params(self):
+        if not hasattr(self, "params"):
+            raise ValueError("Scaler has not been fitted yet, so parameters are not available. Please fit the scaler before trying to get parameters.")
+        return self.params
 
 
 def add_fp_nan_mask(ds, fill_nans=False, fp_var_name="fp", nan_mask_name="fp_nan_mask"):
     if nan_mask_name not in ds:
-        ds[nan_mask_name] = np.isnan(ds[fp_var_name])
+        ds[nan_mask_name] = np.isnan(ds[fp_var_name]).astype("int32")
     if fill_nans:
         ds = ds.fillna(0)
     return ds
@@ -697,8 +745,8 @@ class FootprintDataset:
     def inverse_transform(self, transformed_fp):
         if isinstance(transformed_fp, xr.Dataset) and "fp_transformed" in transformed_fp.data_vars:
             transformed_fp = transformed_fp["fp_transformed"]
-        elif not isinstance(transformed_fp, xr.DataArray):
-            raise ValueError("transformed fp must be an xarray DataArray!")        
+        elif not isinstance(transformed_fp, xr.DataArray) and not isinstance(transformed_fp, np.ndarray):
+            raise ValueError("transformed fp must be an xarray DataArray or numpy array!")        
         return self.scaler.inverse_transform(transformed_fp)
 
     def save_scaler(self, path):
@@ -735,6 +783,9 @@ def make_inputs_batcher(inputs, batch_size=10, flatten=False):
         raise ValueError("inputs must be an xarray DataArray with dims (fp_time, lat, lon, variable_name)")
     if not all(dim in inputs.dims for dim in ["fp_time", "lat", "lon", "variable_name"]):
         raise ValueError("inputs must have dimensions (fp_time, lat, lon, variable_name). Use the get_square_satellite_inputs function to extract inputs in the correct format.")
+    if inputs.dtype != "float32":
+        inputs = inputs.astype("float32", copy=False)
+
     inputs = inputs.chunk(fp_time=batch_size)
     inputs = inputs.transpose("fp_time", "lat", "lon", "variable_name")
 
@@ -771,10 +822,14 @@ def make_fps_batcher(fps, batch_size=10, flatten=False):
     # stack all variables in the fps along a new variable dimension, so that the dataloader returns all variables in the fps dataset. If fps is already an xarray DataArray, this will just add a variable dimension of size 1.
     if isinstance(fps, xr.Dataset):
         fps_labels = list(fps.data_vars)
+        for var in fps:
+            if fps[var].dtype != "float32" and fps[var].dtype != "int32":
+                fps[var] = fps[var].astype("float32", copy=False)
+
         fps = fps.to_stacked_array(new_dim="variable_name", sample_dims=["time", "lat", "lon"], name="stacked_fps")
         fps = fps.transpose("time", "lat", "lon", "variable_name")
         fps = fps.chunk(time=batch_size, variable_name=-1)
-
+    
         if flatten:
             fps = fps.stack(flat_lat_lon=["lat", "lon"])
             fps = fps.transpose("time", "flat_lat_lon", "variable_name")
@@ -782,9 +837,12 @@ def make_fps_batcher(fps, batch_size=10, flatten=False):
         else:
             input_dims = {"lat": len(fps.lat), "lon": len(fps.lon), "variable_name": len(fps.variable_name)}
 
+
     elif isinstance(fps, xr.DataArray):
         fps_labels = [fps.name if fps.name is not None else "fp"]
         fps = fps.chunk(time=batch_size)
+        if fps.dtype != "float32":
+            fps = fps.astype("float32", copy=False)
 
         if flatten:
             fps = fps.stack(flat_lat_lon=["lat", "lon"])
@@ -802,6 +860,29 @@ def make_fps_batcher(fps, batch_size=10, flatten=False):
         preload_batch=False,
     )
     return y_bgen, fps_labels
+
+
+
+
+def trim_to_batch_size(inputs, fps, batch_size):
+    """
+    Trim the last N timepoints from inputs and fps so that the number of
+    timepoints is divisible by batch_size.
+
+    Inputs:
+    - inputs: xarray DataArray with a 'fp_time' dimension
+    - fps: xarray DataArray or Dataset with a 'time' dimension
+    - batch_size: int
+
+    Returns:
+    - inputs, fps trimmed along their respective time dimensions
+    """
+    n = inputs.sizes["fp_time"]
+    remainder = n % batch_size
+    if remainder != 0:
+        inputs = inputs.isel(fp_time=slice(None, n - remainder))
+        fps = fps.isel(time=slice(None, n - remainder))
+    return inputs, fps
 
 
 def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42, dataloader_params=None, flatten=False):
@@ -868,7 +949,7 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
             "prefetch_factor": 3,  # Prefetch up to 3 batches in advance to reduce data loading latency
             "num_workers": 4,  # Use 4 parallel worker processes to load data concurrently
             "persistent_workers": True,  # Keep workers alive between epochs for faster subsequent epochs
-            #"multiprocessing_context": 'forkserver',  # Use "forkserver" to spawn subprocesses, ensuring stability in multiprocessing
+            "multiprocessing_context": 'forkserver',  # Use "forkserver" to spawn subprocesses, ensuring stability in multiprocessing
         }
     #print("dataloader params = ", dataloader_params)
     dataloader = torch.utils.data.DataLoader(

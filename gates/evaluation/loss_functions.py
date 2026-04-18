@@ -368,21 +368,15 @@ class SumWeightedMSELoss(nn.Module):
     def forward(self, pred, target, fp_batch, nan_mask=None):
         nan_mask_preds = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         spatial = _spatial_dims(pred)
-        print(nan_mask_preds.shape, pred.shape, target.shape)
         # take MSE per sample
         se = _mask((pred - target) ** 2, nan_mask_preds)
-        print(se.shape)
         per_sample_mse = torch.nanmean(se, dim=spatial)   # (B,)
-        print(per_sample_mse.shape)
 
         # sum the weight field over space
         nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch)
-        print(nan_mask.shape)
         weights = _mask(fp_batch[..., self.weight_idx], nan_mask)
-        print(nan_mask.shape, weights.shape, pred.shape)
 
         weights_sum = torch.nansum(weights, dim=_spatial_dims(weights))  # (B,)
-        print(weights_sum.shape)
 
         if self.normalize_fn is not None:
             weights_sum = self.normalize_fn(weights_sum)
@@ -472,7 +466,6 @@ class MSEPlusSumLoss(nn.Module):
         pred_m = _mask(pred, nan_mask_preds)
         tgt_m  = _mask(target, nan_mask_preds)
 
-        print(pred_m.shape, tgt_m.shape, fp_batch.shape )
 
         if self.weight_idx == "ones":
             w = torch.ones_like(pred_m)
