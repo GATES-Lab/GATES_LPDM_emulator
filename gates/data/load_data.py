@@ -16,6 +16,7 @@ import os
 import copy
 import warnings
 from pathlib import Path
+import time
 
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
@@ -65,7 +66,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
         - Add capability to ignore any files that couldn't be opened, and return only the successful files 
     """
     fp_datadir = Path(fp_datadir)
-    print("WITH CHUNKING")
+    print("WITH CHUNKING -")
     try:           
         if chunk:
             #time_chunk = 25
@@ -82,6 +83,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
                 raise ValueError(f"No matching files found in the specified directory:\n {fp_datadir} \nCheck that the path is correct and that there are files matching the pattern.")
             # attempt to load dataset of multiple files thfe standard way
             fp_data_full = xr.open_mfdataset(sorted(glob.glob(str(fp_datadir))), combine='by_coords', **chunk_args)
+            print(f"After fp_data_full: {len(fp_data_full.__dask_graph__())} tasks")
 
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
@@ -349,7 +351,7 @@ class LoadBaseSatelliteData:
         # 1) load from file
         self.met_file = self._get_meteorology_file(
             met_datadir,
-            parallel=parallel,
+            parallel=parallel, met_levels=met_levels, met_variables=met_variables
         )
 
         # 2) check domain overlap
@@ -411,12 +413,18 @@ class LoadBaseSatelliteData:
 
         topog_file = self._interp_topog(topog_file, padding=self.padded_domain_coords)
 
+        print("loading both into memory")
+        topog_file.load()
+
         if landcover_file is not None:
             landcover_file = self._interp_landcover(landcover_file, padding=self.padded_domain_coords)
+            landcover_file.load()
+        
+        
 
         return topog_file, landcover_file
 
-    def _get_meteorology_file(self, met_datadir, lazy_load=True, parallel=False):
+    def _get_meteorology_file(self, met_datadir, lazy_load=True, parallel=False,met_levels=[], met_variables=[]):
         """
         Load the meteorology from the directory, concatenating files along the time dimension. If met_datadir is None, uses default directory and file format. If met_datadir is passed, the date will be automatically added, so the files should have format example_name_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/example_name_"
         """
@@ -431,34 +439,56 @@ class LoadBaseSatelliteData:
         print("WITH CHUNKING - met")
         #chunk_args = {"chunks": {"time": met_time_chunk}} if met_time_chunk is not None else {}
 
-        chunk_args = {"chunks": "auto"}
+        chunk_args = {"chunks": {"time": 8, "lat":-1, "lon":-1, "model_level_number":-1}}
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             met_file = xr.open_mfdataset(
                 met_files,
-                concat_dim="time",
-                combine="nested",
+                #concat_dim="time",
+                #combine="nested",
                 data_vars="minimal",
                 coords="minimal",
+                combine="by_coords",
                 parallel=parallel,
                 join="inner",
                 **chunk_args,
                 drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"],
                 compat="override",
-                preprocess=preprocess_met_data,
+                engine="h5netcdf",
+                #preprocess=preprocess_met_data,
             )
+            if len(met_levels)>0:
+                try:
+                    met_file = met_file.sel(model_level_number=met_levels)
+                except KeyError:
+                    print(f"there was an error selecting the met levels you passed. Check! \n You passed  {met_levels} but met loaded has {met_file.levels}. \n Loading all levels") 
+            print(f"After open_mfdataset: {len(met_file.__dask_graph__())} tasks")
+
+            #met_file = select_met_levels(met_file, levels=met_levels)
+            #met_file = select_met_variables(met_file, variables=met_variables)
+            if len(met_variables)>0:
+                met_file = met_file[met_variables]
+
+
+            print(f"After variable selection: {len(met_file.__dask_graph__())} tasks")
+
+            print("Met file chunk stats:")
+            print("Chunks:", met_file.chunks)
+            print("Dataset size (GB):", met_file.nbytes/1e9)
 
             if "model_level_number" in met_file.dims:
                 met_file = met_file.rename({"model_level_number": "levels"})
+            print(f"before rename_latlon: {len(met_file.__dask_graph__())} tasks")
             met_file = _rename_latlon(met_file)
-
+            print(f"After rename_latlon: {len(met_file.__dask_graph__())} tasks")
             for dim in ("lat", "lon", "time"):
                 if dim in met_file.dims and met_file.get_index(dim).has_duplicates:
                     met_file = met_file.drop_duplicates(dim=dim)
-
+            """
             first_var = list(met_file.data_vars)[0]
             if met_file[first_var].dtype != np.float32:
                 met_file = met_file.astype(np.float32)
-
+            print(f"After as32: {len(met_file.__dask_graph__())} tasks")
+            """
             self.met_file = met_file
         return self.met_file
 
@@ -556,11 +586,16 @@ class LoadBaseSatelliteData:
         # uses the sampling_mode and freq parameters
         self._subsample_frequency(**self.subsample_parameters)
 
-        self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": "auto"})
-
+        print(self.fp_data_full)
         if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
+        self.fp_data_full.fp.load()
+        print("loaded fp variable")
+        print(self.fp_data_full)
+        #self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": "auto"})
 
-        #self.fp_data_full.load()
+
+
+        
     
     def _subsample_frequency(self, freq=1, sampling_mode="regular",freq_offset=0):
         """
@@ -1396,7 +1431,7 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
 
     cropped_fp = cropped_fp[["fp", "lat_coords", "lon_coords", "release_lat", "release_lon"]]
     cropped_fp = cropped_fp.transpose("time", "lat", "lon")
-    cropped_fp = cropped_fp.chunk({"time": 100, "lat": -1, "lon": -1})
+    #cropped_fp = cropped_fp.chunk({"time": 100, "lat": -1, "lon": -1})
 
     fp_full = fp_full.sel(lat=slice(before_padding_coords[0][0], before_padding_coords[0][-1]),
                           lon=slice(before_padding_coords[1][0], before_padding_coords[1][-1]))
@@ -1429,10 +1464,34 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
             pd.DatetimeIndex(target_times), method="nearest", tolerance=tol)
         nan_idxs = pd.DatetimeIndex(target_times)[nearest == -1]
         nearest_safe = np.where(nearest != -1, nearest, 0)
-        nearest_timestamps = pd.DatetimeIndex(
-            np.where(nearest != -1, met.indexes["time"].values[nearest_safe], pd.NaT))
-        met = met.reindex(time=target_times, method="nearest", tolerance=tol, fill_value=np.nan)
-        met["met_timestamps"] = ("time", nearest_timestamps)
+        nearest_timestamps = met.indexes["time"].values[nearest_safe]
+        unique_met_times, inverse_idx = np.unique(
+            nearest_timestamps, return_inverse=True
+        )
+        t0 = time.perf_counter()
+        met_unique = met.sel(time=unique_met_times)
+        print(f"Graph build: {time.perf_counter()-t0:.2f}s")
+        # print weight and chunks of unique
+        print(f"met_unique has chunks {met_unique.chunks} and size {met_unique.nbytes / 1e6:.2f} MB")
+        print("computing met unique")
+        print("Tasks in graph:", len(met_unique.__dask_graph__()))
+        #met_unique = met_unique.chunk({"time": -1})  # merge into one chunk before compute
+        met_unique = met_unique.chunk({"time": -1, "lat": -1, "lon": -1, "levels": -1})
+        print(f"Tasks after rechunk: {len(met_unique.__dask_graph__())}")
+        print("computing met unique!")
+        #met_unique = met_unique.compute()
+        met = met_unique.isel(time=inverse_idx)
+        met = met.assign_coords(time=target_times)
+        nearest_timestamps_full = pd.DatetimeIndex(
+            np.where(nearest != -1, nearest_timestamps, pd.NaT)
+        )
+        print(met)
+        met["met_timestamps"] = ("time", nearest_timestamps_full)
+        #v1 reindex
+        #nearest_timestamps = pd.DatetimeIndex(
+        #    np.where(nearest != -1, met.indexes["time"].values[nearest_safe], pd.NaT))
+        #met = met.reindex(time=target_times, method="nearest", tolerance=tol, fill_value=np.nan)
+        #met["met_timestamps"] = ("time", nearest_timestamps)
     else:
         met = met.interp(time=target_times, method=interp_method)
 
@@ -1515,7 +1574,7 @@ def _pad_domain(data, fp, release_idxs, half, pad_mode, verbose=True):
 
 def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
                           relevant_variables=None, verbose=True, pad_mode="nans",
-                          load=False, add_wind_direction=True, save=False,
+                          load=True, add_wind_direction=True, save=False,
                           savepath=None, attrs_dict=None, interp_method="closest",
                           closest_tolerance="4h", return_nan_idxs=False):
     """
@@ -1616,8 +1675,11 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
         attrs_dict.update({"original_met_attrs": cropped_met.attrs})
         cropped_met.attrs = attrs_dict
 
+    #print("LOADING")
+    #load=True
     if load:
         if verbose:
+            print("!!!!!!!!")
             print("loading cropped met into memory")
         cropped_met.load()
 

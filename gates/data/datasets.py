@@ -16,7 +16,7 @@ import xbatcher.loaders.torch
 
 from .load_data_helper_funs import *
 
-from .load_data import cut_satellite_met
+from .load_data import cut_satellite_met, _get_release_idxs, _pad_domain
 
 def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None, verbose=False):
     """
@@ -364,23 +364,22 @@ class XarrayScaler:
     """
     A simple scaler for xarray DataArrays that applies the standard scaling transformation. 
     """
-    def __init__(self, compute=True, kwargs={}):
-        self.mean = None
-        self.std = None
+    def __init__(self, compute=True, kwargs={}, mean=None, std=None):
+        self.mean = mean
+        self.std = std
         self.scaler_type = "standard"
         self.scaler_name = "XarrayScaler"
         self.compute = compute
-        
 
     def fit(self, da: xr.DataArray):
         """Compute stats over all dims except the ones you want to preserve (e.g. variable)."""
-        #da = da.astype("float32", copy=False)
-
-        self.mean = da.mean()
-        self.std = da.std()
-        if self.compute:
-            self.mean = self.mean.compute().astype("float32").values
-            self.std = self.std.compute().astype("float32").values
+        if self.mean is None:
+            self.mean = da.mean()
+            self.std = da.std()
+            if self.compute:
+                print("Computing mean and std for scaler...")
+                self.mean = self.mean.compute().astype("float32").values
+                self.std = self.std.compute().astype("float32").values
         self.params = {"mean": self.mean, "std": self.std}
         return self
     
@@ -407,9 +406,11 @@ class XarrayMinMaxScaler:
     def fit(self, da: xr.DataArray):
         #if self.min is None or self.max is None:
             #da = da.astype("float32", copy=False)
+        
         if self.min is None:
             self.min = da.min()
             if self.compute:
+                print("Computing min for scaler...")
                 self.min = self.min.compute().astype("float32").values
         if self.max is None:
             self.max = da.max()
@@ -567,6 +568,87 @@ class DefaultInputsScaler:
 
         transformed = transformed.rename("stacked_transformed_inputs")
         transformed.attrs = {"transformer": "DefaultInputsScaler", "minmax_variables": self.minmax_variables, "generated_on": str(datetime.datetime.now())}
+        transformed = transformed.transpose("fp_time", "lat", "lon", "variable_name")
+        return transformed
+
+    def fit_transform(self, inputs: xr.DataArray) -> xr.DataArray:
+        self.fit(inputs)
+        return self.transform(inputs)
+
+class HandcraftedInputsScaler:
+    """
+    IN DEVELOPMENT - NOT READY FOR USE
+    Input scaler using pre-determined statistics rather than computing them from data.
+
+    ``stats`` is a path to a JSON file or a dict. Each variable entry has a ``"type"`` key
+    (``"standard"`` or ``"minmax"``) plus per-level statistics::
+
+        {
+            "x_wind":   {"type": "standard", "3": {"mean": 5.21, "std": 3.14}},
+            "topog":    {"type": "minmax",   "0": {"min": -50.0, "max": 3200.0}}
+        }
+
+    Level keys are strings (JSON requirement) and are cast to int internally.
+    ``fit()`` populates ``self.scalers`` without touching the data — all stats come from the dict.
+    """
+    def __init__(self, stats):
+        if isinstance(stats, str):
+            import json
+            with open(stats) as f:
+                stats = json.load(f)
+        self.stats = stats
+        self.compute = False # no computation needed since stats are provided, but keeping the attribute for compatibility with the XarrayScaler interface
+        self.scalers = {}
+        self.scaler_name = "HandcraftedInputsScaler"
+
+    def fit(self, inputs: xr.DataArray):
+        variable_names = inputs.variable_name.values
+        self.fitted_variable_names = list(variable_names)
+
+        for varname, var_stats in self.stats.items():
+            scaler_type = var_stats.get("type", "standard")
+            level_entries = {k: v for k, v in var_stats.items() if k != "type"}
+
+            if scaler_type == "minmax":
+                s = next(iter(level_entries.values()))
+                scaler = XarrayMinMaxScaler(manual_min=s["min"], manual_max=s["max"], compute=self.compute)
+                for vc in variable_names:
+                    if vc[0] == varname and len(vc) == 3:
+                        self.scalers[vc] = scaler
+            else:
+                for level_str, s in level_entries.items():
+                    level = int(level_str)
+                    scaler = XarrayScaler(compute=self.compute, mean=s["mean"], std=s["std"])
+                    for vc in variable_names:
+                        if vc[0] == varname and vc[1] == level and len(vc) == 3:
+                            self.scalers[vc] = scaler
+
+        return self
+
+    def transform(self, inputs: xr.DataArray) -> xr.DataArray:
+        variable_names = inputs.variable_name.values
+        for varname in variable_names:
+            if varname not in self.fitted_variable_names:
+                raise ValueError(f"Variable name {varname} in inputs is not in the variable names that were fitted on: {self.fitted_variable_names}.")
+
+        transformed_variables = []
+        for varname in np.unique(variable_names):
+            var_data = inputs.sel(variable_name=varname)
+            scaler = self.scalers.get(varname, None)
+            if scaler is None:
+                print(f"No scaler found for variable {varname}, skipping transformation.")
+                transformed_variables.append(var_data)
+                continue
+            transformed_data = scaler.transform(var_data)
+            transformed_data = transformed_data.rename(varname)
+            transformed_variables.append(transformed_data)
+
+        transformed = xr.concat(transformed_variables, dim="variable_name")
+        mindex = pd.MultiIndex.from_tuples(transformed.variable_name.values, names=["variable", "levels", "time_delta"])
+        mindex_coords = xr.Coordinates.from_pandas_multiindex(mindex, "variable_name")
+        transformed = transformed.assign_coords(mindex_coords)
+        transformed = transformed.rename("stacked_transformed_inputs")
+        transformed.attrs = {"transformer": "HandcraftedInputsScaler", "generated_on": str(datetime.datetime.now())}
         transformed = transformed.transpose("fp_time", "lat", "lon", "variable_name")
         return transformed
 
@@ -960,3 +1042,406 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
 
     
     return dataloader, fps_labels
+
+
+####
+####  v2: single-interpolation-pass functions
+####
+
+def _cut_satellite_met_multi_delta(
+    met_source,
+    fp,
+    metsize,
+    time_deltas,
+    pad_mode="nans",
+    add_wind_direction=True,
+    closest_tolerance="4h",
+    verbose=False,
+):
+    """
+    Like cut_satellite_met but handles all time_deltas in one call.
+
+    Computes the union of required met timestamps across all time_deltas,
+    loads that minimal set from dask once, computes the spatial crop structure
+    once, then builds per-delta cropped datasets entirely from in-memory arrays.
+
+    Parameters
+    ----------
+    met_source : xr.Dataset
+        Full-domain met, already filtered to desired levels and variables.
+    fp : xr.Dataset
+        Footprint dataset with ``release_lat``, ``release_lon``, ``time``.
+    metsize : int
+        Size of the square to crop (must be even).
+    time_deltas : list[int]
+        Hours to shift backwards (0 = no shift).
+    pad_mode : str
+        "nans" or "edge" — passed to ``_pad_domain``.
+    add_wind_direction : bool
+        Compute ``wind_angle`` and ``wind_speed`` from ``x_wind``/``y_wind``.
+    closest_tolerance : str
+        Max allowed distance for nearest-timestamp lookup, e.g. "4h".
+    verbose : bool
+
+    Returns
+    -------
+    results : dict[int, xr.Dataset]
+        {delta: cropped dataset} with dims ``(fp_time, lat, lon[, levels])``.
+        No ``time_delta`` dimension — caller handles the concat.
+        Contains ``lat_coords`` and ``lon_coords`` (same values across deltas).
+    nan_idxs_per_delta : dict[int, np.ndarray]
+        fp_time values that could not be interpolated for each delta.
+    """
+    if metsize % 2 != 0:
+        raise ValueError("metsize must be even")
+    half = metsize // 2
+
+    fp_times = fp.time.values
+    tol = pd.Timedelta(closest_tolerance)
+    met_time_index = met_source.indexes["time"]
+
+    # --- Phase 2: nearest-timestamp lookup for every delta ---
+    nearest_info = {}
+    all_unique_times = set()
+
+    for delta in time_deltas:
+        target_times = pd.DatetimeIndex(
+            fp_times if delta == 0
+            else pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{delta}h")
+        )
+        nearest = met_time_index.get_indexer(target_times, method="nearest", tolerance=tol)
+        nan_mask = nearest == -1
+        nearest_safe = np.where(~nan_mask, nearest, 0)
+        nearest_timestamps = met_time_index.values[nearest_safe]
+        # nan_idxs reported in fp_time space (undo the delta shift)
+        nan_idxs = (target_times[nan_mask] + pd.Timedelta(f"{delta}h")).to_numpy()
+
+        nearest_info[delta] = {
+            "nearest_timestamps": nearest_timestamps,
+            "nan_mask": nan_mask,
+            "nan_idxs": nan_idxs,
+        }
+        all_unique_times.update(nearest_timestamps[~nan_mask])
+
+    # --- Phase 2b: select the union of required timestamps ---
+    # Chunk with time=-1 (one big time chunk) so that the vectorized isel below
+    # creates O(n_vars) tasks per delta instead of O(n_fp_times × n_vars).
+    # Trade-off: computing any batch loads all unique timestamps at once.
+    all_unique_times_sorted = sorted(all_unique_times)
+    size_chunks = len(all_unique_times_sorted) // 10
+    size_chunks = max(size_chunks, 1)
+    # calculate how many chunks will be needed, if each has size size_chunks
+     
+    
+    if verbose:
+        print(f"Selecting {len(all_unique_times_sorted)} unique met timestamps "
+              f"(across {len(time_deltas)} time_delta(s)) as 10 dask chunks of size {size_chunks}...")
+
+    chunk_kw = {"time": size_chunks, "lat": -1, "lon": -1}
+    if "levels" in met_source.dims:
+        chunk_kw["levels"] = -1
+    met_loaded = met_source.sel(time=list(all_unique_times_sorted)).chunk(chunk_kw)
+
+    # --- Phase 3: spatial structure — computed once, shared across all deltas ---
+    release_idxs = _get_release_idxs(fp)
+    met_loaded, domain_lats, domain_lons, release_idxs = _pad_domain(
+        met_loaded, fp, release_idxs, half, pad_mode, verbose=verbose
+    )
+
+    lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(metsize)[None, :]
+    lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(metsize)[None, :]
+
+    # DataArrays for spatial indexing — time coord matches fp_times
+    lat_da = xr.DataArray(lat_indices, dims=["time", "lat"],
+                          coords={"time": fp_times})
+    lon_da = xr.DataArray(lon_indices, dims=["time", "lon"],
+                          coords={"time": fp_times})
+
+    # Lookup: unique met timestamp → integer position in met_loaded
+    time_to_pos = {t: i for i, t in enumerate(met_loaded.time.values)}
+
+    # --- Phase 4: per-delta crop from fully in-memory data ---
+    results = {}
+    nan_idxs_per_delta = {}
+
+    for delta, info in nearest_info.items():
+        nan_idxs_per_delta[delta] = info["nan_idxs"]
+
+        pos = np.array([
+            time_to_pos.get(t, 0)
+            for t in info["nearest_timestamps"]
+        ])
+
+        # Select and relabel time to fp_times
+        met_delta = met_loaded.isel(time=pos)
+        met_delta = met_delta.assign_coords(time=fp_times)
+
+        # Spatial crop (fully in-memory — instant)
+        cropped = met_delta.isel(lat=lat_da, lon=lon_da)
+        cropped = cropped.assign_coords(lat=np.arange(metsize), lon=np.arange(metsize))
+
+        # Attach actual geographic coordinates as variables
+        cropped = cropped.assign({
+            "lat_coords": xr.DataArray(
+                domain_lats[lat_indices], dims=["time", "lat"],
+                coords={"time": fp_times}),
+            "lon_coords": xr.DataArray(
+                domain_lons[lon_indices], dims=["time", "lon"],
+                coords={"time": fp_times}),
+        })
+
+        if add_wind_direction:
+            try:
+                if "x_wind" in cropped.data_vars and "y_wind" in cropped.data_vars:
+                    cropped["wind_angle"] = np.arctan2(-cropped.x_wind, -cropped.y_wind)
+                    cropped["wind_speed"] = np.sqrt(cropped.x_wind**2 + cropped.y_wind**2)
+            except Exception as e:
+                warnings.warn(f"Could not compute wind variables for delta={delta}: {e}")
+
+        # Swap time → fp_time (matching convention in rest of pipeline)
+        cropped = cropped.assign({"fp_time": ("time", fp_times)})
+        cropped = cropped.swap_dims({"time": "fp_time"}).drop_vars("time", errors="ignore")
+
+        results[delta] = cropped
+
+    return results, nan_idxs_per_delta
+
+
+def get_square_satellite_inputs_v2(
+    data,
+    met_variables,
+    met_levels,
+    time_deltas=None,
+    static_variables=None,
+    verbose=True,
+    add_timedelta_zero=True,
+    add_wind_direction=False,
+):
+    """
+    Optimised version of ``get_square_satellite_inputs``.
+
+    Differences from v1:
+    - ``met_variables`` is a plain list of variable names (not a dict).
+    - ``met_levels`` is a single list of levels shared by all atmospheric variables.
+      Surface variables (those without a "levels" dimension in the met dataset)
+      are detected automatically.
+    - Met levels and variables are filtered once; all time_deltas share a single
+      dask ``compute()`` call, eliminating repeated graph construction and I/O.
+    - Spatial structure (release indices, domain padding, crop index arrays) is
+      computed once and reused across all time_deltas.
+
+    Parameters
+    ----------
+    data : LoadSquareSatelliteData
+        Must have ``met_processed=True`` and ``dataset_format='square'``.
+    met_variables : list[str]
+        Variable names to extract, e.g. ``["x_wind", "y_wind", "atmosphere_boundary_layer_thickness"]``.
+        Include ``"wind_angle"`` / ``"wind_speed"`` to derive them from x/y wind.
+    met_levels : list[int]
+        Pressure/model levels to extract for all atmospheric variables.
+    time_deltas : list[int] or None
+        Hours to shift backwards, e.g. ``[6, 12]``. 0 is added automatically
+        unless ``add_timedelta_zero=False``.
+    static_variables : list[str] or None
+        Static fields to append, e.g. ``["topog", "lat_coords", "lon_coords"]``.
+    verbose : bool
+    add_timedelta_zero : bool
+
+    Returns
+    -------
+    concatenated_inputs : xr.DataArray
+        Shape ``(fp_time, lat, lon, variable_name)`` where ``variable_name`` is a
+        MultiIndex of ``(variable, level, time_delta)`` tuples.
+    data : LoadSquareSatelliteData
+        Updated object — fp_time indices with failed met interpolation are removed.
+    """
+    assert hasattr(data, "dataset_format"), "Not a SatelliteData object"
+    assert data.met_processed is True, "Load and cut the meteorology first"
+    assert data.dataset_format == "square", (
+        "get_square_satellite_inputs_v2 only supports dataset_format='square'"
+    )
+
+    if not isinstance(met_variables, list):
+        raise ValueError("met_variables should be a list of variable names")
+    if not isinstance(met_levels, list):
+        raise ValueError("met_levels should be a list of level integers")
+
+    if time_deltas is None:
+        time_deltas = []
+    else:
+        time_deltas = list(time_deltas)
+
+    if static_variables is None:
+        static_variables = []
+    else:
+        static_variables = list(static_variables)
+
+    if add_timedelta_zero and 0 not in time_deltas:
+        time_deltas.append(0)
+    time_deltas = sorted(set(time_deltas))
+
+    if verbose:
+        print("------------------------")
+        print("---EXTRACTING MET DATA (v2)---")
+        print(f"Time deltas: {time_deltas}")
+        print(f"Met variables: {met_variables}")
+        print(f"Met levels: {met_levels}")
+
+    # --- Filter source met once ---
+    met_source = select_met_levels(data.met_file, levels=met_levels.copy())
+    met_source = select_met_variables(met_source, variables=met_variables.copy())
+    first_var = list(met_source.data_vars)[0]
+    if met_source[first_var].dtype != "float32":
+        if verbose:
+            print(f"Casting met to float32 from {met_source[first_var].dtype}")
+        met_source = met_source.astype("float32")
+
+    # --- Single multi-delta crop (one dask compute call) ---
+    all_met_files, nan_idxs_per_delta = _cut_satellite_met_multi_delta(
+        met_source,
+        data.fp_data_full,
+        metsize=data.metsize,
+        time_deltas=time_deltas,
+        pad_mode=data.fill_outofdomain_with,
+        add_wind_direction=add_wind_direction,
+        verbose=verbose,
+    )
+
+    # Collect all nan indices across deltas
+    all_nan_idxs = (
+        np.unique(np.concatenate([np.atleast_1d(v) for v in nan_idxs_per_delta.values()]))
+        if any(len(v) > 0 for v in nan_idxs_per_delta.values())
+        else np.array([], dtype="datetime64[ns]")
+    )
+
+    # Extract lat/lon coords before adding time_delta dim (same across all deltas)
+    first_delta = time_deltas[0]
+    lat_coords_da = all_met_files[first_delta]["lat_coords"]
+    lon_coords_da = all_met_files[first_delta]["lon_coords"]
+
+    # Build full_met: concat per-delta datasets along a new time_delta dimension
+    met_datasets_for_concat = []
+    for delta in time_deltas:
+        ds = all_met_files[delta].drop_vars(["lat_coords", "lon_coords"], errors="ignore")
+        ds = ds.expand_dims(dim={"time_delta": [delta]})
+        met_datasets_for_concat.append(ds)
+
+    if len(met_datasets_for_concat) == 1:
+        full_met = met_datasets_for_concat[0]
+    else:
+        full_met = xr.concat(met_datasets_for_concat, dim="time_delta")
+    # Re-attach geographic coords (no time_delta dim — used for static_ds below)
+    full_met["lat_coords"] = lat_coords_da
+    full_met["lon_coords"] = lon_coords_da
+
+    for v in full_met.data_vars:
+        full_met[v] = full_met[v].astype("float32", copy=False)
+
+    full_met = full_met.transpose("fp_time", "lat", "lon", ..., "time_delta")
+
+    # Detect which variables have levels vs surface (after wind vars have been added)
+    _skip = {"lat_coords", "lon_coords"}
+    levels_variables_needed = [
+        v for v in full_met.data_vars
+        if v not in _skip and "levels" in full_met[v].dims
+    ]
+    surface_variables_needed = [
+        v for v in met_variables
+        if v in full_met.data_vars and v not in _skip
+        and "levels" not in full_met[v].dims
+    ]   
+    # also pick up wind_speed/wind_angle if they're surface (no levels)
+
+    for v in ("wind_speed", "wind_angle"):
+        if (v in full_met.data_vars and v not in levels_variables_needed
+                and v not in surface_variables_needed):
+            surface_variables_needed.append(v)
+
+    if len(all_nan_idxs) > 0:
+        full_met = full_met.drop_sel(fp_time=all_nan_idxs)
+        warnings.warn(
+            f"removing {len(all_nan_idxs)} indices due to problems with "
+            "interpolating meteorology for the passed time_deltas"
+        )
+        data.remove_indeces(all_nan_idxs)
+
+    input_arrays = []
+
+    if len(levels_variables_needed) > 0:
+        stacked_levels_met = _stack_and_label_variables(
+            full_met,
+            levels_variables_needed,
+            "met_with_levels",
+            met_variables_dict={v: met_levels for v in levels_variables_needed},
+            verbose=verbose,
+        )
+        if stacked_levels_met is not None:
+            input_arrays.append(stacked_levels_met)
+
+    if len(surface_variables_needed) > 0:
+        stacked_surface_met = _stack_and_label_variables(
+            full_met, surface_variables_needed, "surface_met", verbose=verbose,
+        )
+        if stacked_surface_met is not None:
+            input_arrays.append(stacked_surface_met)
+
+    if len(static_variables) > 0:
+        static_variables_functions = get_static_variables_functions()
+        (static_ds,) = xr.broadcast(full_met[["lat_coords", "lon_coords"]])
+
+        for var in static_variables:
+            if var in ["topog", "landcover", "landcover_disaggregated"]:
+                assert hasattr(data, "topog"), (
+                    "Load topog on the data object before extracting this variable!"
+                )
+                static_ds = static_variables_functions[var](data.topog, static_ds)
+            elif "domain" in var:
+                if var in static_variables_functions:
+                    static_ds = static_variables_functions[var](data.fp_data_full, static_ds)
+                else:
+                    warnings.warn(f"variable {var} was not found and will be skipped")
+            elif var in static_variables_functions and var not in ["lat_coords", "lon_coords"]:
+                static_ds = static_variables_functions[var](static_ds)
+            elif var not in ["lat_coords", "lon_coords"]:
+                warnings.warn(f"variable {var} was not found and will be skipped")
+
+        if "lat_coords" not in static_variables:
+            static_ds = static_ds.drop_vars(["lat_coords"], errors="ignore")
+        if "lon_coords" not in static_variables:
+            static_ds = static_ds.drop_vars(["lon_coords"], errors="ignore")
+
+        stacked_static = _stack_and_label_variables(
+            static_ds, list(static_ds.data_vars), "static", verbose=verbose,
+        )
+        if stacked_static is not None:
+            input_arrays.append(stacked_static)
+
+    if len(input_arrays) == 0:
+        raise ValueError(
+            "All requested variables/levels were unavailable after filtering. "
+            "Please check met_variables/met_levels/static_variables against dataset contents."
+        )
+
+    concatenated_inputs = xr.concat(input_arrays, dim="variable_name")
+    mindex = pd.MultiIndex.from_tuples(
+        concatenated_inputs.variable_name.values,
+        names=["variable", "levels", "time_delta"],
+    )
+    concatenated_inputs = concatenated_inputs.assign_coords(
+        xr.Coordinates.from_pandas_multiindex(mindex, "variable_name")
+    )
+
+    concatenated_inputs.attrs = {
+        "source": concatenated_inputs.attrs.get("source", "unknown"),
+        "time_deltas": time_deltas,
+        "generated on": str(datetime.datetime.now()),
+    }
+    concatenated_inputs = concatenated_inputs.astype("float32", copy=False)
+
+    if concatenated_inputs.sizes.get("variable_name", 0) == 0:
+        raise ValueError(
+            "All requested variables/levels were unavailable after filtering. "
+            "Please check met_variables/met_levels/static_variables against dataset contents."
+        )
+
+    return concatenated_inputs, data

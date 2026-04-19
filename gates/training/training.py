@@ -31,6 +31,7 @@ import wandb
 
 from gates import LoadSquareSatelliteData, get_square_satellite_inputs
 import gates.data.datasets as gates_datasets
+from gates.data.datasets import get_square_satellite_inputs_v2
 import gates.evaluation.metrics as gates_metrics
 import gates.evaluation.loss_functions as gates_losses
 
@@ -60,7 +61,7 @@ def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbos
 
     data = LoadSquareSatelliteData(**data_parameters, **datapath_args, verbose=verbose, parallel_loading=parallel_loading)
 
-    inputs, data = get_square_satellite_inputs(data, **input_variables, verbose=verbose)
+    inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
 
     return data, inputs
 
@@ -240,7 +241,28 @@ def setup_GATES_model(parameters, training_ctx, paths_ctx):
     return model, model_ctx
     
 
+import os
+from dask.distributed import Client, LocalCluster
 
+def make_cluster():
+    n_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
+    
+    if n_cpus < 4:
+        print("Fewer than 4 CPUs — skipping Dask cluster, using synchronous scheduler")
+        return None, None
+
+    
+    n_workers = max(1, n_cpus - 2)
+    print(f"{n_cpus} CPUs detected — setting up Dask cluster with {n_workers} workers")
+    cluster = LocalCluster(
+        n_workers=n_workers,
+        threads_per_worker=1,
+        memory_limit="auto",
+        local_directory="/tmp",
+    )
+    client = Client(cluster)
+    print(f"Dask cluster: {n_workers} workers | Dashboard: {client.dashboard_link}")
+    return client, cluster
     
 
 

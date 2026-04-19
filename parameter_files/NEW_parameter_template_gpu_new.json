@@ -1,0 +1,91 @@
+{
+    "model_name" : "SAHARA_new_test_run_gpu_year20_parallel_load",
+    "verbose": true,
+    "parallel_loading": true,
+    "load_into_memory": true,
+    "train_load_data" : {
+        "year":"2015",
+        "freq":3,
+        "region":"SAHARA",
+        "size":20,
+        "met_args":{"met_levels":[3, 15,21], 
+    "met_variables":["x_wind", "y_wind", "upward_air_velocity", "atmosphere_boundary_layer_thickness", "surface_air_pressure"]}
+    },
+
+    "test_load_data" : {
+        "year":"2016",
+        "freq":100
+    },
+
+    "variables" : {
+        "met_variables":["x_wind", "y_wind", "upward_air_velocity", "atmosphere_boundary_layer_thickness", "surface_air_pressure"],
+        "met_levels":[3,15],
+        "static_variables":["lat_coords", "lon_coords", "topog"],
+        "time_deltas":[6]
+    },
+
+    "input_scaler" : {
+        "scaler":"DefaultInputsScaler",
+        "fit_on_subsample":0.25,
+        "scaler_params":{}
+    },
+
+    "fp_scaler": {
+        "scaler":"LogAndShiftMeanFpScaler",
+        "scaler_params":{}
+    },
+
+
+    "dataloader":{
+        "batch_size": 5,
+        "test_batch_size": 5,
+        "nans_to_zeros": true,
+        "dataloader_params": {
+                "prefetch_factor": 3,
+                "num_workers": 2,
+                "persistent_workers": true,
+                "multiprocessing_context": "forkserver"},
+
+
+        "_ignore_dataloader_params": {
+            "prefetch_factor": 0,
+            "num_workers": 1}
+    },
+
+    "model_parameters":{
+        "num_blocks":4, 
+        "node_dim":64, 
+        "edge_dim":64, 
+        "hidden_layers_processor_node":2, 
+        "hidden_layers_processor_edge":2,  
+        "hidden_layers_decoder":1, 
+        "hidden_dim_processor_node":16, 
+        "hidden_dim_processor_edge":16, 
+        "hidden_dim_decoder":16, 
+        "resolution":4, 
+        "output_dim":1, 
+        "residuals":false, 
+        "attention":false
+    },
+
+    "learning_rate":5e-5,
+    "use_wandb":true,
+    "wandb": {
+        "project": "gates-tests",
+        "entity": "gates-lab"
+    },
+
+    "epochs" : {
+        "training": 60,
+        "visualize": 5,
+        "patience": 3,
+        "model_save": 50
+    },    
+
+    "loss_functions" : {
+        "criterion": "gates_losses.MSELoss",
+        "criterion_params": {},
+        "criterion_test": "gates_losses.MSELoss",
+        "criterion_test_params": {}
+    }    
+}

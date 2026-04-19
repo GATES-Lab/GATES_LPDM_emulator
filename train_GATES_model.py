@@ -5,12 +5,10 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 import torch
-import os
-import pickle
+
 import random
 import copy
 import wandb
-import dask
 
 
 sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
@@ -21,30 +19,26 @@ from model.layers.processor import *
 from model.layers.graph_net_block import *
 #from model.data.dataloader_graphnet import *
 #from model.data.load_data import *
-from model.forecast import GraphSatelliteForecaster
 from model.loss_functions import *
 
 
-import torch.optim as optim
 import time
 from datetime import datetime
-import json
+
 import argparse
 
 import random
-import yaml
 from pathlib import Path
 
 import gates.training.training as gates_training
-import gates.data.datasets as gates_datasets
 import gates
 from gates.data.load_data import get_grid
 from gates.training.training_dataclasses import PathContext, TrainingContext
 
-from gates.training.training_helperfuns import EarlyStopping, load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility
+from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility
 
 
-def train_one_epoch(model, loader, model_ctx, epoch):
+def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
     """
     Runs a single training epoch, iterating over all batches, computing the loss, and updating model weights.
     A separate display loss (criterion_test) is tracked for monitoring without affecting gradients.
@@ -53,6 +47,7 @@ def train_one_epoch(model, loader, model_ctx, epoch):
         model (torch.nn.Module): The model to train.
         loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, labels, true_fp).
         model_ctx (ModelContext): Context object containing model configuration and training parameters.
+        paths_ctx (PathContext): Context object containing file paths for logging and saving.
         epoch (int): The current epoch number, used for progress logging.
 
         device (torch.device): The device (CPU or GPU) on which to run computation.
@@ -64,9 +59,11 @@ def train_one_epoch(model, loader, model_ctx, epoch):
     model.train()
     running_loss = 0.0
     start_time = time.time()
-    
+    write_to_file(f"Starting epoch {epoch}", paths_ctx.updates_path)
     for i, batch in enumerate(loader):
+        write_to_file(f"Loaded batch {i} in epoch {epoch}", paths_ctx.updates_path)
         features_batch, fp_batch = batch[0].to(model_ctx.device), batch[1].to(model_ctx.device)
+        write_to_file(f"Sent to device", paths_ctx.updates_path)
 
         if len(fp_batch.shape) == 3:
             true_values = fp_batch[:,:,0].unsqueeze(-1)
@@ -75,9 +72,13 @@ def train_one_epoch(model, loader, model_ctx, epoch):
         
         model_ctx.optimizer.zero_grad()
 
+        write_to_file(f"Inferring", paths_ctx.updates_path)
         outputs = model(features_batch)
+        write_to_file(f"Calculating loss", paths_ctx.updates_path)
         loss = model_ctx.criterion(outputs, true_values, fp_batch)
+        write_to_file(f"Backward pass", paths_ctx.updates_path)
         loss.backward()
+        write_to_file(f"Optimizer step", paths_ctx.updates_path)
         model_ctx.optimizer.step()
 
         # Metrics tracking
@@ -87,6 +88,7 @@ def train_one_epoch(model, loader, model_ctx, epoch):
         
         if i % 10 == 0:
             print(f"[{epoch}, {i:5d}] Loss: {running_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s")
+            write_to_file(f"[{epoch}, {i:5d}] Loss: {running_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s", paths_ctx.updates_path)
             
     return running_loss / len(loader)
 
@@ -186,7 +188,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         epoch = epoch_idx + epoch_so_far
         print(f"\n--- Start Epoch: {epoch} ---")
 
-        avg_train_loss = train_one_epoch(model, train_loader, model_ctx, epoch)
+        avg_train_loss = train_one_epoch(model, train_loader, model_ctx, epoch, paths_ctx=paths_ctx)
         print(f"Finished training epoch {epoch} with average training loss: {avg_train_loss:.4f}")
         
         #with dask.config.set(scheduler='synchronous'):
@@ -369,6 +371,8 @@ def train_and_save_model(parameters, model_save_dir):
 
     print("Loading met and fp data for model", model_name)
     write_to_file("Load training and testing met and fp data", paths_ctx.updates_path)
+
+    client, cluster = gates_training.make_cluster()
     
     data, train_inputs = gates_training.load_GATES_data(train_load_data, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
 
@@ -379,18 +383,22 @@ def train_and_save_model(parameters, model_save_dir):
     write_to_file("Successfully load test met and fp data", paths_ctx.updates_path)
 
     if parameters.get("load_into_memory", False):
-        write_to_file("Loading data into memory as specified in parameters", paths_ctx.updates_path)
-        print("Loading data into memory as specified in parameters.")
+        write_to_file("Loading data into memory as specified in parameters - FIXED", paths_ctx.updates_path)
+        print("Loading data into memory as specified in parameters. - FIXED")
         print("    computing train inputs")
-        train_inputs.compute()  # if using dask arrays, this will load into memory; if already numpy arrays, this does nothing
+        train_inputs = train_inputs.compute()  # if using dask arrays, this will load into memory; if already numpy arrays, this does nothing
         print("    computing test inputs")
-        test_inputs.compute()
-        print("    computing training fp data")
-        data.fp_xr.compute()
-        print("    computing test fp data")
-        test_data.fp_xr.compute()
+        test_inputs = test_inputs.compute()
+        print("    NOT computing training fp data (should already be in mem)")
+        #data.fp_xr = data.fp_xr.compute()
+        print("   NOT computing test fp data (should already be in mem)")
+        #test_data.fp_xr = test_data.fp_xr.compute()
 
     write_to_file("scaling data and setting up dataloaders", paths_ctx.updates_path)
+
+    if cluster is not None:
+        cluster.close()
+        client.close()
 
     #inputs_dataset = gates_training.setup_input_dataset(parameters, train_inputs)
     #fp_dataset = gates_training.setup_fp_dataset(parameters, data.fp_xr)
