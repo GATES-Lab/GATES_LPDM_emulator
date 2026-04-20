@@ -59,7 +59,7 @@ domains:
     domain_name: "INDIA"
     footprint: "GOSAT-INDIA-SAM-column_SOUTHASIA_201503.nc"
 
-bad_files:
+bad_fp_files:
 - "GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc"
 - "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc"
 - "GOSAT-SAHARA-column_NORTHAFRICA_201501.nc"

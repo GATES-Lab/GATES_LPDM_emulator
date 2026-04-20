@@ -49,7 +49,7 @@ def _wrap_longitudes(ds):
     return ds.sortby(lon_name)
 
 
-def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
+def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop_variables_except=None, bad_files_list=None):
     """
     Load footprints from datadir, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
     note that the list of problematic files is currently updated manually!
@@ -58,7 +58,11 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
         - fp_datadir (str or Path): string or path pointing to the directory with footprints to load, 
         including special characters (eg "/path/to/footprints/*.nc", or "/path/to/footprints/*2020*.nc")
         Note that fp_datadir is passed directly to glob, so it needs to specify filetype (i.e. finish with .nc)
-    
+        - verbose: if True, prints out the steps throughout the data loading process
+        - chunk: if True, loads the data with dask chunking, which can help with memory issues but can cause some problems with certain files. 
+        - parallel_loading: if True, uses dask to load the files in parallel, which can speed up loading but can cause some problems with certain files. Parallel loading can only be used if chunk=True.
+        - drop_variables_except: if specified, only keeps the listed variables in the dataset.
+        - bad_files_list: if specified, a list of files that are known to be problematic and should be skipped. If None, fetches list from config. Pass an empty list to not skip any files.
     Returns:
         - fp_data_full: xarray dataset with the footprints specified in the fp_datadir, opened correctly
     
@@ -71,7 +75,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
         if chunk:
             #time_chunk = 25
             #chunk_args = {"chunks" : {"time": time_chunk}, "parallel": True}
-            chunk_args = {"chunks":"auto", "parallel": parallel_loading}
+            chunk_args = {"chunks":{"lat":-1, "lon":-1, "time":"auto"}, "parallel": parallel_loading}
         else:
             chunk_args = {}
         # check that path exists
@@ -93,6 +97,12 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
         path = os.path.split(str(fp_datadir))[0] + "/"
         filenames = [os.path.split(x)[1] for x in fp_files]
 
+        if bad_files_list is None:
+            cfg = get_config()
+            bad_files_list = cfg.bad_fp_files.copy()
+        if not isinstance(bad_files_list, list):
+            raise ValueError("bad_files_list should be a list of filenames (not full paths), or None to load from config. Pass an empty list to not skip any files.")
+        """
         bad_files = ["GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
             "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc", 
             'GOSAT-SAHARA-column_NORTHAFRICA_201501.nc',
@@ -102,12 +112,13 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
             'GOSAT-SAHARA-column_NORTHAFRICA_201609.nc',
             'GOSAT-SAHARA-column_NORTHAFRICA_201610.nc',
             'GOSAT-SAHARA-column_NORTHAFRICA_201612.nc']
+        """
         # remove any files from the list that were in the bad files list
 
         
-        without_bad_files = list(set(filenames) - set(bad_files))
+        without_bad_files = list(set(filenames) - set(bad_files_list))
         without_bad_files = [path+f for f in without_bad_files]
-        bad_files = [path+f for f in bad_files]
+        bad_files_list = [path+f for f in bad_files_list]
 
         if len(without_bad_files) == len(fp_files):
             print("There was a problem opening files!! compared against the list of known bad files and couldnt find a match")
@@ -123,7 +134,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
                 # load non-problematic arrays all together
                 most = xr.open_mfdataset(sorted(without_bad_files), **chunk_args)
                 bad_arrays = []
-                for badfile in bad_files:
+                for badfile in bad_files_list:
                     if badfile in fp_files:
                         # load each bad file separately
                         f_bad = xr.open_mfdataset(badfile, **chunk_args)
@@ -142,6 +153,10 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False):
 
     fp_data_full = _rename_latlon(fp_data_full)
     fp_data_full = fp_data_full.sortby('time')
+
+    if drop_variables_except is not None:
+        vars_to_drop = [var for var in fp_data_full.data_vars if var not in drop_variables_except]
+        fp_data_full = fp_data_full.drop(vars_to_drop)
 
     return fp_data_full
 
@@ -578,7 +593,7 @@ class LoadBaseSatelliteData:
         #### load footprint (fp) data from file
         if self.verbose: print("Loading footprint data from " + str(fp_datadir) )
 
-        self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose, parallel_loading=self.parallel_loading)
+        self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose, parallel_loading=self.parallel_loading, drop_variables_except=["fp", "release_lat", "release_lon"])
 
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
 
@@ -887,7 +902,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True):
 
         print(dask.__version__)
 
@@ -929,8 +944,11 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         self.delete_outofdomain = delete_outofdomain
 
         self.date = year
-        if len(str(year)) >4:
+        ### todo need to implement multiple years! 
+        if len(str(year)) >4 and "[" not in str(year):
             self.year = int(str(year)[:4])
+        elif "[" in str(year):
+            self.year = str(year)
         else:
             self.year = int(year)
 
@@ -957,9 +975,12 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
 
         if load_everything:
             self.met_file = self.load_meteorology(**self.met_args,lazy_load=lazy_load, parallel=parallel_loading)
-            self.met = self._process_meteorology(lazy_load=True)
             self.topog_file, self.landcover_file = self.load_topog(**self.topog_args)
             self.topog = self._process_topog_and_landcover()
+            if crop_met:
+                self.met = self._process_meteorology(lazy_load=True)
+            else:
+                print("NOT cropping met!")
         """
         if check_for_nans:
             print("\n Checking if there are any nans in the data")

@@ -30,7 +30,9 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
 
 
     if var_type == "met_with_levels":
+
         filtered_vars = {}
+        filtered_vars = []
         for var in var_names:
             if var not in ds.data_vars:
                 warnings.warn(f"requested variable {var} is not available and will be skipped")
@@ -40,24 +42,30 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
                 warnings.warn(f"variable {var} has no 'levels' coordinate and will be skipped")
                 continue
 
-            requested_levels = list(met_variables_dict.get(var, [])) if met_variables_dict is not None else []
-            available_levels = list(ds[var].levels.values)
-            valid_levels = [lev for lev in requested_levels if lev in available_levels]
-            dropped_levels = [lev for lev in requested_levels if lev not in available_levels]
+            #requested_levels = list(met_variables_dict.get(var, [])) if met_variables_dict is not None else []
+            #available_levels = list(ds[var].levels.values)
+            #valid_levels = [lev for lev in requested_levels if lev in available_levels]
+            #dropped_levels = [lev for lev in requested_levels if lev not in available_levels]
 
-            if dropped_levels:
-                warnings.warn(f"requested levels {dropped_levels} for variable {var} are not available and will be skipped")
+            #if dropped_levels:
+            #    warnings.warn(f"requested levels {dropped_levels} for variable {var} are not available and will be skipped")
 
-            if len(valid_levels) == 0:
-                warnings.warn(f"variable {var} has no valid levels left after filtering and will be skipped")
-                continue
+            #if len(valid_levels) == 0:
+            #    warnings.warn(f"variable {var} has no valid levels left after filtering and will be skipped")
+            #    continue
 
-            filtered_vars[var] = ds[var].sel(levels=valid_levels)
+            #filtered_vars[var] = ds[var].sel(levels=valid_levels)
+            filtered_vars.append(var)
+        
 
         if len(filtered_vars) == 0:
             return None
+        
+        data = ds[filtered_vars].transpose("fp_time", "lat", "lon", "levels", "time_delta")
+        
+        #data = xr.Dataset(filtered_vars).transpose("fp_time", "lat", "lon", "levels", "time_delta")
 
-        data = xr.Dataset(filtered_vars).transpose("fp_time", "lat", "lon", "levels", "time_delta")
+        #data = ds.transpose("fp_time", "lat", "lon", "levels", "time_delta")
 
     elif var_type == "surface_met":
         valid_vars = [v for v in var_names if v in ds.data_vars]
@@ -85,37 +93,40 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
 
     else:
         raise ValueError(f"unknown var_type: {var_type}")
-
+    
     stacked = data.to_stacked_array(
         new_dim="variable_name",
         sample_dims=["fp_time", "lat", "lon"],
         name=f"stacked_{var_type}",
     )
 
+    stacked = stacked.reorder_levels(dim_order={'variable_name': ["variable", 'levels', 'time_delta']})
     variable_labels = list(stacked.variable_name.values)
+    print(variable_labels)
+
     if len(variable_labels) == 0:
         return None
 
-    # Rebuild tuple labels from split coords if variable_name is not tuple-like.
-    if not isinstance(variable_labels[0], tuple):
-        if all(coord in stacked.coords for coord in ["variable", "levels", "time_delta"]):
-            variable_labels = list(
-                zip(
-                    stacked["variable"].values,
-                    stacked["levels"].values,
-                    stacked["time_delta"].values,
-                )
+    # Always rebuild from named coords to guarantee (variable, levels, time_delta) order,
+    # regardless of the internal stacking order used by to_stacked_array.
+    if all(coord in stacked.coords for coord in ["variable", "levels", "time_delta"]):
+        variable_labels = list(
+            zip(
+                stacked["variable"].values,
+                stacked["levels"].values,
+                stacked["time_delta"].values,
             )
-        else:
-            raise ValueError(
-                "Could not construct variable_name tuples from stacked data. "
-                "Please check requested variables and levels."
-            )
+        )
+    elif not isinstance(variable_labels[0], tuple):
+        raise ValueError(
+            "Could not construct variable_name tuples from stacked data. "
+            "Please check requested variables and levels."
+        )
 
     mindex = pd.MultiIndex.from_tuples(variable_labels, names=["variable", "levels", "time_delta"])
     stacked = stacked.drop_vars({"time_delta", "levels", "variable"}, errors="ignore")
     stacked = stacked.assign_coords(xr.Coordinates.from_pandas_multiindex(mindex, "variable_name"))
-    
+
     return stacked
 
 
@@ -1130,6 +1141,7 @@ def _cut_satellite_met_multi_delta(
     all_unique_times_sorted = sorted(all_unique_times)
     size_chunks = len(all_unique_times_sorted) // 10
     size_chunks = max(size_chunks, 1)
+    size_chunks = min(100, size_chunks)
     # calculate how many chunks will be needed, if each has size size_chunks
      
     
@@ -1256,7 +1268,7 @@ def get_square_satellite_inputs_v2(
         Updated object — fp_time indices with failed met interpolation are removed.
     """
     assert hasattr(data, "dataset_format"), "Not a SatelliteData object"
-    assert data.met_processed is True, "Load and cut the meteorology first"
+    #assert data.met_processed is True, "Load and cut the meteorology first"
     assert data.dataset_format == "square", (
         "get_square_satellite_inputs_v2 only supports dataset_format='square'"
     )
@@ -1300,12 +1312,13 @@ def get_square_satellite_inputs_v2(
     all_met_files, nan_idxs_per_delta = _cut_satellite_met_multi_delta(
         met_source,
         data.fp_data_full,
-        metsize=data.metsize,
+        metsize=data.size,
         time_deltas=time_deltas,
         pad_mode=data.fill_outofdomain_with,
         add_wind_direction=add_wind_direction,
         verbose=verbose,
     )
+
 
     # Collect all nan indices across deltas
     all_nan_idxs = (
