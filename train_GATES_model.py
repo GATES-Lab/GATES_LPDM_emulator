@@ -64,7 +64,7 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
     #write_to_file(f"Starting epoch {epoch}", paths_ctx.updates_path)
     for i, batch in enumerate(loader):
         #write_to_file(f"Loaded batch {i} in epoch {epoch}", paths_ctx.updates_path)
-        print(f"Loaded batch {i} in epoch {epoch}")
+        
         features_batch, fp_batch = batch[0].to(model_ctx.device), batch[1].to(model_ctx.device)
         #write_to_file(f"Sent to device", paths_ctx.updates_path)
 
@@ -87,7 +87,7 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
 
         # Metrics tracking
         with torch.no_grad():
-            display_loss = model_ctx.criterion_test(outputs, true_values)
+            display_loss = model_ctx.criterion_test(outputs, true_values, fp_batch)
             running_loss += display_loss.item()
         
         if i % 25 == 0:

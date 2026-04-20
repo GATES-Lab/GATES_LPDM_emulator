@@ -62,7 +62,7 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
             return None
         
         data = ds[filtered_vars].transpose("fp_time", "lat", "lon", "levels", "time_delta")
-        
+
         #data = xr.Dataset(filtered_vars).transpose("fp_time", "lat", "lon", "levels", "time_delta")
 
         #data = ds.transpose("fp_time", "lat", "lon", "levels", "time_delta")
@@ -102,7 +102,6 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
 
     stacked = stacked.reorder_levels(dim_order={'variable_name': ["variable", 'levels', 'time_delta']})
     variable_labels = list(stacked.variable_name.values)
-    print(variable_labels)
 
     if len(variable_labels) == 0:
         return None
@@ -1142,12 +1141,12 @@ def _cut_satellite_met_multi_delta(
     size_chunks = len(all_unique_times_sorted) // 10
     size_chunks = max(size_chunks, 1)
     size_chunks = min(100, size_chunks)
+    n_chunks = (len(all_unique_times_sorted)) // size_chunks
     # calculate how many chunks will be needed, if each has size size_chunks
      
-    
     if verbose:
         print(f"Selecting {len(all_unique_times_sorted)} unique met timestamps "
-              f"(across {len(time_deltas)} time_delta(s)) as 10 dask chunks of size {size_chunks}...")
+              f"(across {len(time_deltas)} time_delta(s)) as {n_chunks} dask chunks of size {size_chunks}...")
 
     chunk_kw = {"time": size_chunks, "lat": -1, "lon": -1}
     if "levels" in met_source.dims:

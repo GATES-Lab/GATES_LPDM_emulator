@@ -607,7 +607,7 @@ class LoadBaseSatelliteData:
         if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
         self.fp_data_full.fp.load()
         print("loaded fp variable")
-        print(self.fp_data_full)
+        #print(self.fp_data_full)
         #self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": "auto"})
 
 
@@ -1496,7 +1496,7 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
         print(f"Graph build: {time.perf_counter()-t0:.2f}s")
         # print weight and chunks of unique
         print(f"met_unique has chunks {met_unique.chunks} and size {met_unique.nbytes / 1e6:.2f} MB")
-        print("computing met unique")
+        
         print("Tasks in graph:", len(met_unique.__dask_graph__()))
         #met_unique = met_unique.chunk({"time": -1})  # merge into one chunk before compute
         met_unique = met_unique.chunk({"time": -1, "lat": -1, "lon": -1, "levels": -1})
