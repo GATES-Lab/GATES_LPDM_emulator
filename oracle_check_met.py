@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 # ========================
 # User configuration
 # ========================
-DATA_DIR = "data/met_archive/SOUTHAMERICA/"
+DATA_DIR = "data/met_archive/NORTHAFRICA/" #NORTHAFRICA INDIA CHINA SOUTHAMERICA
 OUT_DIR = "check_met_plots/"
 
 # Variables to check (edit to match your data)
