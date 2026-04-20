@@ -9,7 +9,7 @@ config_cache = None
 root_dir = Path(__file__).parent.parent
 package_dir = root_dir / "gates"
 
-minimum_config_keys = ["data_paths", "domains", "bad_files", "user_paths"]
+minimum_config_keys = ["data_paths", "domains", "bad_fp_files", "user_paths"]
 
 def get_config():
     """
@@ -131,7 +131,6 @@ class Config():
         self.save_models_dir = Path(self.user_paths["save_models_dir"])
         self.parameter_files_dir = Path(self.user_paths["parameter_files_dir"])
         object.__setattr__(self, "_locked", True)
-
 
 
 if __name__ == "__main__":
