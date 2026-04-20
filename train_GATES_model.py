@@ -22,6 +22,7 @@ from model.layers.graph_net_block import *
 from model.loss_functions import *
 
 
+
 import time
 from datetime import datetime
 
@@ -59,11 +60,13 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
     model.train()
     running_loss = 0.0
     start_time = time.time()
-    write_to_file(f"Starting epoch {epoch}", paths_ctx.updates_path)
+    mean_loss = 0.0
+    #write_to_file(f"Starting epoch {epoch}", paths_ctx.updates_path)
     for i, batch in enumerate(loader):
-        write_to_file(f"Loaded batch {i} in epoch {epoch}", paths_ctx.updates_path)
+        #write_to_file(f"Loaded batch {i} in epoch {epoch}", paths_ctx.updates_path)
+        print(f"Loaded batch {i} in epoch {epoch}")
         features_batch, fp_batch = batch[0].to(model_ctx.device), batch[1].to(model_ctx.device)
-        write_to_file(f"Sent to device", paths_ctx.updates_path)
+        #write_to_file(f"Sent to device", paths_ctx.updates_path)
 
         if len(fp_batch.shape) == 3:
             true_values = fp_batch[:,:,0].unsqueeze(-1)
@@ -72,13 +75,14 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
         
         model_ctx.optimizer.zero_grad()
 
-        write_to_file(f"Inferring", paths_ctx.updates_path)
+        #write_to_file(f"Inferring", paths_ctx.updates_path)
         outputs = model(features_batch)
-        write_to_file(f"Calculating loss", paths_ctx.updates_path)
+        #write_to_file(f"Calculating loss", paths_ctx.updates_path)
         loss = model_ctx.criterion(outputs, true_values, fp_batch)
-        write_to_file(f"Backward pass", paths_ctx.updates_path)
+        mean_loss += loss.item()
+        #write_to_file(f"Backward pass", paths_ctx.updates_path)
         loss.backward()
-        write_to_file(f"Optimizer step", paths_ctx.updates_path)
+        #write_to_file(f"Optimizer step", paths_ctx.updates_path)
         model_ctx.optimizer.step()
 
         # Metrics tracking
@@ -86,11 +90,11 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
             display_loss = model_ctx.criterion_test(outputs, true_values)
             running_loss += display_loss.item()
         
-        if i % 10 == 0:
-            print(f"[{epoch}, {i:5d}] Loss: {running_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s")
-            write_to_file(f"[{epoch}, {i:5d}] Loss: {running_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s", paths_ctx.updates_path)
+        if i % 25 == 0:
+            print(f"[{epoch}, {i:5d}] Training Loss: {mean_loss/(i+1):.3f} Loss: {running_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s")
+            write_to_file(f"[{epoch}, {i:5d}] Training Loss: {mean_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s", paths_ctx.updates_path)
             
-    return running_loss / len(loader)
+    return running_loss / len(loader), mean_loss / len(loader)  # return both the display loss and the actual training loss for logging
 
 
 @torch.no_grad()
@@ -117,7 +121,6 @@ def validate_and_predict(model, model_ctx, loader):
     print("validating and predicting")
     
     for i, batch in enumerate(loader):
-        print("in validation loop, batch ", i)
         features_batch, fp_batch = batch[0].to(model_ctx.device), batch[1].to(model_ctx.device)
 
         if len(fp_batch.shape) == 3:
@@ -133,7 +136,6 @@ def validate_and_predict(model, model_ctx, loader):
 
         preds_list.append(outputs)
     
-    print("sending to cpu and converting to numpy")
     all_preds = torch.cat(preds_list, dim=0).cpu().numpy()
         
     # vstack will now reliably return (Total_Samples, Features)
@@ -188,15 +190,14 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         epoch = epoch_idx + epoch_so_far
         print(f"\n--- Start Epoch: {epoch} ---")
 
-        avg_train_loss = train_one_epoch(model, train_loader, model_ctx, epoch, paths_ctx=paths_ctx)
+        avg_train_loss, avg_train_transformed_loss = train_one_epoch(model, train_loader, model_ctx, epoch, paths_ctx=paths_ctx)
         print(f"Finished training epoch {epoch} with average training loss: {avg_train_loss:.4f}")
         
         #with dask.config.set(scheduler='synchronous'):
         print("NOT synchronous dask config set for validation and prediction")
         avg_test_loss, test_out = validate_and_predict(model, model_ctx, test_loader)
 
-        print(avg_train_loss, avg_test_loss, test_out.shape)
-        print(test_out)
+        #print(avg_train_loss, avg_test_loss, test_out.shape)
 
     
         losses["train"].append(avg_train_loss)
@@ -237,8 +238,9 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         if model_ctx.use_wandb:
             logging_dict = {
                 "epoch": epoch + 1,
-                "train/loss": avg_train_loss,
-                "test/loss": avg_test_loss,
+                "MSE/train":avg_train_loss,
+                "MSE/test": avg_test_loss,
+                "LossFn/train": avg_train_transformed_loss,
                 **list_of_metrics,}
             wandb.log(logging_dict, step=epoch)
 
@@ -328,10 +330,11 @@ def train_and_save_model(parameters, model_save_dir):
     model_path = Path(model_save_dir) / model_name
     print(f"Initialising model run for model_name: {model_name}")
 
+    # the paths are all stored in this dataclass (e.g. paths_ctx.model_path)
     paths_ctx = PathContext(
         model_save_dir=model_save_dir,
         model_name=model_name,
-        model_path=model_path
+        model_path=model_path # model_save_dir / model_name
     )
 
     paths_ctx.make_dirs()
@@ -343,6 +346,7 @@ def train_and_save_model(parameters, model_save_dir):
     if use_wandb:
         wandb_project = parameters.get("wandb", {}).get("project", None)
         wandb_entity = parameters.get("wandb", {}).get("entity", None)
+        wandb_tags = parameters.get("wandb", {}).get("tags", [])
         if use_wandb and wandb_project is None or wandb_entity is None:
             print("Warning: 'use_wandb' is True but no 'wandb.project' or 'wandb.entity' specified in parameters. W&B will not be initialised.")
             use_wandb = False
@@ -353,7 +357,7 @@ def train_and_save_model(parameters, model_save_dir):
                 entity=wandb_entity,
                 project=wandb_project, 
                 config=parameters,
-                tags=[]
+                tags=wandb_tags
             )
 
 
@@ -361,12 +365,13 @@ def train_and_save_model(parameters, model_save_dir):
     write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
     write_to_file("loading data", paths_ctx.updates_path)
 
-    train_load_data = copy.deepcopy(parameters["train_load_data"])
-    test_load_data = copy.deepcopy(parameters["train_load_data"])
-    test_load_data.update(parameters["test_load_data"])
+    train_load_data_params = copy.deepcopy(parameters["train_load_data"])
+    test_load_data_params = copy.deepcopy(parameters["train_load_data"])
+    test_load_data_params.update(parameters["test_load_data"])
 
     input_variables = parameters["variables"]
 
+    # the data is extracted from the config file, unless it is superced from parameters. resolve_datapath_args returns the correct path in a dictionary passed to the data objects 
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
 
     print("Loading met and fp data for model", model_name)
@@ -374,20 +379,20 @@ def train_and_save_model(parameters, model_save_dir):
 
     client, cluster = gates_training.make_cluster()
     
-    data, train_inputs = gates_training.load_GATES_data(train_load_data, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
+    data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
 
     write_to_file("Successfully load training met and fp data", paths_ctx.updates_path)
 
 
-    test_data, test_inputs = gates_training.load_GATES_data(test_load_data, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
+    test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
     write_to_file("Successfully load test met and fp data", paths_ctx.updates_path)
 
     if parameters.get("load_into_memory", False):
         write_to_file("Loading data into memory as specified in parameters - FIXED", paths_ctx.updates_path)
         print("Loading data into memory as specified in parameters. - FIXED")
-        print("    computing train inputs")
+        print(f"    computing train inputs, with size {train_inputs.nbytes / 1e9:.2f} GB")
         train_inputs = train_inputs.compute()  # if using dask arrays, this will load into memory; if already numpy arrays, this does nothing
-        print("    computing test inputs")
+        print(f"    computing test inputs, with size {test_inputs.nbytes / 1e9:.2f} GB")
         test_inputs = test_inputs.compute()
         print("    NOT computing training fp data (should already be in mem)")
         #data.fp_xr = data.fp_xr.compute()
@@ -399,6 +404,7 @@ def train_and_save_model(parameters, model_save_dir):
     if cluster is not None:
         cluster.close()
         client.close()
+        # closes the dask clients and frees up the memory for other workers
 
     #inputs_dataset = gates_training.setup_input_dataset(parameters, train_inputs)
     #fp_dataset = gates_training.setup_fp_dataset(parameters, data.fp_xr)
@@ -411,7 +417,7 @@ def train_and_save_model(parameters, model_save_dir):
     
     # images will get plotted and saved for a random selection of 4 dates from the test set - these indeces are saved to parameters for reference 
     image_plots = random.sample(list(range(len(test_inputs))), k=4)
-    image_dates = np.datetime_as_string(test_data.fp_xr.time.values[image_plots])
+    image_dates = np.datetime_as_string(test_data.fp_xr.time.values[sorted(image_plots)])
 
     parameters["plotted_dates"] = image_dates.tolist()
 
@@ -507,10 +513,10 @@ if __name__ == "__main__":
     if parameters.get("use_wandb", False):
         wandb.login()
     
-    if parameters.get("model_saving_dir", None) is None: 
+    if parameters.get("model_save_dir", None) is None: 
         model_saving_dir=cfg.save_models_dir
     else:
-        model_saving_dir = parameters["model_saving_dir"]
+        model_saving_dir = Path(parameters["model_save_dir"])
 
     #TODO write a function that checks minimum parameters exist
     

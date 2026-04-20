@@ -100,6 +100,8 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
         if bad_files_list is None:
             cfg = get_config()
             bad_files_list = cfg.bad_fp_files.copy()
+        elif len(bad_files_list) == 0:
+            if verbose: print("you have passed an empty list for bad_files_list, so no files will be skipped. If you are encountering errors opening files, check that the problematic files are in the bad files list")
         if not isinstance(bad_files_list, list):
             raise ValueError("bad_files_list should be a list of filenames (not full paths), or None to load from config. Pass an empty list to not skip any files.")
         """

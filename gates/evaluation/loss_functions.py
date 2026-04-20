@@ -85,9 +85,14 @@ def _get_normalize_fn(normalize_fn):
         return normalize_fn
     if normalize_fn == "batch":
         return normalize_batch
+    elif isinstance(normalize_fn, str):
+        try:
+            normalize_fn = eval(normalize_fn)
+        except Exception as e:
+            print(f"Error occurred while evaluating normalize_fn: {e}")
     raise ValueError(
         f"Unknown normalize_fn string '{normalize_fn}'. "
-        "Pass None, 'batch', or normalize_by_mean(mean)."
+        "Pass None, 'batch', normalize_by_mean(mean), or 'normalize_by_mean(mean)' as a string."
     )
 
 def _resolve_dims(t, dims):
@@ -293,6 +298,8 @@ class PixelWeightedMSELoss(nn.Module):
                  transform_fn=None, nan_mask_label=None, **transform_kwargs):
         super().__init__()
         self.fp_weight_idx = _label_index(fp_labels, weight_label)
+        if type(transform_fn) == str:
+            transform_fn = eval(transform_fn)
         self.transform_fn = transform_fn
         self.transform_kwargs = transform_kwargs
         self.nan_mask_idx = _label_index(fp_labels, nan_mask_label, 'nan_mask_label') \
@@ -360,6 +367,8 @@ class SumWeightedMSELoss(nn.Module):
         super().__init__()
         self.weight_idx = _label_index(fp_labels, weight_label)
         self.normalize_fn = _get_normalize_fn(normalize_fn)
+        if type(transform_fn) == str:
+            transform_fn = eval(transform_fn)
         self.transform_fn = transform_fn
         self.transform_kwargs = transform_kwargs
         self.nan_mask_idx = _label_index(fp_labels, nan_mask_label, 'nan_mask_label') \

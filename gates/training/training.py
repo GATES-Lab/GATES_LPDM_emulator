@@ -161,13 +161,24 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
 
     return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
 
-# test_outputs and 
+
+def initialise_losses():
+    losses = {
+        "train": [],
+        "test": [],
+        "test_criterion": {"train": [], "test": []},
+        "metrics_transformed": {"nmae": [], "mse": [], "bias": [], "mae": []},
+        "metrics_original": {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []},
+        "metrics_fluxes_static": {}
+    }
+
 def calculate_losses(losses, test_outputs_xr):
 
     losses = losses.copy()  # make a copy of the losses dict to avoid modifying the original
 
     if "fp_nan_mask" in test_outputs_xr:
         fp_mask = test_outputs_xr.fp_nan_mask
+        print("using nanmask! this is just a check")
     else:
         fp_mask = None
 
@@ -175,7 +186,9 @@ def calculate_losses(losses, test_outputs_xr):
         test_outputs_xr.fp_original, test_outputs_xr.fp_pred, metrics=["iou", "mae", "mse","bias", "nmae"], nonzero=False, ignore_mask=fp_mask)
 
     transformed_eval_metrics = gates_metrics.compute_footprint_metrics(
-        test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, metrics=["iou", "mae", "nmae"], ignore_mask=fp_mask, threshold=0, nonzero=False)
+        test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, metrics=["iou", "mae", "mse","bias", "nmae"], ignore_mask=fp_mask, threshold=0, nonzero=False)
+    
+    static_mf_eval_metrics = gates_metrics.compute_static_mf_metrics(test_outputs_xr.fp_original, test_outputs_xr.fp_pred)
 
     for metric_name, metric_value in transformed_eval_metrics.items():
         if metric_name in losses["metrics_transformed"]:

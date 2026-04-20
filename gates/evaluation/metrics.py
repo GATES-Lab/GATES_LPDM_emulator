@@ -661,7 +661,7 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
         - "checkerboard_25": 0/1 checkerboard of shape (H, W) with 25x25 blocks
         - "checkerboard_50": 0/1 checkerboard of shape (H, W) with 50x50 blocks (only if H>100 and W>100)
     transform_factor : float or "default", optional
-        Passed through to calculate_mfs.
+        Passed through to calculate_mfs, multiplied by the molefraction (e.g. to convert units).
 
     Returns
     -------

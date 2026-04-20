@@ -240,7 +240,7 @@ def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, col
     image_dates = training_ctx.image_dates
     size = training_ctx.size
 
-    subset_fp = test_dataset.sel(time=image_dates)
+    subset_fp = test_dataset.sel(time=image_dates, method="nearest").copy()
 
     rows = [
         ("fp_transformed_pred", "Trans Pred"),
