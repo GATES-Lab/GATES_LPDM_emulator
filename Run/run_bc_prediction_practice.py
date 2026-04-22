@@ -20,8 +20,8 @@ if __name__=="__main__":
             #inference_only_pipeline(practice_hparams,practice)
             #bc_prediction_pipeline_practice(practice_hparams,practice)
             #bc_prediction_pipeline(practice_hparams,practice)
-            #train_bc_prediction_pipeline_practice(practice_hparams,practice)
-            train_bc_prediction_pipeline_data_saving(practice_hparams,practice)
+            train_bc_prediction_pipeline_practice(practice_hparams,practice)
+            #train_bc_prediction_pipeline_data_saving(practice_hparams,practice)
     else:
         print('Using the full dataset')
         for hparams in hparams_list:
@@ -29,5 +29,5 @@ if __name__=="__main__":
             #bc_prediction_pipeline_practice(hparams,practice)
             
             #bc_prediction_pipeline(hparams,practice)
-            #train_bc_prediction_pipeline_practice(hparams,practice)
-            train_bc_prediction_pipeline_data_saving(hparams,practice)
+            train_bc_prediction_pipeline_practice(hparams,practice)
+            #train_bc_prediction_pipeline_data_saving(hparams,practice)
