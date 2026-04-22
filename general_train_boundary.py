@@ -25,9 +25,9 @@ from model.layers.encoder import *
 from model.layers.decoder import *
 from model.layers.processor import *
 from model.layers.graph_net_block import *
-from model.data.dataloader_graphnet import *
+from model.data.dataloader_graphnet import BoundaryDataset
 from model.data.load_data import *
-from model.forecast import GraphSatelliteForecaster
+from model.forecast import GraphSatelliteForecasterClassifier, GraphSatelliteForecasterConvClassifier
 from model.loss_functions import *
 
 
@@ -45,6 +45,148 @@ import yaml
 import re
 from general_train_nawid import write_to_file, load_file, set_reproducibility, log_object_as_artifact, EarlyStopping
 
+
+def normalize_boundary_data(
+    outputs,
+    outputs_norm_vals=None,
+):
+    """
+    Normalize outputs and baseline_list using either 'separate' or 'all' mode.
+    If normalization values are provided, reuse them. Otherwise, compute new ones.
+
+    Parameters
+    ----------
+    norm_type : str
+        Either 'separate' or 'all'.
+    outputs, baseline_list : np.ndarray
+        Training arrays to normalize.
+    test_outputs, test_baseline_list : np.ndarray, optional
+        Test arrays to normalize with training statistics.
+    outputs_norm_vals, baseline_norm_vals : tuple(mean, std), optional
+        Precomputed normalization values.
+
+    Returns
+    -------
+    outputs, baseline_list, test_outputs, test_baseline_list, outputs_norm_vals, baseline_norm_vals
+    """
+    
+    if outputs_norm_vals is None:
+        outputs_norm_vals = (np.mean(outputs), np.std(outputs))
+
+    outputs_mean, outputs_std = outputs_norm_vals
+    normalized_outputs = (outputs - outputs_mean) / outputs_std
+
+    return normalized_outputs, outputs_norm_vals
+
+def baseline_mol_correction(desired_data, months, years, output_format, height_indices=None):
+    """
+    Function used to get the value for the CAMS, including the inputs and the outputs.
+
+    Parameters
+    ----------
+    desired_data : object
+        Input data object containing particle locations and times.
+    months : list[int]
+        List of months to process.
+    years : list[int]
+        List of years to process.
+    output_format : str
+        Either 'sum' or 'corrected', controls final output format.
+    height_indices : list[int], optional
+        List of height indices to extract (default = [4]).
+    """
+
+    if height_indices is None:
+        height_indices = [4]  # default single level
+
+    total_data_points = desired_data.fp_data_full.particle_locations_n.time.shape[-1]
+                                                                                  
+    df = pd.read_csv('/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/CH4_Semihemispheric_modelled_mole_fractions.csv')
+    baseline_list = np.zeros((total_data_points, 4))
+
+    datetime_array = np.array(desired_data.fp_data_full.particle_locations_n.time)
+    specific_years = np.array([np.datetime64(date, 'Y').astype(int) + 1970 for date in datetime_array])
+    specific_months = np.array([np.datetime64(date, 'M').astype(int) % 12 + 1 for date in datetime_array])
+
+    north_list = np.zeros(total_data_points)
+    south_list = np.zeros(total_data_points)
+    east_list = np.zeros(total_data_points)
+    west_list = np.zeros(total_data_points)
+    total_list = np.zeros(total_data_points)
+
+    # Auxiliary CAMS columns = 4 (directions) × number of height levels
+    num_heights = len(height_indices)
+    auxiliary_cams = np.zeros((total_data_points, 4 * num_heights))
+    # Nawid - This is all the correction for the purpose of saving it
+    collated_corrections = np.zeros(total_data_points)
+    for year in years:
+        print("year", year)
+        for month in months:
+            # Load CAMS dataset
+            if year > 2017:
+                cams = xr.open_dataset(
+                    f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion_climatology.nc"
+                )
+            else:
+                cams = xr.open_dataset(
+                    f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion.nc"
+                )
+            
+            desired_year = year
+            desired_month = month
+            print("desired month", desired_month)
+
+            indices = np.where((specific_years == desired_year) & (specific_months == int(desired_month)))[0]
+            if len(indices) > 0:
+                # Baseline CSV data
+                filtered_data = df[(df["Year"] == desired_year) & (df["Month"] == int(desired_month))]
+                selected_columns = filtered_data.iloc[:, [3, 4, 5, 6]].values
+                baseline_list[indices] = selected_columns / 1000  # ppt → ppm
+
+                # Weighted CAMS mole fractions
+                north_mol = np.sum(cams.vmr_n * desired_data.fp_data_full.particle_locations_n[:, :, indices], axis=(0, 1))
+                south_mol = np.sum(cams.vmr_s * desired_data.fp_data_full.particle_locations_s[:, :, indices], axis=(0, 1))
+                east_mol = np.sum(cams.vmr_e * desired_data.fp_data_full.particle_locations_e[:, :, indices], axis=(0, 1))
+                west_mol = np.sum(cams.vmr_w * desired_data.fp_data_full.particle_locations_w[:, :, indices], axis=(0, 1))
+
+                north_list[indices] = north_mol
+                south_list[indices] = south_mol
+                east_list[indices] = east_mol
+                west_list[indices] = west_mol
+
+                # ---- Extract the midpoint along the dimension ---
+                mid_n_index = cams.vmr_n.shape[1] // 2
+                mid_e_index = cams.vmr_e.shape[1] // 2
+
+                # Extract values for each height
+                all_vals = []
+                for h in height_indices:
+                    n_val = cams.vmr_n.values[h, mid_n_index]
+                    s_val = cams.vmr_s.values[h, mid_n_index]
+                    e_val = cams.vmr_e.values[h, mid_e_index]
+                    w_val = cams.vmr_w.values[h, mid_e_index]
+                    all_vals.extend([n_val, s_val, e_val, w_val])
+
+                # Assign same height-level set for all indices in this month
+                auxiliary_cams[indices, :] = np.array(all_vals)
+
+                # Correction term
+                correction = np.mean(cams.vmr_s[1].values)
+                total_list[indices] = (
+                    north_mol + south_mol + east_mol + west_mol
+                ).values - correction
+
+                # nawid -  add the correction value to the list
+                collated_corrections[indices] = correction
+    # Combine direction-wise outputs
+    outputs = np.stack((north_list, south_list, east_list, west_list), axis=1)
+
+    if output_format == "sum":
+        outputs = np.sum(outputs, axis=1, keepdims=True)
+    elif output_format == "corrected":
+        outputs = np.array(total_list).reshape(-1, 1)
+    # Nawid - Added the collated corrections to the data
+    return baseline_list, outputs, auxiliary_cams, collated_corrections
 
 
 def parse_years(year_str):
@@ -84,11 +226,11 @@ def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device,
     start_time = time.time()
     
     for i, batch in enumerate(loader):
-        ins, labels, true_fp = batch[0].to(device), batch[1].to(device), batch[2].to(device)
+        ins, labels = batch[0].to(device), batch[1].to(device)
         
         optimizer.zero_grad()
         outputs = model(ins)
-        loss = criterion(outputs, labels, true_fp)
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
 
@@ -140,7 +282,7 @@ def validate_and_predict(model, loader, criterion_test, device):
 
 
     
-
+'''
 def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_data, size, path, model_name, use_wandb=True):
     """
     Reshapes model predictions and ground truth arrays into (time, lat, lon) format, writes them to
@@ -191,10 +333,9 @@ def export_results_to_netcdf(test_out, transformed_preds, test_dataset, test_dat
         )
         preds_artifact.add_file(netcdf_save_path)
         wandb.log_artifact(preds_artifact)
-
-def run_full_training(model,parameters, train_loader, test_loader, optimizer, criterion, criterion_test, 
-                      test_dataset, test_data, device, epoch_so_far, losses, 
-                      flux_evaluation, image_plots, image_dates, size, path, model_name, NMAE_function):
+'''
+def run_full_training(model,parameters, train_loader, test_loader, optimizer, criterion, criterion_test, device, epoch_so_far, losses, 
+                       path, model_name):
     """
     Executes the full training loop for a given number of epochs, including training and validation passes,
     metric logging, early stopping, periodic visualisation, and model checkpointing. At the end of training,
@@ -216,14 +357,8 @@ def run_full_training(model,parameters, train_loader, test_loader, optimizer, cr
         device (torch.device): The device (CPU or GPU) on which to run computation.
         epoch_so_far (int): The epoch count to start from, allowing training to resume from a checkpoint.
         losses (dict): A dictionary of lists used to accumulate per-epoch metrics across the run.
-        flux_evaluation (list of str): Flux evaluation mode names (e.g. "uniform", "checkerboard_10") passed to evaluate_flux().
-        image_plots (list of int): Indices of test samples to visualise at each visualisation epoch.
-        image_dates (list of str): Date strings corresponding to each index in image_plots.
-        size (tuple of int): Spatial dimensions (height, width) used to reshape predictions for plotting and export.
         path (str): Base directory path for saving logs, plots, and checkpoints.
         model_name (str): The model name used for subfolder paths, filenames, and W&B artifact names.
-        NMAE_function (callable): A function to compute the Normalised Mean Absolute Error,
-            called as NMAE_function(predictions, truths).
 
     Returns:
         None
@@ -415,13 +550,19 @@ def train_and_save_model(parameters, path):
     test_auxiliary_cams, _ = normalize_boundary_data(test_auxiliary_cams,outputs_norm_vals=((auxiliary_mean_values,auxiliary_std_values)))
 
     grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
+    use_baselines = parameters['use_baselines']
+    if use_baselines:
+        aux_dim= auxiliary_cams.shape[1] # Nawid - gets the sape of the data
+    else:
+        aux_dim = 0
+    print('axu index',aux_dim)
+    train_batch_size = 5
+    test_batch_size=5
 
-    train_dataset = FootprintsDatasetV3(inputs, data.fp_data, input_names=names, **parameters["dataloader_parameters"])
-    print(train_dataset.transform_parameters)
-    test_dataset = FootprintsDatasetV3(test_inputs, test_data.fp_data, input_names=names, test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
-
-    train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=10)
+    train_dataset = BoundaryDataset(inputs,auxiliary_cams,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
+    test_dataset = BoundaryDataset(test_inputs,test_auxiliary_cams,test_outputs,use_baselines= use_baselines,input_names=names,test_mode=train_dataset.transform_parameters, **parameters["dataloader_parameters"])
+    train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=test_batch_size)
 
     if data.dataset_format == "square":
         size = [data.size, data.size]
@@ -438,27 +579,35 @@ def train_and_save_model(parameters, path):
     write_to_file("setting up model", path, model_name)
     print("setting up model")
 
-    image_plots = random.sample(list(range(len(test_inputs))), k=4)
-    image_dates = np.datetime_as_string(test_data.fp_data_full.time.values[image_plots])
 
     lr = parameters["learning_rate"]
     print(lr)
 
     feature_dim = np.shape(inputs)[-1]
-    aux_dim = 0
+    num_classes = parameters['num_classes']
+    num_lat, num_lon = len(data.met.lat.values), len(data.met.lon.values)
 
-    model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim, **parameters["model_parameters"])
+    if parameters['network_decoder'] =='conv':
+        print('Using conv network')
+        model = GraphSatelliteForecasterConvClassifier(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim,num_classes = num_classes,input_height = num_lat, input_width=num_lon, **parameters["model_parameters"])
+    else:
+        print('Using normal network')
+        model = GraphSatelliteForecasterClassifier(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim,num_classes = num_classes, **parameters["model_parameters"])
+
     criterion = eval(parameters["loss_functions"]["criterion"])
     criterion_test = eval(parameters["loss_functions"]["criterion_test"])
     optimizer = optim.AdamW(model.parameters(), lr=lr)
-    flux_evaluation = ["uniform", "checkerboard_10", "checkerboard_5"]
-    losses = {"train": [], "test": [], "NMAE_test": [], "MSE_test_transformed": [], "NMAE_test_transformed": [], "accuracy": [], "IoU": []}
-    losses.update({f"flux_{f}": {"MAE": [], "R2": []} for f in flux_evaluation})
+    normalization_vals = {"outputs_mean":outputs_mean_values,"outputs_std": outputs_std_values}
+    baseline_normalization_vals = {"baselines_mean":baseline_mean_values,"baselines_std":baseline_std_values}
+    losses = {"train":[], "test":[],"individual_summed_test_MAE":[]}
 
     print("saving grids etc")
 
     if use_wandb:
         wandb.watch(model, log="all", log_freq=100)
+
+    denormalized_test_truths = (test_outputs*outputs_std_values) + outputs_mean_values
+    denormalized_test_truths_summed = np.sum(denormalized_test_truths, axis=1)
 
     epoch_so_far = 0
     if torch.cuda.is_available():

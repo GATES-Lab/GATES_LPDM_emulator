@@ -15,6 +15,141 @@ from sklearn.preprocessing import MinMaxScaler
 import copy
 
 
+class BoundaryDataset(Dataset):
+    """
+    Creates dataset to pass to the model, applying any transformations specified. 
+    Parameters:
+    - inputs: array of shape (samples, sizexsize, features) with extracted inputs
+    - fp: array of shape (samples, sizexsize) with footprint
+    - input_names: list of dictionaries with variable names and info. each variable entry should have at least {"var":var_name} format, or {"var":var_name, "level":level} if required
+    - input_transforms: list containing all transforms to apply to the inputs. Current valid options are:
+        - clever_transform (standardise each variable separately across all levels and times)
+        - clever_transform_3(standardise each variable and level separately across all times)
+    - output_transforms: list containing all transforms to apply to the outputs, in order. Current valid options are:
+        - boxcox (apply pixel-wise boxcox)
+        - boxcox_all (apply boxcox to all the data)
+        - mu-law (apply mu-law enconding algorithm)
+        - logv3 (take log10 and shift so mean of non-zero elements is zero)
+    - transform_parameters: pass optional parameters to transform. Only used during training (during test, only parameters in test_mode are considering). Pass in format {"transform_name":{"param1":value, "param2":value}}
+    
+    - test_mode: dict. If training, leave empty. If testing (ie applying existing parameters and/or already fitted models), pass a dictionary or the transform_parameters of another dataset
+
+    Example:
+    training_ds = FootprintsDataset(inputs, data.fp_data, input_transforms=["clever_transform"],output_transforms=["boxcox_all"], input_names=names)
+    testing_ds = FootprintsDataset(test_inputs, test_data.fp_data, input_transforms=["clever_transform"],output_transforms=["boxcox_all"], input_names=names, test_mode=training_ds.transform_parameters))
+
+    Functions:
+    - inverse_transform(predictions): provides the footprints reconverted to the original space, inverting any previously applied transforms
+    - add_prototypes(prototypes) : unfinished! Takes prototypes of same shape as footprints, applies to them the same transform applied to the fps and appends them to the inputs array.
+
+    """
+    def __init__(self, inputs,baseline_inputs, outputs, use_baselines = False,input_transforms = [], transform_parameters = {}, test_mode={}, input_names=[]):
+    #def __init__(self, inputs, fp, input_transforms = [], output_transforms = [], transform_parameters = {}, test_mode={}, input_names=[], size=None, full_land_cover=False):
+        #super().__init__()
+        self.inputs = np.copy(inputs)
+        self.baseline_inputs = baseline_inputs # Nawid - Input related to the baselinevalues
+        self.outputs = outputs
+        '''
+        if size is None:
+            self.size = [int(np.sqrt(np.shape(fp)[-1])), int(np.sqrt(np.shape(fp)[-1]))]
+            print(f"assuming this is a square dataset of size {self.size[0]} x {self.size[1]}!")
+        elif type(size) is int:
+            assert size == int(np.sqrt(np.shape(fp)[-1])), f"you passed size as an int, which normally implies a square dataset of size {size} x {size}, but the data size doesnt match (data would have size {int(np.sqrt(np.shape(fp)[-1]))} x {int(np.sqrt(np.shape(fp)[-1]))}). are you sure the data is square and of the size you pass?"
+            self.size = [size, size]
+        elif len(size) == 2 and (type(size) is tuple or type(size) is list):
+            self.size = size
+            print(f"assuming a non-square domain of size {self.size}")
+        else:
+            raise ValueError("you passed a size parameter of an unknown format. pass size=None if the dataset is square, or a list/tuple")
+        '''
+
+        self.input_transforms= copy.deepcopy(input_transforms)
+        '''
+        self.output_transforms= copy.deepcopy(output_transforms)
+        '''
+        self.input_names = copy.deepcopy(input_names)
+        self.test_mode = copy.deepcopy(test_mode)
+        self.transform_parameters = copy.deepcopy(transform_parameters)
+        
+        print(transform_parameters)
+        print(self.transform_parameters)
+
+        # note that _Transform is the base class and will raise a not_implemented error if used
+        self.valid_input_transforms = {
+            "clever_transform":{"params":["transformers"], "fun":_CleverTransform}, 
+            "clever_transform_2":{"params":["transformers"], "fun":_CleverTransform2}, 
+            "clever_transform_3":{"params":["transformers"], "fun":_CleverTransform3},
+            "standardise":{"params":["transformers"], "fun":_Transform}, 
+            "scale":{"params":["inputs_min", "inputs_max"], "fun":_Transform}}
+
+        ## assert that only valid input and output transforms have been passed
+        assert set(self.input_transforms).issubset(self.valid_input_transforms.keys()), f"You passed some input transforms that are not in the list of valid transforms. \n The valid transforms are {list(self.valid_input_transforms.keys())}. \n The following transforms you passed but are not allowed: {set(self.input_transforms) - set(self.valid_input_transforms.keys())}"
+        '''
+        assert set(self.output_transforms).issubset(self.valid_output_transforms.keys()), f"You passed some input transforms that are not in the list of valid transforms. \n The valid transforms are {list(self.valid_output_transforms.keys())}. \n The following transforms you passed but are not allowed: {set(self.output_transforms) - set(self.valid_output_transforms.keys())}"
+        '''
+        if len(self.test_mode)>0:
+            self.mode="test"
+            # if on test mode, assert that all necessary parameters for the provided input and output transforms have been passed
+            assert all([set(self.valid_input_transforms[x]["params"]).issubset(self.test_mode[x]) for x in self.input_transforms]), "You did not pass all the necessary parameters to test_mode for the input transformations!"
+            '''
+            assert all([set(self.valid_output_transforms[x]["params"]).issubset(self.test_mode[x]) for x in self.output_transforms]), "You did not pass all the necessary parameters to test_mode for the output transformations!"
+            '''
+        else:
+            self.mode="train"        
+
+        self.input_transforms = {key: None for key in self.input_transforms}
+        for transform in self.input_transforms:
+            self.input_transforms[transform]  = self.valid_input_transforms[transform]["fun"](self)
+            self.input_transforms[transform].transform()
+
+        '''
+        self.output_transforms = {key: None for key in self.output_transforms}
+        for transform in self.output_transforms:
+            if transform in self.transform_parameters:
+                print(self.transform_parameters)
+                self.output_transforms[transform]  = self.valid_output_transforms[transform]["fun"](self, **self.transform_parameters[transform])
+            else:
+                self.output_transforms[transform]  = self.valid_output_transforms[transform]["fun"](self)
+
+            self.fp = self.output_transforms[transform].transform(self.fp)
+        '''
+        # Repeat the 2D array along the second axis to match the shape of the 3D array
+        # The result should have shape (2, 4, 3)
+        
+        baseline_expanded = np.repeat(self.baseline_inputs[:, np.newaxis, :], self.inputs.shape[1], axis=1)
+
+        if use_baselines:
+            print('USING BASELINES')
+            self.inputs = np.concatenate((self.inputs,baseline_expanded),axis=-1)
+
+        if type(self.inputs) != torch.Tensor:
+            self.inputs = torch.tensor(self.inputs, dtype=torch.float)
+            #self.inputs = torch.tensor(self.inputs, dtype=torch.float,requires_grad=False)
+            # requires grad or false
+            #self.inputs.requires_grad = False;
+        
+        if type(self.outputs) != torch.Tensor:
+            self.outputs = torch.tensor(self.outputs, dtype=torch.float)
+
+            #self.outputs = torch.tensor(self.outputs, dtype=torch.float,requires_grad=False)
+        
+    
+    def inverse_transform(self, predictions, return_transformed=True):
+        self.predictions=predictions
+        if type(self.predictions) == torch.Tensor:
+            self.predictions = self.predictions.detach().numpy()
+            
+        for transform in self.output_transforms:
+            self.transformed_predictions = self.output_transforms[transform].inverse_transform(self.predictions)
+        if return_transformed:
+            return self.transformed_predictions
+    
+    def __len__(self):
+        return self.inputs.size()[0]
+
+    def __getitem__(self, item):
+        return self.inputs[item,:,:], self.outputs[item,:]  
+
 class FootprintsDataset(Dataset):
     """
     Creates dataset to pass to the model, applying any transformations specified. 
