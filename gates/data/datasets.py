@@ -503,7 +503,7 @@ class DefaultInputsScaler:
     Variables listed in ``minmax_variables`` are scaled with min-max scaling. The fitted scalers are stored by full variable tuple, and `transform` returns a new DataArray
     named ``stacked_transformed_inputs`` with the same dims and ``variable_name`` labels as the inputs.
     """
-    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords"], verbose=True, compute=True):
+    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords", "xy_distance_centre", "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords"], verbose=True, compute=True):
         self.minmax_variables = minmax_variables
         self.scalers = {}
         self.scaler_name = "DefaultInputsScaler"
@@ -1067,6 +1067,7 @@ def _cut_satellite_met_multi_delta(
     add_wind_direction=True,
     closest_tolerance="4h",
     verbose=False,
+    load_into_memory=False,
 ):
     """
     Like cut_satellite_met but handles all time_deltas in one call.
@@ -1149,9 +1150,15 @@ def _cut_satellite_met_multi_delta(
               f"(across {len(time_deltas)} time_delta(s)) as {n_chunks} dask chunks of size {size_chunks}...")
 
     chunk_kw = {"time": size_chunks, "lat": -1, "lon": -1}
+
     if "levels" in met_source.dims:
         chunk_kw["levels"] = -1
-    met_loaded = met_source.sel(time=list(all_unique_times_sorted)).chunk(chunk_kw)
+    met_loaded = met_source.sel(time=list(all_unique_times_sorted))
+    if load_into_memory:
+        print("Loading selected met data into memory...")
+        met_loaded = met_loaded.compute()
+
+    met_loaded = met_loaded.chunk(chunk_kw)
 
     # --- Phase 3: spatial structure — computed once, shared across all deltas ---
     release_idxs = _get_release_idxs(fp)
@@ -1227,6 +1234,7 @@ def get_square_satellite_inputs_v2(
     verbose=True,
     add_timedelta_zero=True,
     add_wind_direction=False,
+    load_into_memory=False
 ):
     """
     Optimised version of ``get_square_satellite_inputs``.
@@ -1316,7 +1324,9 @@ def get_square_satellite_inputs_v2(
         pad_mode=data.fill_outofdomain_with,
         add_wind_direction=add_wind_direction,
         verbose=verbose,
+        load_into_memory=load_into_memory,
     )
+
 
 
     # Collect all nan indices across deltas

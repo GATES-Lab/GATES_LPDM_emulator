@@ -283,6 +283,7 @@ def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, col
     save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
+    return save_path
 
 
 
