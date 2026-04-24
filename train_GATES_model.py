@@ -240,6 +240,8 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "epoch": epoch + 1,
                 "MSE/train":avg_train_loss,
                 "MSE/test": avg_test_loss,
+                "train/loss": avg_train_loss,
+                "test/loss": avg_test_loss,
                 "LossFn/train": avg_train_transformed_loss,
                 **list_of_metrics,}
             wandb.log(logging_dict, step=epoch)
@@ -267,8 +269,10 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         write_to_file(log_text, paths_ctx.updates_path)
 
         if epoch % model_ctx.epochs_visualise == 0:
-            save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
-
+          img_save_path = save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
+        if epoch % 3*model_ctx.epochs_visualise == 0:
+            if model_ctx.use_wandb:
+                wandb.log({f"fps_epoch_{epoch}": wandb.Image(img_save_path)}, step=epoch)
 
 
         if epoch % model_ctx.epochs_save == 0:
