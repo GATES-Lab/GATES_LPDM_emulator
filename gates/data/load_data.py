@@ -86,7 +86,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
             if len(glob.glob(str(fp_datadir)))==0:
                 raise ValueError(f"No matching files found in the specified directory:\n {fp_datadir} \nCheck that the path is correct and that there are files matching the pattern.")
             # attempt to load dataset of multiple files thfe standard way
-            fp_data_full = xr.open_mfdataset(sorted(glob.glob(str(fp_datadir))), combine='by_coords', **chunk_args)
+            fp_data_full = xr.open_mfdataset(sorted(glob.glob(str(fp_datadir))), engine="h5netcdf", combine='by_coords', **chunk_args)
             print(f"After fp_data_full: {len(fp_data_full.__dask_graph__())} tasks")
 
     except Exception as e:
@@ -125,6 +125,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
         if len(without_bad_files) == len(fp_files):
             print("There was a problem opening files!! compared against the list of known bad files and couldnt find a match")
             print("check if there has been a problem, or maybe a new bad file needs to be added to the list!")
+            raise e
 
         if len(without_bad_files) < len(fp_files):
             if verbose: print("at least one of the files was in the bad files list, opening with workaround")
@@ -138,16 +139,19 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
                 bad_arrays = []
                 for badfile in bad_files_list:
                     if badfile in fp_files:
-                        # load each bad file separately
-                        f_bad = xr.open_mfdataset(badfile, **chunk_args)
-                        #f_bad = xr.open_mfdataset(badfile)
+                        try:
+                            # load each bad file separately
+                            f_bad = xr.open_mfdataset(badfile, **chunk_args)
+                        except Exception as bad_e:
+                            print(f"Could not open bad file {badfile}, skipping: {bad_e}")
+                            continue
                         if "NORTHAFRICA_2015" in badfile:
                             try:
                                 f_bad = f_bad.drop(["mean_age_particles_n", "mean_age_particles_e", "mean_age_particles_w", "mean_age_particles_s"])        
                             except Exception as e:
                                 print("something went wrong trying to load the bad North Africa 2015 files")
                                 print(e)
-                            bad_arrays.append(f_bad)
+                        bad_arrays.append(f_bad)
                 # concatenate all the good files with the bad ones along the time dimension
                 fp_data_full = xr.concat([most]+bad_arrays, dim="time")
         else:
@@ -202,6 +206,9 @@ def preprocess_met_data(ds, duplicate_dim="longitude"):
         ds = remove_duplicates(ds, dim=duplicate_dim)
     elif duplicate_dim == "longitude" and "lon" in ds.dims:
         ds = remove_duplicates(ds, dim="lon")
+    for coord in ds.coords:
+        if ds[coord].dtype == np.float64:
+            ds[coord] = ds[coord].astype(np.float32).round(4)
     return ds
 
 
@@ -329,7 +336,8 @@ class LoadBaseSatelliteData:
         The topography and landcover paths should point to a specific file, either through the config file or through the arguments. 
         """
         if fp_datadir is None:
-            self.fp_datadir = Path(cfg.fp_datadir) / self.domain / f"*{self.region}*{self.domain}_{str(self.date)}*.nc"
+            fp_domain = cfg.domains.get(self.region, {}).get("fp_domain", self.domain)
+            self.fp_datadir = Path(cfg.fp_datadir) / self.domain / f"*{fp_domain}_{str(self.date)}*.nc"
         else:
             self.fp_datadir=Path(str(fp_datadir)+ f"*{str(self.date)}*.nc")
 
@@ -464,14 +472,13 @@ class LoadBaseSatelliteData:
                 #combine="nested",
                 data_vars="minimal",
                 coords="minimal",
-                combine="by_coords",
                 parallel=parallel,
-                join="inner",
+                join="override",
                 **chunk_args,
                 drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"],
                 compat="override",
                 engine="h5netcdf",
-                #preprocess=preprocess_met_data,
+                preprocess=preprocess_met_data,
             )
             if len(met_levels)>0:
                 try:
@@ -489,8 +496,15 @@ class LoadBaseSatelliteData:
             print(f"After variable selection: {len(met_file.__dask_graph__())} tasks")
 
             print("Met file chunk stats:")
+            met_file = met_file.unify_chunks()
             print("Chunks:", met_file.chunks)
             print("Dataset size (GB):", met_file.nbytes/1e9)
+
+            for dim in ("forecast_period", "forecast_reference_time"):
+                if dim in met_file.dims:
+                    met_file = met_file.isel({dim: 0}, drop=True)
+                if dim in met_file.coords:
+                    met_file = met_file.drop_vars(dim)
 
             if "model_level_number" in met_file.dims:
                 met_file = met_file.rename({"model_level_number": "levels"})
@@ -1546,14 +1560,14 @@ def _pad_domain(data, fp, release_idxs, half, pad_mode, verbose=True):
     padding_needed = False
 
     need_S = np.sum(release_idxs[:, 0] < half)
-    need_N = np.sum((len(domain_lats) - release_idxs[:, 0]) < half)
+    need_N = np.sum((len(domain_lats) - release_idxs[:, 0]) <= half)
     need_W = np.sum(release_idxs[:, 1] < half)
-    need_E = np.sum((len(domain_lons) - release_idxs[:, 1]) < half)
+    need_E = np.sum((len(domain_lons) - release_idxs[:, 1]) <= half)
 
 
     if need_S > 0 or need_N > 0:
         pad_S = int(np.max([0, half - np.min(release_idxs[:, 0])]))
-        pad_N = int(np.max([0, half - (len(domain_lats) - np.max(release_idxs[:, 0]))]))
+        pad_N = int(np.max([0, half + 1 - (len(domain_lats) - np.max(release_idxs[:, 0]))]))
         if verbose: print(f"Padding lat by ({pad_S}, {pad_N}) cells (S, N) with mode='{pad_mode}'")
         extended_lats = (
             sorted([domain_lats[0] - (i + 1) * delta_lat for i in range(pad_S)])
@@ -1569,10 +1583,12 @@ def _pad_domain(data, fp, release_idxs, half, pad_mode, verbose=True):
             data = data.reindex(lat=extended_lats, fill_value=np.nan)
         domain_lats = data.lat.values.copy()
         padding_needed = True
+        # Recompute release_idxs after lat padding so lon padding uses updated indices
+        release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
 
     if need_W > 0 or need_E > 0:
         pad_W = int(np.max([0, half - np.min(release_idxs[:, 1])]))
-        pad_E = int(np.max([0, half - (len(domain_lons) - np.max(release_idxs[:, 1]))]))
+        pad_E = int(np.max([0, half + 1 - (len(domain_lons) - np.max(release_idxs[:, 1]))]))
         if verbose: print(f"Padding lon by ({pad_W}, {pad_E}) cells (W, E) with mode='{pad_mode}'")
         extended_lons = (
             sorted([domain_lons[0] - (i + 1) * delta_lon for i in range(pad_W)])
