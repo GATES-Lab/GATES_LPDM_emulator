@@ -263,13 +263,20 @@ def make_cluster():
         print("Fewer than 4 CPUs — skipping Dask cluster, using synchronous scheduler")
         return None, None
 
-    
     n_workers = max(1, n_cpus - 2)
-    print(f"{n_cpus} CPUs detected — setting up Dask cluster with {n_workers} workers")
+
+    # Compute per-worker memory limit from SLURM allocation (in MB), leaving 10% headroom
+    slurm_mem_mb = int(os.environ.get("SLURM_MEM_PER_NODE", 0))
+    if slurm_mem_mb > 0:
+        mem_per_worker = f"{int(slurm_mem_mb * 0.9 / n_workers)}MiB"
+    else:
+        mem_per_worker = "auto"
+
+    print(f"{n_cpus} CPUs detected — setting up Dask cluster with {n_workers} workers, {mem_per_worker} each")
     cluster = LocalCluster(
         n_workers=n_workers,
         threads_per_worker=1,
-        memory_limit="auto",
+        memory_limit=mem_per_worker,
         local_directory="/tmp",
     )
     client = Client(cluster)
