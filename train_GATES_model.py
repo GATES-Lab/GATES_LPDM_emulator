@@ -181,7 +181,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         None
     """
 
-    best_model_path =  paths_ctx.model_save_dir / f"{model_ctx.model_name}_best.pt"
+    #best_model_path =  paths_ctx.model_save_dir / f"{model_ctx.model_name}_best.pt"
 
     #for epoch_idx in range(model_ctx.epochs_num):
     write_to_file("starting training loop", paths_ctx.updates_path)
@@ -234,6 +234,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
         list_of_metrics = {f"metrics_transformed-{k}": v for k, v in transformed_eval_metrics.items()}
         list_of_metrics.update({f"metrics_original-{k}": v for k, v in eval_metrics.items()})
+        list_of_metrics.update({f"flux/{flux_mode}/{metric_name}": metric_value for flux_mode, metrics in losses["metrics_fluxes_static"].items() for metric_name, metric_value in metrics.items()})
 
         if model_ctx.use_wandb:
             logging_dict = {
@@ -265,7 +266,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
         log_text = f"Epoch {epoch}, Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}"
         write_to_file(log_text, paths_ctx.updates_path)
-        log_text = f"    metrics: {str(losses['metrics_transformed'])}, {str(losses['metrics_original'])}"
+        log_text = f"    metrics: {str(losses['metrics_transformed'])}, {str(losses['metrics_original'])}, {str(losses['metrics_fluxes_static'])}"
         write_to_file(log_text, paths_ctx.updates_path)
 
         if epoch % model_ctx.epochs_visualise == 0:
@@ -450,7 +451,7 @@ def train_and_save_model(parameters, model_save_dir):
     if use_wandb:
         wandb.watch(model, log="all", log_freq=100)
 
-    losses = {"train": [], "test": [], "test_criterion":{"train":[], "test":[]}, "metrics_transformed": {"nmae": [], "mse":[], "bias": [], "mae": []}, "metrics_original": {"nmae": [], "mse":[], "bias": [], "mae": [],"iou": []}, "fluxes":{}}
+    losses = gates_training.initialise_losses()
 
     print("successfully set up the model!!! starting training loop")
     

@@ -163,16 +163,31 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
 
 
 def initialise_losses():
+    """
+    Return a dictionary to store losses and metrics during training and evaluation. 
+    """
+    metrics_dict = {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
     losses = {
         "train": [],
         "test": [],
         "test_criterion": {"train": [], "test": []},
-        "metrics_transformed": {"nmae": [], "mse": [], "bias": [], "mae": []},
-        "metrics_original": {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []},
-        "metrics_fluxes_static": {}
+        "metrics_transformed": metrics_dict.copy(),
+        "metrics_original": metrics_dict.copy(),
+        "metrics_fluxes_static": {
+            "uniform": metrics_dict.copy(),
+            "checkerboard": metrics_dict.copy(),
+            "checkerboard_10": metrics_dict.copy(),
+        }
     }
+    return losses
 
 def calculate_losses(losses, test_outputs_xr):
+    """
+    Calculate evaluation metrics for the test outputs and store them in the losses dictionary.
+    Args:
+    - losses (dict): A dictionary to store losses and metrics during training and evaluation. Generate it with initialise_losses().
+    - test_outputs_xr (xarray.Dataset): An xarray Dataset containing the original and predicted footprints for the test set, as well as any relevant masks (e.g., fp_nan_mask) if needed for ignoring certain values in the metric calculations.
+    """
 
     losses = losses.copy()  # make a copy of the losses dict to avoid modifying the original
 
@@ -182,12 +197,12 @@ def calculate_losses(losses, test_outputs_xr):
         fp_mask = None
 
     eval_metrics = gates_metrics.compute_footprint_metrics(
-        test_outputs_xr.fp_original, test_outputs_xr.fp_pred, metrics=["iou", "mae", "mse","bias", "nmae"], nonzero=False, ignore_mask=fp_mask)
+        test_outputs_xr.fp_original, test_outputs_xr.fp_pred, metrics=["iou", "mae", "mse","bias", "nmae"], nonzero=False, ignore_mask=fp_mask, threshold=1e-5)
 
     transformed_eval_metrics = gates_metrics.compute_footprint_metrics(
         test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, metrics=["iou", "mae", "mse","bias", "nmae"], ignore_mask=fp_mask, threshold=0, nonzero=False)
     
-    #static_mf_eval_metrics = gates_metrics.compute_static_mf_metrics(test_outputs_xr.fp_original, test_outputs_xr.fp_pred)
+    static_mf_eval_metrics = gates_metrics.compute_static_mf_metrics(test_outputs_xr.fp_original, test_outputs_xr.fp_pred)
 
     for metric_name, metric_value in transformed_eval_metrics.items():
         if metric_name in losses["metrics_transformed"]:
@@ -195,7 +210,13 @@ def calculate_losses(losses, test_outputs_xr):
 
     for metric_name, metric_value in eval_metrics.items():
         if metric_name in losses["metrics_original"]:
-            losses["metrics_original"][metric_name].append(metric_value)   
+            losses["metrics_original"][metric_name].append(metric_value) 
+
+    for flux_type, metrics in static_mf_eval_metrics.items():
+        if flux_type in losses["metrics_fluxes_static"]:
+            for metric_name, metric_value in metrics.items():
+                if metric_name in losses["metrics_fluxes_static"][flux_type]:
+                    losses["metrics_fluxes_static"][flux_type][metric_name].append(metric_value)  
 
     return losses, eval_metrics, transformed_eval_metrics
 """
@@ -258,18 +279,23 @@ from dask.distributed import Client, LocalCluster
 
 def make_cluster():
     n_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
-    
+    mem_gb = int(os.environ.get("SLURM_MEM_PER_NODE", 8000)) / 1024  # MB → GB
+
     if n_cpus < 4:
         print("Fewer than 4 CPUs — skipping Dask cluster, using synchronous scheduler")
         return None, None
 
     
     n_workers = max(1, n_cpus - 2)
+    mem_per_worker = f"{0.8 * mem_gb / n_workers:.1f}GB"
+
     print(f"{n_cpus} CPUs detected — setting up Dask cluster with {n_workers} workers")
+    print(f"Memory: {mem_gb:.0f}GB total, allocating 80% → {mem_per_worker} per worker")
+
     cluster = LocalCluster(
         n_workers=n_workers,
         threads_per_worker=1,
-        memory_limit="auto",
+        memory_limit=mem_per_worker,
         local_directory="/tmp",
     )
     client = Client(cluster)
