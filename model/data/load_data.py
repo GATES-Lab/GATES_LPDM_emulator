@@ -2041,7 +2041,7 @@ def populate_data_directories(region, period, base_dir, dest_dir, dry_run=False)
         
         # Build the file pattern (e.g. /base/fp_archive/NORTHAFRICA/NORTHAFRICA_Met_20160[1-3].nc)
 
-        pattern = os.path.join(source_path, f"*{region}*{period}.nc")
+        pattern = os.path.join(source_path, f"*{region}*{period}*.nc")
         
         # Find matching files
         matching_files = glob.glob(pattern)
