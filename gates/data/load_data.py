@@ -49,6 +49,13 @@ def _wrap_longitudes(ds):
     return ds.sortby(lon_name)
 
 
+def _round_time_to_seconds(ds):
+    """Preprocess function: round time coordinate to nearest second to avoid sub-millisecond floating-point jitter."""
+    if "time" in ds.coords:
+        ds = ds.assign_coords(time=ds.time.dt.round("s"))
+    return ds
+
+
 def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop_variables_except=None, bad_files_list=None):
     """
     Load footprints from datadir, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
@@ -86,7 +93,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
             if len(glob.glob(str(fp_datadir)))==0:
                 raise ValueError(f"No matching files found in the specified directory:\n {fp_datadir} \nCheck that the path is correct and that there are files matching the pattern.")
             # attempt to load dataset of multiple files thfe standard way
-            fp_data_full = xr.open_mfdataset(sorted(glob.glob(str(fp_datadir))), engine="h5netcdf", combine='by_coords', **chunk_args)
+            fp_data_full = xr.open_mfdataset(sorted(glob.glob(str(fp_datadir))), engine="h5netcdf", combine='by_coords', preprocess=_round_time_to_seconds, **chunk_args)
             print(f"After fp_data_full: {len(fp_data_full.__dask_graph__())} tasks")
 
     except Exception as e:
@@ -135,13 +142,13 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
             # Add clauses here to catch other known exceptions
             with dask.config.set(**{'array.slicing.split_large_chunks': True}):
                 # load non-problematic arrays all together
-                most = xr.open_mfdataset(sorted(without_bad_files), **chunk_args)
+                most = xr.open_mfdataset(sorted(without_bad_files), preprocess=_round_time_to_seconds, **chunk_args)
                 bad_arrays = []
                 for badfile in bad_files_list:
                     if badfile in fp_files:
                         try:
                             # load each bad file separately
-                            f_bad = xr.open_mfdataset(badfile, **chunk_args)
+                            f_bad = xr.open_mfdataset(badfile, preprocess=_round_time_to_seconds, **chunk_args)
                         except Exception as bad_e:
                             print(f"Could not open bad file {badfile}, skipping: {bad_e}")
                             continue
@@ -473,7 +480,7 @@ class LoadBaseSatelliteData:
                 data_vars="minimal",
                 coords="minimal",
                 parallel=parallel,
-                join="override",
+                join="inner", #inner for China, override for India
                 **chunk_args,
                 drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"],
                 compat="override",
