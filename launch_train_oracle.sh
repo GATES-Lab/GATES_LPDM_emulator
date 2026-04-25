@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=INDIA_v3features_whole_data_test_preprocess_met_data
-#SBATCH --output=logs/%j_INDIA_v3features_whole_data_test_preprocess_met_data.out
+#SBATCH --job-name=INDIA_4_years
+#SBATCH --output=logs/%j_INDIA_4_years.out
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=5
-#SBATCH --mem=400G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=460G
 #SBATCH --time=24:00:00
 
 echo "Running on host: $(hostname)"

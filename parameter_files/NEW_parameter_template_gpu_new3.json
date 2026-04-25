@@ -1,11 +1,11 @@
 {
-    "model_name": "parameter_template_v3_with_preprocess_met_data",
+    "model_name": "INDIA_4_years",
     "verbose": true,
     "parallel_loading": true,
     "load_into_memory": true,
     "_ignore_model_save_dir": "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/test_jobs/working_GPU_experiments",
     "train_load_data": {
-        "year": "20130[1-3]",
+        "year": "201[2-4]",
         "freq": 3,
         "region": "INDIA",
         "size": 50,
@@ -32,7 +32,7 @@
         "crop_met": false
     },
     "test_load_data": {
-        "year": "20150[1-3]",
+        "year": "2015",
         "freq": 100
     },
     "variables": {
@@ -67,7 +67,7 @@
             "y_coords",
             "xy_distance_centre",
             "topog",
-            "land_cover"
+            "landcover"
         ],
         "time_deltas": [
             6,
@@ -123,9 +123,9 @@
         ]
     },
     "epochs": {
-        "training": 60,
+        "training": 250,
         "visualize": 10,
-        "patience": 100,
+        "patience": 1000,
         "model_save": 50
     },
     "loss_functions": {
