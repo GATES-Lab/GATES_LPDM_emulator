@@ -265,6 +265,7 @@ def initialise_losses():
     Return a dictionary to store losses and metrics during training and evaluation. 
     """
     metrics_dict = {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
+    flux_metrics_dict = {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
     losses = {
         "train": [],
         "test": [],
@@ -272,9 +273,9 @@ def initialise_losses():
         "metrics_transformed": metrics_dict.copy(),
         "metrics_original": metrics_dict.copy(),
         "metrics_fluxes_static": {
-            "uniform": metrics_dict.copy(),
-            "checkerboard": metrics_dict.copy(),
-            "checkerboard_10": metrics_dict.copy(),
+            "uniform": flux_metrics_dict.copy(),
+            "checkerboard": flux_metrics_dict.copy(),
+            "checkerboard_10": flux_metrics_dict.copy(),
         }
     }
     return losses

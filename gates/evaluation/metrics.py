@@ -511,7 +511,7 @@ def compute_mfs_metrics(mf_true, mf_pred):
 
     return {
         "corrcoef": float(corrcoef),
-        "mean_absolute_error": float(mean_absolute_error),
+        "mae": float(mean_absolute_error),
         "mean_bias": float(mean_bias),
         "true_mean": float(true_mean),
         "predicted_mean": float(predicted_mean),

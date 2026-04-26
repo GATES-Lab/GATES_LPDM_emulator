@@ -3,31 +3,33 @@
     "verbose": true,
     "parallel_loading": false,
     "load_into_memory": true,
+    "load_data_monthly": true,
 
     "regions": {
         "0": {
             "train_load_data": {
-                "year": "201501",
+                "years": ["2015"], "months": ["01", "03"],
                 "freq": 20,
                 "region": "SAHARA"
             },
             "test_load_data": {
-                "year": "201601",
+                "years": ["2016"], "months": ["01"],
                 "freq": 60
             }
         },
         "1": {
             "train_load_data": {
-                "year": "201502",
+                "years": ["2015"], "months": ["02"],
                 "freq": 20,
                 "region": "SAHARA"
             },
             "test_load_data": {
-                "year": "201602",
+                "years": ["2016"], "months": ["02"],
                 "freq": 60
             }
-        }
-    },
+            }
+        },
+    
 
     "shared_load_parameters": {
         "size": 10,
