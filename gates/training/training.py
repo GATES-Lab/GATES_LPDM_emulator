@@ -137,9 +137,12 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
 
     all_inputs = []
     all_fp_xr = []
+    loading_times = {}
 
     for year in years:
         for month in months:
+            month_start = time.perf_counter()
+            month_key = f"{year}-{month}"
             if verbose:
                 print(f"Loading year={year}, month={month}")
             month_params = {**base_params, "year": year, "month": month}
@@ -147,6 +150,9 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
                 data = LoadSquareSatelliteData(**month_params, **datapath_args, verbose=verbose)
             except Exception as e:
                 print(f"Error loading data for {year}-{month}: {e}")
+                elapsed_mins = (time.perf_counter() - month_start) / 60
+                loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+                print(f"{month_key} : {loading_times[month_key]}")
                 continue
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
             if load_into_memory:
@@ -155,6 +161,16 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
                 data.fp_xr = data.fp_xr.load()
             all_inputs.append(inputs)
             all_fp_xr.append(data.fp_xr)
+
+            elapsed_mins = (time.perf_counter() - month_start) / 60
+            loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+            print(f"{month_key} : {loading_times[month_key]}")
+
+    print("")
+    print("")
+    print("----- Loading times for each month -----")
+    print("\n".join(f"{k} : {v}" for k, v in loading_times.items()))
+    print("")
 
 
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
