@@ -473,7 +473,7 @@ class LoadBaseSatelliteData:
 
         chunk_args = {"chunks": {"time": 8, "lat":-1, "lon":-1, "model_level_number":-1}}
 
-        if self.region== "INDIA":
+        if self.region== "INDIA" or self.region=="SAHARA":
             join_type = "override"
         else:
             join_type = "inner"
@@ -481,12 +481,13 @@ class LoadBaseSatelliteData:
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
             met_file = xr.open_mfdataset(
                 met_files,
-                #concat_dim="time",
-                #combine="nested",
+                concat_dim="time",
+                combine="nested",
                 data_vars="minimal",
                 coords="minimal",
+                #combine="by_coords"
                 parallel=parallel,
-                join=join_type, #inner for China, NA, SA, override for India
+                join=join_type, #inner for China, SA, override for India or Sahara
                 **chunk_args,
                 drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"],
                 compat="override",
