@@ -65,6 +65,104 @@ def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbos
 
     return data, inputs
 
+def _normalise_month(m):
+    """Convert int or str month to zero-padded two-character string, e.g. 1 -> '01'."""
+    return f"{int(m):02d}"
+
+
+def _resolve_years_months(data_parameters):
+    """
+    Extract year/years and month/months from data_parameters.
+
+    Accepts:
+        year  : int | str           — single year
+        years : list[int | str]     — multiple years
+        month : int | str | None    — single month, or None meaning all 12
+        months: list[int | str]     — explicit list of months
+
+    Returns (years_list, months_list) with months as zero-padded strings.
+    """
+    if "years" in data_parameters:
+        years = data_parameters["years"]
+        years = list(years) if isinstance(years, (list, tuple)) else [years]
+    elif "year" in data_parameters:
+        year = data_parameters["year"]
+        years = list(year) if isinstance(year, (list, tuple)) else [year]
+    else:
+        raise ValueError("data_parameters must contain 'year' or 'years'")
+
+    if "months" in data_parameters:
+        months = [_normalise_month(m) for m in data_parameters["months"]]
+    elif data_parameters.get("month") is not None:
+        m = data_parameters["month"]
+        months = [_normalise_month(mm) for mm in m] if isinstance(m, (list, tuple)) else [_normalise_month(m)]
+    else:
+        months = [f"{m:02d}" for m in range(1, 13)]
+
+    return years, months
+
+
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False):
+    """
+    Loads footprints and inputs for each year-month pair specified in data_parameters,
+    returning them as concatenated xarrays rather than a LoadSquareSatelliteData object.
+
+    data_parameters may contain:
+        year  : int | str           — single year
+        years : list[int | str]     — multiple years (alternative to year)
+        month : int | str | None    — single month; omit or None for all 12
+        months: list[int | str]     — explicit list of months (alternative to month)
+        load_into_memory : bool     — if True, materialise each month into memory before
+                                      concatenating (avoids large dask graphs at the cost
+                                      of sequential I/O); default False
+
+    All other keys are forwarded to LoadSquareSatelliteData.
+
+    Returns:
+        fp_xr  : xr.Dataset   — concatenated footprints (time, lat, lon)
+        inputs : xr.DataArray — concatenated met inputs  (time, lat, lon, variable_name)
+    """
+    if "met_args" in data_parameters and "met_args" in datapath_args:
+        merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
+        data_parameters["met_args"] = merged_met_args
+        datapath_args.pop("met_args")
+
+    #load_into_memory = data_parameters.get("load_into_memory", False)
+    years, months = _resolve_years_months(data_parameters)
+
+    base_params = {
+        k: v for k, v in data_parameters.items()
+        if k not in ("year", "years", "month", "months", "load_into_memory")
+    }
+
+    all_inputs = []
+    all_fp_xr = []
+
+    for year in years:
+        for month in months:
+            if verbose:
+                print(f"Loading year={year}, month={month}")
+            month_params = {**base_params, "year": year, "month": month}
+            try:
+                data = LoadSquareSatelliteData(**month_params, **datapath_args, verbose=verbose)
+            except Exception as e:
+                print(f"Error loading data for {year}-{month}: {e}")
+                continue
+            inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
+            if load_into_memory:
+                print(f"Loading data into memory for {year}-{month} before concatenation...")
+                inputs = inputs.load()
+                data.fp_xr = data.fp_xr.load()
+            all_inputs.append(inputs)
+            all_fp_xr.append(data.fp_xr)
+
+
+    fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
+    inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
+
+    return fp_xr, inputs
+
+
 def _get_scaler(scaler_name, scaler_module=None):
     """
     Dynamically retrieves a scaler class from a specified module based on its name.
