@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 import torch
+import xarray as xr
 
 import random
 import copy
@@ -90,7 +91,7 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
             display_loss = model_ctx.criterion_test(outputs, true_values, fp_batch)
             running_loss += display_loss.item()
         
-        if i % 25 == 0:
+        if i % 50 == 0:
             print(f"[{epoch}, {i:5d}] Training Loss: {mean_loss/(i+1):.3f} Loss: {running_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s")
             write_to_file(f"[{epoch}, {i:5d}] Training Loss: {mean_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s", paths_ctx.updates_path)
             
@@ -383,14 +384,32 @@ def train_and_save_model(parameters, model_save_dir):
     write_to_file("Load training and testing met and fp data", paths_ctx.updates_path)
 
     client, cluster = gates_training.make_cluster()
+
+    load_monthly = parameters.get("load_data_monthly", False)
     
-    data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
+    if not load_monthly:
+        data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
+        train_fp_data = data.fp_xr
 
-    write_to_file("Successfully load training met and fp data", paths_ctx.updates_path)
+    if load_monthly:
+        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))
+        train_fp_data = data
+
+    write_to_file(f"Successfully load training met and fp data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
+    print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
+
+    if not load_monthly:
+        test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+        test_fp_data = test_data.fp_xr
+    if load_monthly:
+        test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+        test_fp_data = test_data
+        
+
+    write_to_file(f"Successfully load test met and fp data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
+    print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
 
 
-    test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
-    write_to_file("Successfully load test met and fp data", paths_ctx.updates_path)
 
     if parameters.get("load_into_memory", False):
         write_to_file("Loading data into memory as specified in parameters - FIXED", paths_ctx.updates_path)
@@ -414,7 +433,7 @@ def train_and_save_model(parameters, model_save_dir):
     #inputs_dataset = gates_training.setup_input_dataset(parameters, train_inputs)
     #fp_dataset = gates_training.setup_fp_dataset(parameters, data.fp_xr)
 
-    train_loader, test_loader, fp_labels, test_scaled_fp, scalers = gates_training.setup_GATES_dataloaders(parameters, train_inputs, data.fp_xr, test_inputs, test_data.fp_xr)
+    train_loader, test_loader, fp_labels, test_scaled_fp, scalers = gates_training.setup_GATES_dataloaders(parameters, train_inputs, train_fp_data, test_inputs, test_fp_data)
 
     # save the scalers
     save_object(scalers, "scalers",
@@ -422,19 +441,19 @@ def train_and_save_model(parameters, model_save_dir):
     
     # images will get plotted and saved for a random selection of 4 dates from the test set - these indeces are saved to parameters for reference 
     image_plots = random.sample(list(range(len(test_inputs))), k=4)
-    image_dates = np.datetime_as_string(test_data.fp_xr.time.values[sorted(image_plots)])
+    image_dates = np.datetime_as_string(test_fp_data.time.values[sorted(image_plots)])
 
     parameters["plotted_dates"] = image_dates.tolist()
 
     save_object(parameters, "training_settings", paths_ctx.training_outputs_path, model_name,  file_type="json", description=f"Training settings and hyperparameters for model {model_name}", use_wandb=use_wandb)
 
     # create the grid object to make the mesh with and save
-    grid, _ = get_grid(data.fp_xr, parameters.get("grid_reference_fp"))
+    grid, _ = get_grid(train_fp_data, parameters.get("grid_reference_fp"))
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
                            description="Grid object used during training", use_wandb=use_wandb)
     
 
-    training_ctx = TrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers, train_inputs.variable_name.size, data.size)
+    training_ctx = TrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values)) # get size from train params
 
  
     ########################
