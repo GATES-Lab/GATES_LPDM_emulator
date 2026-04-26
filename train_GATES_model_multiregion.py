@@ -140,7 +140,7 @@ def build_region_configs(regions_dict, shared_load_parameters):
     return region_configs
 
 
-def load_multiregion_data(region_configs, input_variables, datapath_args, verbose=True, load_into_memory=True):
+def load_multiregion_data(region_configs, input_variables, datapath_args, verbose=True, load_into_memory=True, load_monthly=False):
     """
     Loads each region's train and test data sequentially, then returns concatenated train data
     and a per-region list of test data.
@@ -176,17 +176,36 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
 
         if verbose:
             print(f"\n--- Loading train data for region: {region_name} ---")
-        data_r, train_inputs_r = gates_training.load_GATES_data(
-            train_params, input_variables=input_variables,
-            datapath_args=datapath_args, verbose=verbose)
+        if not load_monthly:
+            data_r, train_inputs_r = gates_training.load_GATES_data(
+                train_params, input_variables=input_variables,
+                datapath_args=datapath_args, verbose=verbose)
+            train_fp_r = data_r.fp_xr
+        else:
+            data_r, train_inputs_r = gates_training.load_GATES_data_v2(
+                train_params, input_variables=input_variables,
+                datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory)
+            train_fp_r = data_r
 
         if verbose:
             print(f"--- Loading test data for region: {region_name} ---")
             print("------------------------------------------")
-        test_data_r, test_inputs_r = gates_training.load_GATES_data(
-            test_params, input_variables=input_variables,
-            datapath_args=datapath_args, verbose=verbose)
+        if not load_monthly:
+            test_data_r, test_inputs_r = gates_training.load_GATES_data(
+                test_params, input_variables=input_variables,
+                datapath_args=datapath_args, verbose=verbose)
+            test_fp_r = test_data_r.fp_xr
+        else:
+            test_data_r, test_inputs_r = gates_training.load_GATES_data_v2(
+                test_params, input_variables=input_variables,
+                datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory)
+            test_fp_r = test_data_r
 
+        if verbose:
+            # print number of samples in each dataset
+            print("------------------------------------------")
+            print(f"Loaded train inputs for region '{region_name}' with {train_inputs_r.sizes['fp_time']} samples")
+            print(f"Loaded test inputs for region '{region_name}' with {test_inputs_r.sizes['fp_time']} samples")
         if load_into_memory:
             if verbose:
                 print(f"  computing train inputs into memory ({train_inputs_r.nbytes / 1e9:.2f} GB)...")
@@ -196,12 +215,11 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
             test_inputs_r = test_inputs_r.compute()
 
         train_inputs_list.append(train_inputs_r)
-        train_fps_list.append(data_r.fp_xr)
+        train_fps_list.append(train_fp_r)
         test_regions.append({
             "name": region_name,
             "inputs": test_inputs_r,
-            "fp_xr": test_data_r.fp_xr,
-            "data": test_data_r,
+            "fp_xr": test_fp_r,
         })
 
     # Validate consistent spatial size across all regions
@@ -522,9 +540,11 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
     client, cluster = gates_training.make_cluster()
     write_to_file(f"loading data for {len(region_configs)} region(s)", paths_ctx.updates_path)
 
+    load_monthly = parameters.get("load_data_monthly", False)
+
     all_train_inputs, all_train_fps, test_regions = load_multiregion_data(
         region_configs, input_variables, datapath_args,
-        verbose=verbose, load_into_memory=load_into_memory)
+        verbose=verbose, load_into_memory=load_into_memory, load_monthly=load_monthly)
 
     write_to_file("successfully loaded all region data", paths_ctx.updates_path)
 
@@ -580,7 +600,7 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
     first_region = test_regions[0]
     image_plots = random.sample(list(range(len(first_region["inputs"]))), k=4)
     image_dates = np.datetime_as_string(
-        first_region["data"].fp_xr.time.values[sorted(image_plots)])
+        first_region["fp_xr"].time.values[sorted(image_plots)])
     parameters["plotted_dates"] = image_dates.tolist()
     parameters["plotted_region"] = first_region["name"]
     parameters["n_regions"] = len(region_configs)
@@ -592,13 +612,13 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
                 use_wandb=use_wandb)
 
     # Grid from first test region (all regions share the same spatial structure)
-    grid, _ = get_grid(first_region["data"].fp_xr, parameters.get("grid_reference_fp"))
+    grid, _ = get_grid(first_region["fp_xr"], parameters.get("grid_reference_fp"))
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
                 description="Grid object used during training", use_wandb=use_wandb)
 
     training_ctx = TrainingContext(
         parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers,
-        all_train_inputs.variable_name.size, first_region["data"].size)
+        all_train_inputs.variable_name.size, first_region["fp_xr"].lat.size)
 
     write_to_file("setting up model", paths_ctx.updates_path)
     model, model_ctx = gates_training.setup_GATES_model(parameters, training_ctx, paths_ctx)
