@@ -413,7 +413,7 @@ def train_and_save_model(parameters, model_save_dir):
     write_to_file(f"Successfully load test met and fp data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
 
-    if model_ctx.use_wandb:
+    if use_wandb:
         # save the number of testing and training samples to wandb config for reference
         wandb.summary.update({
             "num_training_samples": len(train_fp_data.time),
@@ -423,7 +423,7 @@ def train_and_save_model(parameters, model_save_dir):
     ## add the number of features to the parameter file, and to wandb
     num_features = train_inputs.shape[-1]
     parameters["num_features"] = num_features
-    if model_ctx.use_wandb:
+    if use_wandb:
         wandb.summary.update({"num_features": num_features})
 
 
