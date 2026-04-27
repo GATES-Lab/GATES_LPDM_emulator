@@ -235,7 +235,9 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
         list_of_metrics = {f"metrics_transformed-{k}": v for k, v in computed_metrics["transformed_eval_metrics"].items()}
         list_of_metrics.update({f"metrics_original-{k}": v for k, v in computed_metrics["eval_metrics"].items()})
-        list_of_metrics.update({f"flux/{flux_mode}/{metric_name}": metric_value for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items() for metric_name, metric_value in metrics.items()})
+        for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items():
+            list_of_metrics.update({f"metrics_fluxes_static/{flux_mode}/{k}": v for k, v in metrics.items()})
+
 
         if model_ctx.use_wandb:
             logging_dict = {
@@ -410,6 +412,19 @@ def train_and_save_model(parameters, model_save_dir):
 
     write_to_file(f"Successfully load test met and fp data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
+
+    if model_ctx.use_wandb:
+        # save the number of testing and training samples to wandb config for reference
+        wandb.summary.update({
+            "num_training_samples": len(train_fp_data.time),
+            "num_testing_samples": len(test_fp_data.time),
+        })
+    
+    ## add the number of features to the parameter file, and to wandb
+    num_features = train_inputs.shape[-1]
+    parameters["num_features"] = num_features
+    if model_ctx.use_wandb:
+        wandb.summary.update({"num_features": num_features})
 
 
 
