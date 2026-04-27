@@ -222,7 +222,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         print("calculating losses and metrics") 
         write_to_file("calculating losses and metrics", paths_ctx.updates_path)           
         
-        losses, eval_metrics, transformed_eval_metrics = gates_training.calculate_losses(losses, test_fp_dataset)  
+        losses, computed_metrics = gates_training.calculate_losses(losses, test_fp_dataset)  
 
         
         
@@ -233,9 +233,9 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         #     losses[f"flux_{flux_mode}"]["MAE"].append(flux_metrics["MAE"])
         #     losses[f"flux_{flux_mode}"]["R2"].append(flux_metrics["R2"])
 
-        list_of_metrics = {f"metrics_transformed-{k}": v for k, v in transformed_eval_metrics.items()}
-        list_of_metrics.update({f"metrics_original-{k}": v for k, v in eval_metrics.items()})
-        list_of_metrics.update({f"flux/{flux_mode}/{metric_name}": metric_value for flux_mode, metrics in losses["metrics_fluxes_static"].items() for metric_name, metric_value in metrics.items()})
+        list_of_metrics = {f"metrics_transformed-{k}": v for k, v in computed_metrics["transformed_eval_metrics"].items()}
+        list_of_metrics.update({f"metrics_original-{k}": v for k, v in computed_metrics["eval_metrics"].items()})
+        list_of_metrics.update({f"flux/{flux_mode}/{metric_name}": metric_value for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items() for metric_name, metric_value in metrics.items()})
 
         if model_ctx.use_wandb:
             logging_dict = {
@@ -246,6 +246,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "test/loss": avg_test_loss,
                 "LossFn/train": avg_train_transformed_loss,
                 **list_of_metrics,}
+            
             wandb.log(logging_dict, step=epoch)
 
             # wandb.log({
@@ -272,7 +273,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
         if epoch % model_ctx.epochs_visualise == 0:
             img_save_path = save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
-        if epoch % 3*model_ctx.epochs_visualise == 0:
+        if epoch % (3*model_ctx.epochs_visualise) == 0:
             if model_ctx.use_wandb:
                 wandb.log({f"fps_epoch_{epoch}": wandb.Image(img_save_path)}, step=epoch)
 

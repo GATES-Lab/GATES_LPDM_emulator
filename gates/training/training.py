@@ -311,6 +311,8 @@ def calculate_losses(losses, test_outputs_xr):
     else:
         fp_mask = None
 
+    computed_metrics = {}
+
     eval_metrics = gates_metrics.compute_footprint_metrics(
         test_outputs_xr.fp_original, test_outputs_xr.fp_pred, metrics=["iou", "mae", "mse","bias", "nmae"], nonzero=False, ignore_mask=fp_mask, threshold=1e-5)
 
@@ -333,7 +335,11 @@ def calculate_losses(losses, test_outputs_xr):
                 if metric_name in losses["metrics_fluxes_static"][flux_type]:
                     losses["metrics_fluxes_static"][flux_type][metric_name].append(metric_value)  
 
-    return losses, eval_metrics, transformed_eval_metrics
+    computed_metrics["eval_metrics"] = eval_metrics
+    computed_metrics["transformed_eval_metrics"] = transformed_eval_metrics
+    computed_metrics["static_mf_eval_metrics"] = static_mf_eval_metrics
+
+    return losses, computed_metrics
 """
 def evaluate_outputs(test_outpts, true_fp, fp_mask):
     eval_metrics = gates_metrics.compute_footprint_metrics(

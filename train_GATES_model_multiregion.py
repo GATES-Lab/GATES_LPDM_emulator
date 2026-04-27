@@ -359,13 +359,14 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
                 outputs_orig_r.reshape(*fp_ds_r.fp_original.shape))
 
             # Per-region metrics — use a fresh losses dict so each region's values don't accumulate
-            _, eval_r, trans_eval_r = gates_training.calculate_losses(
+            _, computed_metrics_r = gates_training.calculate_losses(
                 gates_training.initialise_losses(), fp_ds_r)
 
             region_log[region_name] = {
                 "test_loss": avg_test_loss_r,
-                "eval": eval_r,
-                "trans_eval": trans_eval_r,
+                "eval": computed_metrics_r["eval_metrics"],
+                "trans_eval": computed_metrics_r["transformed_eval_metrics"],
+                "static_mf_eval": computed_metrics_r["static_mf_eval_metrics"],
             }
             all_test_fp_datasets.append(fp_ds_r)
 
@@ -376,7 +377,7 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
         losses["train"].append(avg_train_loss)
         losses["test"].append(avg_test_loss_agg)
 
-        losses, eval_metrics, transformed_eval_metrics = gates_training.calculate_losses(
+        losses, computed_metrics = gates_training.calculate_losses(
             losses, fp_ds_all)
 
         # --- W&B logging ---
@@ -391,13 +392,13 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
             }
             logging_dict.update({
                 f"metrics_transformed/aggregate/{k}": v
-                for k, v in transformed_eval_metrics.items()})
+                for k, v in computed_metrics["transformed_eval_metrics"].items()})
             logging_dict.update({
                 f"metrics_original/aggregate/{k}": v
-                for k, v in eval_metrics.items()})
+                for k, v in computed_metrics["eval_metrics"].items()})
             logging_dict.update({
                 f"flux/{flux_mode}/{metric_name}": metric_value
-                for flux_mode, metrics in losses["metrics_fluxes_static"].items()
+                for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items()
                 for metric_name, metric_value in metrics.items()})
             for region_name, rd in region_log.items():
                 logging_dict.update({
