@@ -106,7 +106,9 @@ def main():
         config = yaml.safe_load(f)
 
     domain = parameters["train_load_data"]["region"]
-    region = config["domains"][domain]["domain_name"]
+    domain_config = config["domains"][domain]
+    region = domain_config["domain_name"]
+    fp_domain = domain_config.get("fp_domain")
 
     create_data_directories(region)
 
@@ -133,6 +135,7 @@ def main():
             base_dir=args.source_dir,
             dest_dir=args.dest_dir,
             dry_run=args.dry_run,
+            fp_domain=fp_domain,
         )
 
 if __name__ == "__main__":

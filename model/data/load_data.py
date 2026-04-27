@@ -2025,10 +2025,17 @@ def create_data_directories(region):
     for dir in directories:
         os.makedirs(dir, exist_ok=True)
 
-def populate_data_directories(region, period, base_dir, dest_dir, dry_run=False):
+def populate_data_directories(region, period, base_dir, dest_dir, dry_run=False, fp_domain=None):
     """
     Copy files matching a region and period pattern from multiple archive folders
     (e.g. fp_archive, met_archive) into dest_dir.
+
+    Parameters
+    ----------
+    fp_domain : str, optional
+        If provided, used as the filename prefix filter for fp_archive files
+        (e.g. "BRAZIL") instead of region (e.g. "SOUTHAMERICA"). This avoids
+        picking up files from other domains that share the same region directory.
     """
     os.makedirs(dest_dir, exist_ok=True)
     
@@ -2039,9 +2046,10 @@ def populate_data_directories(region, period, base_dir, dest_dir, dry_run=False)
         print("Now processing:", subdir)
         source_path = os.path.join(base_dir, subdir, region)
         
-        # Build the file pattern (e.g. /base/fp_archive/NORTHAFRICA/NORTHAFRICA_Met_20160[1-3].nc)
-
-        pattern = os.path.join(source_path, f"*{region}*{period}*.nc")
+        # For fp_archive, use fp_domain as the filename prefix if provided so that
+        # e.g. GOSAT-BRAZIL-* files are selected rather than GOSAT-SOUTHAMERICA-* files.
+        prefix = fp_domain if (subdir == "fp_archive" and fp_domain) else region
+        pattern = os.path.join(source_path, f"*{prefix}*{period}*.nc")
         
         # Find matching files
         matching_files = glob.glob(pattern)
