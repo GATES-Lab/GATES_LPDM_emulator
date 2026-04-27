@@ -1068,6 +1068,7 @@ def _cut_satellite_met_multi_delta(
     closest_tolerance="4h",
     verbose=False,
     load_into_memory=False,
+    interp_to=None,
 ):
     """
     Like cut_satellite_met but handles all time_deltas in one call.
@@ -1093,6 +1094,14 @@ def _cut_satellite_met_multi_delta(
     closest_tolerance : str
         Max allowed distance for nearest-timestamp lookup, e.g. "4h".
     verbose : bool
+    interp_to : str or None
+        If None (default), each fp timestamp is matched to the nearest met
+        timestamp (existing behaviour).  If a pandas offset string such as
+        ``"1h"`` or ``"15min"``, each target time is rounded to that resolution
+        and the met is linearly interpolated to that rounded time from the two
+        bracketing met timestamps.  fp times whose rounded target falls outside
+        the met record are treated as NaN and dropped, same as the nearest
+        case.
 
     Returns
     -------
@@ -1111,7 +1120,7 @@ def _cut_satellite_met_multi_delta(
     tol = pd.Timedelta(closest_tolerance)
     met_time_index = met_source.indexes["time"]
 
-    # --- Phase 2: nearest-timestamp lookup for every delta ---
+    # --- Phase 2: timestamp lookup for every delta ---
     nearest_info = {}
     all_unique_times = set()
 
@@ -1120,19 +1129,50 @@ def _cut_satellite_met_multi_delta(
             fp_times if delta == 0
             else pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{delta}h")
         )
-        nearest = met_time_index.get_indexer(target_times, method="nearest", tolerance=tol)
-        nan_mask = nearest == -1
-        nearest_safe = np.where(~nan_mask, nearest, 0)
-        nearest_timestamps = met_time_index.values[nearest_safe]
-        # nan_idxs reported in fp_time space (undo the delta shift)
-        nan_idxs = (target_times[nan_mask] + pd.Timedelta(f"{delta}h")).to_numpy()
 
-        nearest_info[delta] = {
-            "nearest_timestamps": nearest_timestamps,
-            "nan_mask": nan_mask,
-            "nan_idxs": nan_idxs,
-        }
-        all_unique_times.update(nearest_timestamps[~nan_mask])
+        if interp_to is None:
+            # Existing behaviour: snap each target to the nearest met timestamp.
+            nearest = met_time_index.get_indexer(target_times, method="nearest", tolerance=tol)
+            nan_mask = nearest == -1
+            nearest_safe = np.where(~nan_mask, nearest, 0)
+            nearest_timestamps = met_time_index.values[nearest_safe]
+            # nan_idxs reported in fp_time space (undo the delta shift)
+            nan_idxs = (target_times[nan_mask] + pd.Timedelta(f"{delta}h")).to_numpy()
+
+            nearest_info[delta] = {
+                "lookup_times": nearest_timestamps,
+                "nan_mask": nan_mask,
+                "nan_idxs": nan_idxs,
+            }
+            all_unique_times.update(nearest_timestamps[~nan_mask])
+
+        else:
+            # interp_to mode: round target to the requested resolution, then
+            # find the floor/ceiling met timestamps that bracket each rounded time.
+            interp_targets = target_times.round(interp_to)
+            floor_idxs = met_time_index.get_indexer(interp_targets, method="ffill")
+            ceil_idxs = met_time_index.get_indexer(interp_targets, method="bfill")
+            nan_mask = (floor_idxs == -1) | (ceil_idxs == -1)
+            nan_idxs = (target_times[nan_mask] + pd.Timedelta(f"{delta}h")).to_numpy()
+
+            # For nan positions use the first valid interp target as a safe fallback
+            # (those rows are dropped later via all_nan_idxs in the caller).
+            interp_targets_arr = interp_targets.to_numpy()
+            valid_targets = interp_targets_arr[~nan_mask]
+            safe_targets = np.where(
+                ~nan_mask,
+                interp_targets_arr,
+                valid_targets[0] if len(valid_targets) > 0 else interp_targets_arr,
+            )
+
+            nearest_info[delta] = {
+                "lookup_times": safe_targets,
+                "nan_mask": nan_mask,
+                "nan_idxs": nan_idxs,
+            }
+            # Collect the bracket timestamps that will need to be loaded
+            all_unique_times.update(met_time_index.values[floor_idxs[~nan_mask]])
+            all_unique_times.update(met_time_index.values[ceil_idxs[~nan_mask]])
 
     # --- Phase 2b: select the union of required timestamps ---
     # Chunk with time=-1 (one big time chunk) so that the vectorized isel below
@@ -1144,21 +1184,24 @@ def _cut_satellite_met_multi_delta(
     size_chunks = min(100, size_chunks)
     n_chunks = (len(all_unique_times_sorted)) // size_chunks
     # calculate how many chunks will be needed, if each has size size_chunks
-     
+
     if verbose:
-        print(f"Selecting {len(all_unique_times_sorted)} unique met timestamps "
-              f"(across {len(time_deltas)} time_delta(s)) as {n_chunks} dask chunks of size {size_chunks}...")
+        print(f"Selecting {len(all_unique_times_sorted)} unique met timestamps ")
+        # print the first three
+        print(f"First few unique timestamps: {all_unique_times_sorted[:3]} ...")
+        #      f"(across {len(time_deltas)} time_delta(s)) as {n_chunks} dask chunks of size {size_chunks}...")
 
     chunk_kw = {"time": size_chunks, "lat": -1, "lon": -1}
 
     if "levels" in met_source.dims:
         chunk_kw["levels"] = -1
-    met_loaded = met_source.sel(time=list(all_unique_times_sorted))
+    with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+        met_loaded = met_source.sel(time=list(all_unique_times_sorted))
     if load_into_memory:
         print("Loading selected met data into memory...")
         met_loaded = met_loaded.compute()
 
-    met_loaded = met_loaded.chunk(chunk_kw)
+    #met_loaded = met_loaded.chunk(chunk_kw)
 
     # --- Phase 3: spatial structure — computed once, shared across all deltas ---
     release_idxs = _get_release_idxs(fp)
@@ -1175,8 +1218,28 @@ def _cut_satellite_met_multi_delta(
     lon_da = xr.DataArray(lon_indices, dims=["time", "lon"],
                           coords={"time": fp_times})
 
-    # Lookup: unique met timestamp → integer position in met_loaded
-    time_to_pos = {t: i for i, t in enumerate(met_loaded.time.values)}
+    # --- Phase 2c (interp_to only): linearly interpolate the padded bracket data
+    # to the rounded target times.  Padding is spatial-only so order doesn't matter.
+    if interp_to is not None:
+        all_interp_targets = sorted({
+            t for info in nearest_info.values()
+            for t, bad in zip(info["lookup_times"], info["nan_mask"])
+            if not bad
+        })
+        if verbose:
+            print(f"Interpolating met to {len(all_interp_targets)} unique '{interp_to}' targets...")
+            print(f"First few interp targets: {all_interp_targets[:3]} ...")
+        met_for_crop = met_loaded.interp(
+            time=np.array(all_interp_targets, dtype="datetime64[ns]"),
+            method="linear",
+        )
+        if load_into_memory:
+            met_for_crop = met_for_crop.compute()
+    else:
+        met_for_crop = met_loaded
+
+    # Lookup: timestamp → integer position in met_for_crop
+    time_to_pos = {t: i for i, t in enumerate(met_for_crop.time.values)}
 
     # --- Phase 4: per-delta crop from fully in-memory data ---
     results = {}
@@ -1187,11 +1250,11 @@ def _cut_satellite_met_multi_delta(
 
         pos = np.array([
             time_to_pos.get(t, 0)
-            for t in info["nearest_timestamps"]
+            for t in info["lookup_times"]
         ])
 
         # Select and relabel time to fp_times
-        met_delta = met_loaded.isel(time=pos)
+        met_delta = met_for_crop.isel(time=pos)
         met_delta = met_delta.assign_coords(time=fp_times)
 
         # Spatial crop (fully in-memory — instant)
@@ -1234,7 +1297,8 @@ def get_square_satellite_inputs_v2(
     verbose=True,
     add_timedelta_zero=True,
     add_wind_direction=False,
-    load_into_memory=False
+    load_into_memory=False,
+    interp_to=None,
 ):
     """
     Optimised version of ``get_square_satellite_inputs``.
@@ -1265,6 +1329,11 @@ def get_square_satellite_inputs_v2(
         Static fields to append, e.g. ``["topog", "lat_coords", "lon_coords"]``.
     verbose : bool
     add_timedelta_zero : bool
+    interp_to : str or None
+        If None (default), each fp timestamp is matched to the nearest met
+        timestamp.  If a pandas offset string such as ``"1h"`` or ``"15min"``,
+        each target time is rounded to that resolution and the met is linearly
+        interpolated between the two bracketing met timestamps.
 
     Returns
     -------
@@ -1325,6 +1394,7 @@ def get_square_satellite_inputs_v2(
         add_wind_direction=add_wind_direction,
         verbose=verbose,
         load_into_memory=load_into_memory,
+        interp_to=interp_to,
     )
 
 
@@ -1435,6 +1505,8 @@ def get_square_satellite_inputs_v2(
         stacked_static = _stack_and_label_variables(
             static_ds, list(static_ds.data_vars), "static", verbose=verbose,
         )
+        print("loading stadcked static into memory")
+        stacked_static = stacked_static.compute()
         if stacked_static is not None:
             input_arrays.append(stacked_static)
 
