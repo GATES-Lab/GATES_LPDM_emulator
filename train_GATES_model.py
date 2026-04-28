@@ -393,9 +393,10 @@ def train_and_save_model(parameters, model_save_dir):
     if not load_monthly:
         data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
         train_fp_data = data.fp_xr
+        train_failed_months = []
 
     if load_monthly:
-        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))
+        data, train_inputs, train_failed_months = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))
         train_fp_data = data
 
     write_to_file(f"Successfully load training met and fp data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
@@ -404,19 +405,35 @@ def train_and_save_model(parameters, model_save_dir):
     if not load_monthly:
         test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
         test_fp_data = test_data.fp_xr
+        test_failed_months = []
     if load_monthly:
-        test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+        test_data, test_inputs, test_failed_months = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
         test_fp_data = test_data
         
 
     write_to_file(f"Successfully load test met and fp data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
 
+    n_nan_train_inputs = int(train_inputs.isnull().sum())
+    n_nan_train_fp = int(train_fp_data["fp"].isnull().sum())
+    n_nan_test_inputs = int(test_inputs.isnull().sum())
+    n_nan_test_fp = int(test_fp_data["fp"].isnull().sum())
+    print(f"NaNs — train inputs: {n_nan_train_inputs}, train fp: {n_nan_train_fp}, "
+          f"test inputs: {n_nan_test_inputs}, test fp: {n_nan_test_fp}")
+
     if use_wandb:
         # save the number of testing and training samples to wandb config for reference
         wandb.summary.update({
             "num_training_samples": len(train_fp_data.time),
             "num_testing_samples": len(test_fp_data.time),
+            "num_nan_train_inputs": n_nan_train_inputs,
+            "num_nan_train_fp": n_nan_train_fp,
+            "num_nan_test_inputs": n_nan_test_inputs,
+            "num_nan_test_fp": n_nan_test_fp,
+            "num_train_months_failed": len(train_failed_months),
+            "train_months_failed": train_failed_months,
+            "num_test_months_failed": len(test_failed_months),
+            "test_months_failed": test_failed_months,
         })
     
     ## add the number of features to the parameter file, and to wandb

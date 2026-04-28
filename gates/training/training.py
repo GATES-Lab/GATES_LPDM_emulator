@@ -138,6 +138,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     all_inputs = []
     all_fp_xr = []
     loading_times = {}
+    failed_months = []
 
     for year in years:
         for month in months:
@@ -153,12 +154,20 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
                 elapsed_mins = (time.perf_counter() - month_start) / 60
                 loading_times[month_key] = f"{elapsed_mins:.2f}mins"
                 print(f"{month_key} : {loading_times[month_key]}")
+                failed_months.append(month_key)
                 continue
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
             if load_into_memory:
                 print(f"Loading data into memory for {year}-{month} before concatenation...")
                 inputs = inputs.load()
                 data.fp_xr = data.fp_xr.load()
+                # NaN check
+                n_nan_inputs = int(inputs.isnull().sum())
+                n_nan_fp = int(data.fp_xr["fp"].isnull().sum())
+                if n_nan_inputs > 0 or n_nan_fp > 0:
+                    print(f"  WARNING: NaNs found — inputs: {n_nan_inputs}, fp: {n_nan_fp}")
+                else:
+                    print(f"  No NaNs found in inputs or fp.")
             all_inputs.append(inputs)
             all_fp_xr.append(data.fp_xr)
 
@@ -173,10 +182,13 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     print("")
 
 
+    if failed_months:
+        print(f"\n----- Failed to load {len(failed_months)} month(s): {failed_months} -----")
+
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
     inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
 
-    return fp_xr, inputs
+    return fp_xr, inputs, failed_months
 
 
 def _get_scaler(scaler_name, scaler_module=None):

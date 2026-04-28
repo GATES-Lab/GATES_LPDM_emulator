@@ -237,16 +237,15 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 f"variable_name coords differ between region 0 and region {i} "
                 f"({test_regions[i]['name']}). Ensure all regions use identical 'variables' settings.")
 
-    # Concatenate train data; reassign to integer coords to avoid duplicate timestamps
-    all_train_inputs = xr.concat(train_inputs_list, dim="fp_time")
-    #all_train_inputs = all_train_inputs.assign_coords(
-    #    fp_time=np.arange(len(all_train_inputs.fp_time)))
-
-    all_train_fps = xr.concat(train_fps_list, dim="time")
-    #all_train_fps = all_train_fps.assign_coords(
-    #    time=np.arange(len(all_train_fps.time)))
+    # Concatenate train data; drop duplicate timestamps arising from overlapping regions
+    all_train_inputs = xr.concat(train_inputs_list, dim="fp_time").drop_duplicates(dim="fp_time")
+    all_train_fps = xr.concat(train_fps_list, dim="time").drop_duplicates(dim="time")
 
     if verbose:
+        total_before = sum(inp.sizes['fp_time'] for inp in train_inputs_list)
+        n_dropped = total_before - all_train_inputs.sizes['fp_time']
+        if n_dropped > 0:
+            print(f"  Dropped {n_dropped} duplicate fp_time entries from overlapping regions.")
         print(f"\nConcatenated train data: {all_train_inputs.sizes['fp_time']} total samples "
               f"across {len(region_configs)} region(s)")
         for r in test_regions:
