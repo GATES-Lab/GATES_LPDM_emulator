@@ -1204,19 +1204,15 @@ def _cut_satellite_met_multi_delta(
     #met_loaded = met_loaded.chunk(chunk_kw)
 
     # --- Phase 3: spatial structure — computed once, shared across all deltas ---
-    release_idxs = _get_release_idxs(fp)
-    met_loaded, domain_lats, domain_lons, release_idxs = _pad_domain(
+    ## the bug was here - but am now skipping over release_idxs, and just using the lat_coords and lon_coords generated when cropping the footprints
+    release_idxs = _get_release_idxs(fp, domain_lats=met_source.lat.values, domain_lons=met_source.lon.values)
+    met_loaded, _, _, _ = _pad_domain(
         met_loaded, fp, release_idxs, half, pad_mode, verbose=verbose
     )
 
-    lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(metsize)[None, :]
-    lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(metsize)[None, :]
 
-    # DataArrays for spatial indexing — time coord matches fp_times
-    lat_da = xr.DataArray(lat_indices, dims=["time", "lat"],
-                          coords={"time": fp_times})
-    lon_da = xr.DataArray(lon_indices, dims=["time", "lon"],
-                          coords={"time": fp_times})
+    lat_ds = fp.lat_coords
+    lon_ds = fp.lon_coords
 
     # --- Phase 2c (interp_to only): linearly interpolate the padded bracket data
     # to the rounded target times.  Padding is spatial-only so order doesn't matter.
@@ -1228,7 +1224,7 @@ def _cut_satellite_met_multi_delta(
         })
         if verbose:
             print(f"Interpolating met to {len(all_interp_targets)} unique '{interp_to}' targets...")
-            print(f"First few interp targets: {all_interp_targets[:3]} ...")
+
         met_for_crop = met_loaded.interp(
             time=np.array(all_interp_targets, dtype="datetime64[ns]"),
             method="linear",
@@ -1253,23 +1249,17 @@ def _cut_satellite_met_multi_delta(
             for t in info["lookup_times"]
         ])
 
-        # Select and relabel time to fp_times
         met_delta = met_for_crop.isel(time=pos)
         met_delta = met_delta.assign_coords(time=fp_times)
 
-        # Spatial crop (fully in-memory — instant)
-        cropped = met_delta.isel(lat=lat_da, lon=lon_da)
+        # Spatial crop 
+
+        cropped = met_delta.sel(lat=lat_ds, lon=lon_ds, method="nearest")
+        # store the lat and lon values in cropped as coordinates before reassigning the lat and lon coordinates to be the index values (0 to metsize-1)
+        cropped = cropped.assign_coords(lat_coords=(("time", "lat"), cropped.lat.values), lon_coords=(("time", "lon"), cropped.lon.values))
+
         cropped = cropped.assign_coords(lat=np.arange(metsize), lon=np.arange(metsize))
 
-        # Attach actual geographic coordinates as variables
-        cropped = cropped.assign({
-            "lat_coords": xr.DataArray(
-                domain_lats[lat_indices], dims=["time", "lat"],
-                coords={"time": fp_times}),
-            "lon_coords": xr.DataArray(
-                domain_lons[lon_indices], dims=["time", "lon"],
-                coords={"time": fp_times}),
-        })
 
         if add_wind_direction:
             try:
@@ -1384,13 +1374,16 @@ def get_square_satellite_inputs_v2(
             print(f"Casting met to float32 from {met_source[first_var].dtype}")
         met_source = met_source.astype("float32")
 
+    pad_mode = "edge"
+
     # --- Single multi-delta crop (one dask compute call) ---
     all_met_files, nan_idxs_per_delta = _cut_satellite_met_multi_delta(
         met_source,
-        data.fp_data_full,
+        #data.fp_data_full,
+        data.fp_xr,
         metsize=data.size,
         time_deltas=time_deltas,
-        pad_mode=data.fill_outofdomain_with,
+        pad_mode=pad_mode,
         add_wind_direction=add_wind_direction,
         verbose=verbose,
         load_into_memory=load_into_memory,
