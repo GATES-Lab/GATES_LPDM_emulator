@@ -15,7 +15,7 @@ hparams = {
 
     "test_load_data" : {
         "year":"2017",
-        "freq":1
+        "freq":18
     },
 
     "variables" : {
@@ -126,7 +126,7 @@ sim_hparams_4 = copy.deepcopy(hparams)
 sim_hparams_4['normalization'] = 'all'
 sim_hparams_4['learning_rate'] = 5e-6
 sim_hparams_4['train_load_data']['year'] = "201[4-5]"
-sim_hparams_4['test_load_data']['year'] = "2016"
+sim_hparams_4['test_load_data']['year'] = "2018"
 '''
 sim_hparams_4['train_load_data']['year'] = "201[4-6]"
 sim_hparams_4['test_load_data']['year'] = "2017"
@@ -141,8 +141,8 @@ sim_hparams_4['output_format']='corrected'
 sim_hparams_5 = copy.deepcopy(hparams)
 sim_hparams_5['normalization'] = 'all'
 sim_hparams_5['learning_rate'] = 5e-6
-sim_hparams_5['train_load_data']['year'] = "201[3-5]"
-sim_hparams_5['test_load_data']['year'] = "2016"
+sim_hparams_5['train_load_data']['year'] = "201[4-6]"
+sim_hparams_5['test_load_data']['year'] = "2018"
 '''
 sim_hparams_5['train_load_data']['year'] = "201[4-6]"
 sim_hparams_5['test_load_data']['year'] = "2017"

@@ -554,6 +554,14 @@ def train_bc_prediction_pipeline_practice(_hparams,_practice):
     print(name_output_format)
     height_indices = [4,5,6,7] if name_auxiliary == 'multiple' else [4]
 
+    test_subset = test_data.fp_data_full[["release_lon", "release_lat"]].assign_coords(
+    lat=test_data.fp_data_full["lat"],
+    lon=test_data.fp_data_full["lon"])
+
+    #train_subset.to_netcdf("train_subset.nc")   
+
+    test_subset.to_netcdf("test_subset_full_2018.nc")   
+
     '''
     baseline_list, outputs, auxiliary_cams = baseline_mol_correction(data,train_months, train_year,output_format=name_output_format,height_indices=height_indices)
     test_baseline_list, test_outputs, test_auxiliary_cams = baseline_mol_correction(test_data,test_months, test_year,output_format =name_output_format,height_indices=height_indices)

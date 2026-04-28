@@ -1219,13 +1219,13 @@ def process_domain_met(met, fp, time_delta=0,relevant_levels=None, relevant_vari
     assert time_delta>=0, "time_delta needs to be zero or positive!!"
     interp_method ="nearest"
     if time_delta==0:
-        met = met.interp(time=fp_times)
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            met = met.interp(time=fp_times)
         met = met.assign({"fp_time":(("time"), fp_times)})
     else:
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
-        met = met.interp(time=fp_times,method=interp_method)
-
-        # store the original footprint times as a separate value
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            met = met.interp(time=fp_times, method=interp_method)
         met = met.assign({"fp_time":(("time"),fp.time.values)})
     
 
@@ -1299,15 +1299,15 @@ def cut_satellite_met_v4(met, fp, metsize, time_delta=0, relevant_levels=None, r
 
 
     if time_delta==0:
-        met = met.interp(time=fp_times)
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            met = met.interp(time=fp_times)
         met = met.assign({"fp_time":(("time"), fp_times)})
     else:
-
         fp_times = (pd.DatetimeIndex(fp_times) - pd.Timedelta(f"{time_delta}h"))
-        met = met.interp(time=fp_times)
-
-        # store the original footprint times as a separate value
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            met = met.interp(time=fp_times)
         met = met.assign({"fp_time":(("time"),fp.time.values)})
+
 
     met = met.assign_coords({"time_delta":("time_delta",[time_delta])})
 
