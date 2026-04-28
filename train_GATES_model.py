@@ -456,6 +456,7 @@ def train_and_save_model(parameters, model_save_dir):
     paths_ctx.training_outputs_path, model_name, description=f"Input and output scaler objects used in model {model_name}", use_wandb=use_wandb)
     
     # images will get plotted and saved for a random selection of 4 dates from the test set - these indeces are saved to parameters for reference 
+    random.seed(seed)
     image_plots = random.sample(list(range(len(test_inputs))), k=4)
     image_dates = np.datetime_as_string(test_fp_data.time.values[sorted(image_plots)])
 
