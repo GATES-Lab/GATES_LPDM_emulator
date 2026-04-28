@@ -94,7 +94,6 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
                 raise ValueError(f"No matching files found in the specified directory:\n {fp_datadir} \nCheck that the path is correct and that there are files matching the pattern.")
             # attempt to load dataset of multiple files thfe standard way
             fp_data_full = xr.open_mfdataset(sorted(glob.glob(str(fp_datadir))), engine="h5netcdf", combine='by_coords', preprocess=_round_time_to_seconds, **chunk_args)
-            print(f"After fp_data_full: {len(fp_data_full.__dask_graph__())} tasks")
 
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
@@ -268,7 +267,7 @@ class LoadBaseSatelliteData:
 
 
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True):
         
         self.dataset_format = "base" 
         self.data_type="satellite"
@@ -368,7 +367,7 @@ class LoadBaseSatelliteData:
     
 
 
-    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True, parallel=False):
+    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True, parallel=False, met_chunksize=8):
         """
         loads meteorology and selects the met levels and variables if required
 
@@ -383,7 +382,7 @@ class LoadBaseSatelliteData:
         # 1) load from file
         self.met_file = self._get_meteorology_file(
             met_datadir,
-            parallel=parallel, met_levels=met_levels, met_variables=met_variables
+            parallel=parallel, met_levels=met_levels, met_variables=met_variables, met_chunksize=met_chunksize
         )
 
         # 2) check domain overlap
@@ -456,7 +455,7 @@ class LoadBaseSatelliteData:
 
         return topog_file, landcover_file
 
-    def _get_meteorology_file(self, met_datadir, lazy_load=True, parallel=False,met_levels=[], met_variables=[]):
+    def _get_meteorology_file(self, met_datadir, lazy_load=True, parallel=False,met_levels=[], met_variables=[], met_chunksize=8):
         """
         Load the meteorology from the directory, concatenating files along the time dimension. If met_datadir is None, uses default directory and file format. If met_datadir is passed, the date will be automatically added, so the files should have format example_name_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/example_name_"
         """
@@ -485,7 +484,7 @@ class LoadBaseSatelliteData:
                 combine="nested",
                 data_vars="minimal",
                 coords="minimal",
-                #combine="by_coords"
+                #combine="by_coords",
                 parallel=parallel,
                 join=join_type, #inner for China, SA, override for India or Sahara
                 **chunk_args,
@@ -498,8 +497,8 @@ class LoadBaseSatelliteData:
                 try:
                     met_file = met_file.sel(model_level_number=met_levels)
                 except KeyError:
-                    print(f"there was an error selecting the met levels you passed. Check! \n You passed  {met_levels} but met loaded has {met_file.levels}. \n Loading all levels") 
-            print(f"After open_mfdataset: {len(met_file.__dask_graph__())} tasks")
+                    print(f"there was an error selecting the met levels you passed. Check! \n You passed  {met_levels} but met loaded has {met_file.model_level_number}. \n Loading all levels") 
+            #print(f"After open_mfdataset: {len(met_file.__dask_graph__())} tasks")
 
             #met_file = select_met_levels(met_file, levels=met_levels)
             #met_file = select_met_variables(met_file, variables=met_variables)
@@ -507,12 +506,13 @@ class LoadBaseSatelliteData:
                 met_file = met_file[met_variables]
 
 
-            print(f"After variable selection: {len(met_file.__dask_graph__())} tasks")
+            #print(f"After variable selection: {len(met_file.__dask_graph__())} tasks")
 
-            print("Met file chunk stats:")
             met_file = met_file.unify_chunks()
-            print("Chunks:", met_file.chunks)
-            print("Dataset size (GB):", met_file.nbytes/1e9)
+            if self.verbose:
+                print("Met file chunk stats:")
+                print("Chunks:", met_file.chunks)
+                print("Dataset size (GB):", met_file.nbytes/1e9)
 
             for dim in ("forecast_period", "forecast_reference_time"):
                 if dim in met_file.dims:
@@ -522,9 +522,9 @@ class LoadBaseSatelliteData:
 
             if "model_level_number" in met_file.dims:
                 met_file = met_file.rename({"model_level_number": "levels"})
-            print(f"before rename_latlon: {len(met_file.__dask_graph__())} tasks")
+
             met_file = _rename_latlon(met_file)
-            print(f"After rename_latlon: {len(met_file.__dask_graph__())} tasks")
+
             for dim in ("lat", "lon", "time"):
                 if dim in met_file.dims and met_file.get_index(dim).has_duplicates:
                     met_file = met_file.drop_duplicates(dim=dim)
@@ -614,7 +614,7 @@ class LoadBaseSatelliteData:
                 UserWarning
             )
 
-    def _load_footprints(self, fp_datadir):
+    def _load_footprints(self, fp_datadir, load_fps_in_mem=True):
         """
         Load footprint from fp_datadir and applies subsampling according to the freq and sampling_mode parameters. 
         
@@ -631,10 +631,11 @@ class LoadBaseSatelliteData:
         # uses the sampling_mode and freq parameters
         self._subsample_frequency(**self.subsample_parameters)
 
-        print(self.fp_data_full)
+        #print(self.fp_data_full)
         if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
-        self.fp_data_full.fp.load()
-        print("loaded fp variable")
+        if load_fps_in_mem:
+            self.fp_data_full.fp.load()
+            print("loaded fp variable into mem")
         #print(self.fp_data_full)
         #self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": "auto"})
 
@@ -926,13 +927,14 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         - verbose: if True, prints out the steps throughout the data loading process
         - load_everything: bool, if True, loads all data (footprints, meteorology and topography) at once when initializing the class. If False, only loads footprints, and meteorology and topography can be loaded later with the load_meteorology() and load_topog() functions. Default is False
         - cfg: a gates.config.Config object containing the config values. If None, the config will be loaded from the config file. If passing as an argument, this supercedes loading from the config file, and allows you to pass a custom config object with custom paths and settings.
+        - crop_met: bool, if True, crops the meteorology to a square of SxS around the emasurement location, following the format of the footprint and storing as data.met . If false, the meteorology is only loaded and preprocessed, but not cropped. The inputs function calculates the domain directly from the loaded (uncropped) .met_file, so cropping the meteorology is redundant when using the inputs function.
     
     met_args:
         see load_meteorology()
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
 
         print(dask.__version__)
 
@@ -998,7 +1000,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         
         #### load footprint (fp) data, subsample, crop
         if verbose: print("---- LOADING FOOTPRINTS") 
-        self._load_footprints(self.fp_datadir)
+        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem)
         self._process_footprints(lazy_load)
 
         self.met_processed = False
@@ -1076,7 +1078,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
 
     def remove_indeces(self, nan_idxs):
         """
-        removes any set of indeces passed as nan_idxs from all the objects in the dataset
+        removes any set of TIMESTAMPS passed as nan_idxs from all the objects in the dataset
         """
         self.fp_data_full = self.fp_data_full.drop_sel(time=nan_idxs)
         if hasattr(self, "fp_xr"):
