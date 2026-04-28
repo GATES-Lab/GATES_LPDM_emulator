@@ -344,7 +344,7 @@ class LoadBaseSatelliteData:
         """
         if fp_datadir is None:
             fp_domain = cfg.domains.get(self.region, {}).get("fp_domain", self.domain)
-            self.fp_datadir = Path(cfg.fp_datadir) / self.domain / f"*{fp_domain}_{str(self.date)}*.nc"
+            self.fp_datadir = Path(cfg.fp_datadir) / self.domain / f"*{fp_domain}*_{str(self.date)}*.nc"
         else:
             self.fp_datadir=Path(str(fp_datadir)+ f"*{str(self.date)}*.nc")
 
