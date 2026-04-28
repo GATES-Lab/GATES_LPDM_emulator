@@ -2,6 +2,15 @@ import xarray as xr
 import numpy as np
 import glob
 
+# To do:
+# Check it all works - expect some fp Nans?
+# Output summary
+# Crop/align met to fp times and spatial region? I.e. properly load using Elena's functions
+    # Also do 3hr interp etc
+# Automate for more times/regions
+
+
+
 # ── Configure these paths ───────────────────────────────────────
 met_dir = "data/met_archive/SOUTHAMERICA"
 fp_dir  = "data/fp_archive/SOUTHAMERICA"
@@ -23,18 +32,20 @@ for month in [f"{m:02d}" for m in range(1, 13)]:
     if not files:
         print(f"  {year}-{month}: NO FILE FOUND"); continue
     ds = xr.open_dataset(files[0], engine="h5netcdf", chunks={})
-    for var in ds.data_vars:
-        n = int(ds[var].isnull().sum().values)
-        if n > 0:
-            print(f"  {year}-{month} | {var}: {n} NaNs  shape={ds[var].shape}")
-        #else:
-    print(f"  {year}-{month}: clean for NaNs")
+    if "fp" not in ds:
+        print(f"  {year}-{month}: 'fp' variable not found in file"); continue
+    n = int(ds["fp"].isnull().sum().values)
+    if n > 0:
+        print(f"  {year}-{month}: {n} NaNs in fp  shape={ds['fp'].shape}")
+    else:
+        print(f"  {year}-{month}: clean")
     ds.close()
 
 print()
 print("=" * 60)
 print(f"MET NaN check — {year} {region}")
 print("=" * 60)
+
 for month in [f"{m:02d}" for m in range(1, 13)]:
     print(f"Checking {year}-{month} met...")
     files = glob.glob(f"{met_dir}/*{year}{month}*.nc")
