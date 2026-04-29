@@ -167,6 +167,7 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
     train_inputs_list = []
     train_fps_list = []
     test_regions = []
+    all_failed_months = {}  # {region_name: {"train": [...], "test": [...]}}
 
     for region_config in region_configs:
         train_params = copy.deepcopy(region_config["train_load_data"])
@@ -181,8 +182,9 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 train_params, input_variables=input_variables,
                 datapath_args=datapath_args, verbose=verbose)
             train_fp_r = data_r.fp_xr
+            train_failed_r = []
         else:
-            data_r, train_inputs_r = gates_training.load_GATES_data_v2(
+            data_r, train_inputs_r, train_failed_r = gates_training.load_GATES_data_v2(
                 train_params, input_variables=input_variables,
                 datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory)
             train_fp_r = data_r
@@ -195,11 +197,14 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 test_params, input_variables=input_variables,
                 datapath_args=datapath_args, verbose=verbose)
             test_fp_r = test_data_r.fp_xr
+            test_failed_r = []
         else:
-            test_data_r, test_inputs_r = gates_training.load_GATES_data_v2(
+            test_data_r, test_inputs_r, test_failed_r = gates_training.load_GATES_data_v2(
                 test_params, input_variables=input_variables,
                 datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory)
             test_fp_r = test_data_r
+
+        all_failed_months[region_name] = {"train": train_failed_r, "test": test_failed_r}
 
         if verbose:
             # print number of samples in each dataset
@@ -251,7 +256,7 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
         for r in test_regions:
             print(f"  Test '{r['name']}': {r['inputs'].sizes['fp_time']} samples")
 
-    return all_train_inputs, all_train_fps, test_regions
+    return all_train_inputs, all_train_fps, test_regions, all_failed_months
 
 
 def transform_test_region(test_inputs, test_fps, scalers, add_nan_mask, batch_size):
@@ -542,7 +547,7 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
 
     load_monthly = parameters.get("load_data_monthly", False)
 
-    all_train_inputs, all_train_fps, test_regions = load_multiregion_data(
+    all_train_inputs, all_train_fps, test_regions, all_failed_months = load_multiregion_data(
         region_configs, input_variables, datapath_args,
         verbose=verbose, load_into_memory=load_into_memory, load_monthly=load_monthly)
 
@@ -551,6 +556,17 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
     if cluster is not None:
         cluster.close()
         client.close()
+
+    if use_wandb:
+        failed_summary = {}
+        for region_name, months in all_failed_months.items():
+            failed_summary[f"{region_name}_train_months_failed"] = months["train"]
+            failed_summary[f"{region_name}_num_train_months_failed"] = len(months["train"])
+            failed_summary[f"{region_name}_test_months_failed"] = months["test"]
+            failed_summary[f"{region_name}_num_test_months_failed"] = len(months["test"])
+        failed_summary["num_train_samples"] = int(all_train_inputs.sizes["fp_time"])
+        failed_summary["num_test_regions"] = len(test_regions)
+        wandb.summary.update(failed_summary)
 
     # Fit scalers on concatenated train data
     write_to_file("fitting scalers on concatenated train data", paths_ctx.updates_path)
