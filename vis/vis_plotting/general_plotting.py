@@ -6,6 +6,9 @@ import numpy as np
 import cartopy.feature as cfeature
 import cartopy.crs as ccrs
 
+from pathlib import Path
+from itertools import cycle
+
 def _get_lat_lon_bounds(data, type="met", wrap_center=0.0):
     """
     Return a dictionary with the min/max lat/lon bounds from the specified data series (met, fp, or topo).
@@ -195,55 +198,54 @@ def plot_domain(data,
     plt.tight_layout()
     return fig, ax
 
+
+
 def plot_multiple_data_series(
-    data,
-    show=("met", "fp", "topo"),
+    datasets,
+    region_names=None,
+    show=("met",),
     colours=None,
-    linestyles=None,
-    linewidths=None,
+    linewidth=2.2,
     facealpha=0.0,
     projection="PlateCarree",
     wrap_center=0.0,
     zoom_to_union=True,
-    title="UM Domains: Met, Footprints, and Topography"
+    title="UM Domains",
+    save=False,
+    outdir="multi_domain_characterisation",
+    filename="domain_bounds.png",
 ):
     """
-    Plot the bounding rectangles from the provided `data` container (met/fp/topo).
-    
+    Plot a single bounding rectangle per region, using different colours per region.
+
     Parameters
     ----------
-    data : LoadBaseSatelliteData
-        Container with met/fp/topo datasets
+    datasets : sequence
+        Iterable of LoadBaseSatelliteData objects
+    region_names : sequence of str
+        Names of each region
     show : tuple of str
-        Which datasets to plot: any subset of ("met", "fp", "topo")
-    colours : dict
-        Optional dict to specify edge colors for each type, e.g. {"met":"tab:blue","fp":"tab:orange","topo":"tab:green"}. Defaults to these colors
-    linestyles : dict
-        Optional dict to specify line styles for each type, e.g. {"met":"-","fp":"--","topo":"-."}. Defaults to these styles
-    linewidths : dict
-        Optional dict to specify line widths for each type, e.g. {"met":2.2,"fp":2.2,"topo":2.2}. Defaults to 2.2 for all
-    facealpha : float
-        Alpha transparency for the rectangle face color (default 0.0 for transparent). If >0, the face color will be the same as the edge color but with this alpha value.
-    projection : str
-        Which cartopy projection to use for the plot (default "PlateCarree"). Options include "Robinson", "Mollweide", "Mercator", "LambertConformal", etc.
-    wrap_center : float
-        Center longitude for wrapping (default 0.0). Only relevant if the data crosses the anti-meridian (near NZ/Alaska), in which case the bounds will be split into two
-    zoom_to_data : bool
-        Whether to zoom the map to the data bounds (default True). Only applies if the bounds do not cross the anti-meridian, as zooming is not possible in that case.
-    title : str
-        Optional title for the plot (default None, which will use "{type.upper()} Domain")
-        
-    Returns
-    -------
-    fig, ax : matplotlib figure and axis objects
+        Single-element tuple, e.g. ("met",), ("fp",), or ("topo",)
+    colours : sequence of str
+        Colours per region (cycled if fewer than regions)
     """
-    # Style defaults
+
+    if len(show) != 1:
+        raise ValueError("This simplified version expects exactly one entry in `show`")
+
+    n = len(datasets)
+
+    if region_names is None:
+        region_names = [f"Region {i+1}" for i in range(n)]
+    if len(region_names) != n:
+        raise ValueError("region_names must match datasets")
+
     if colours is None:
-        colours = {"met": "tab:blue", "fp": "tab:orange", "topo": "tab:green"}
-    if linestyles is None:
-        linestyles = {"met": "-", "fp": "--", "topo": "-."}
-    if linewidths is None:
-        linewidths = {"met": 2.2, "fp": 2.2, "topo": 2.2}
+        colours = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    if len(colours) < n:
+        colours = (colours * n)[:n]
+
+    domain_type = show[0]
 
     # Projection
     proj = {
@@ -254,64 +256,78 @@ def plot_multiple_data_series(
         "LambertConformal": ccrs.LambertConformal(),
     }.get(projection, ccrs.PlateCarree())
 
-    # Figure & map
     fig = plt.figure(figsize=(10, 6))
     ax = plt.axes(projection=proj)
     ax.set_global()
-    # IMPORTANT: prevent polygon clipping at projection boundary
     ax.set_extent([-180, 180, -90, 90], crs=ccrs.PlateCarree())
 
     ax.coastlines(linewidth=0.8)
-    ax.add_feature(cfeature.BORDERS, linewidth=0.4, edgecolor='k')
-    ax.gridlines(draw_labels=False, linewidth=0.4, color='gray', alpha=0.5, linestyle='--')
+    ax.add_feature(cfeature.BORDERS, linewidth=0.4, edgecolor="k")
+    ax.gridlines(
+        draw_labels=False, linewidth=0.4,
+        color="gray", alpha=0.5, linestyle="--"
+    )
 
-    # Draw each requested domain
     bounds_list = []
-    for name in show:
+
+    # Plot one rectangle per region
+    for data, name, colour in zip(datasets, region_names, colours):
         try:
-            b = _get_lat_lon_bounds(data, type=name, wrap_center=wrap_center)
-            polys = _rectangle_segments(b["min_lon"], b["max_lon"], b["min_lat"], b["max_lat"],
-                                       wrap_center=wrap_center)
+            b = _get_lat_lon_bounds(data, type=domain_type, wrap_center=wrap_center)
+            polys = _rectangle_segments(
+                b["min_lon"], b["max_lon"],
+                b["min_lat"], b["max_lat"],
+                wrap_center=wrap_center,
+            )
+
             first = True
             for poly in polys:
                 patch = Polygon(
-                    np.array(poly), closed=True,
-                    edgecolor=colours.get(name, "k"),
-                    facecolor=colours.get(name, "k") if facealpha > 0 else "none",
-                    linewidth=linewidths.get(name, 2.0),
-                    linestyle=linestyles.get(name, "-"),
+                    np.array(poly),
+                    closed=True,
+                    edgecolor=colour,
+                    facecolor=colour if facealpha > 0 else "none",
+                    linewidth=linewidth,
                     alpha=facealpha if facealpha > 0 else 1.0,
-                    zorder=5,
-                    transform=ccrs.PlateCarree(),   # rectangles are in geodetic coords
+                    transform=ccrs.PlateCarree(),
+                    clip_on=False,
                     label=name if first else None,
-                    clip_on=False                    # be explicit: do not clip to axes
+                    zorder=5,
                 )
                 ax.add_patch(patch)
                 first = False
-            bounds_list.append((name, b))
+
+            bounds_list.append(b)
+
         except Exception as e:
-            print(f"[plot_all_domains] Skipped '{name}': {e}")
+            print(f"[plot_multiple_data_series] Skipped '{name}': {e}")
 
     # Legend
-    handles, labels = ax.get_legend_handles_labels()
-    if handles:
-        ax.legend(loc='lower left', frameon=True, title="Domains")
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(loc="lower left", title="Regions", frameon=True)
 
-    # Optional union zoom (only if none cross the anti-meridian near NZ/Alaska)
+    # Zoom to union if safe
     def crosses_antimeridian(b):
         return b["max_lon"] < b["min_lon"]
 
     if zoom_to_union and bounds_list:
-        if not any(crosses_antimeridian(b) for _, b in bounds_list):
-            min_lon_union = min(b["min_lon"] for _, b in bounds_list)
-            max_lon_union = max(b["max_lon"] for _, b in bounds_list)
-            min_lat_union = min(b["min_lat"] for _, b in bounds_list)
-            max_lat_union = max(b["max_lat"] for _, b in bounds_list)
-            ax.set_extent([min_lon_union, max_lon_union, min_lat_union, max_lat_union],
-                          crs=ccrs.PlateCarree())
+        if not any(crosses_antimeridian(b) for b in bounds_list):
+            ax.set_extent([
+                min(b["min_lon"] for b in bounds_list),
+                max(b["max_lon"] for b in bounds_list),
+                min(b["min_lat"] for b in bounds_list),
+                max(b["max_lat"] for b in bounds_list),
+            ], crs=ccrs.PlateCarree())
 
     plt.title(title, pad=10)
     plt.tight_layout()
+
+    # Save if requested
+    if save:
+        outdir = Path(outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        fig.savefig(outdir / filename, dpi=300, bbox_inches="tight")
+
     return fig, ax
 
 def country_mask(

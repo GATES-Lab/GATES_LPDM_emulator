@@ -1186,7 +1186,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         if return_fig:
             return fig, ax
 
-    def plot_footprint_mean(self,levels = [-4, -3.5, -3,  -2.5, -2, -1.5], vmin_vmax=[-4,-2], add_cbar=False):
+    def plot_footprint_mean(self, title=None, levels = [-4, -3.5, -3,  -2.5, -2, -1.5], vmin_vmax=[-4,-2], add_cbar=False):
         """
         Plot the mean of the cropped and aligned footprints. Levels and vmin_vmax adjust the colour scale. If add_cbar is True, adds a colorbar
         """
@@ -1215,7 +1215,10 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         ax.set_xlabel("Longitude (in grid-cells)")
         ax.set_ylabel("Latitude (in grid-cells)")
 
-        fig.suptitle("Mean footprint, centered around release point")
+        if title:
+            fig.suptitle(title)
+        else:
+            fig.suptitle("Mean footprint, centered around release point")
         plt.show()
 
 
