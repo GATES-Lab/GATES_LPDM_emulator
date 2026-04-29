@@ -637,7 +637,7 @@ def calculate_mfs_xarray(fp, fluxes, transform_factor=None):
 
 
 
-def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_patterns=None, transform_factor=None):
+def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_patterns=None, transform_factor=None, ignore_mask=None):
     """Compute mole-fraction metrics using static, hand-designed flux patterns.
 
     For each flux pattern the footprints are multiplied by the flux and summed
@@ -693,6 +693,10 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
     # 2. Determine spatial shape (H, W) and build default flux patterns
     # ------------------------------------------------------------------ #
 
+    ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
+
+
+
     if flux_patterns is None:
         rows, cols = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
 
@@ -724,8 +728,10 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
             )
         N = fp_true.shape[0]
         flux_tiled = np.tile(flux_2d, (N, 1, 1))  # (N, H, W)
-        mf_true = calculate_mfs(fp_true, flux_tiled, transform_factor)
-        mf_pred = calculate_mfs(fp_pred, flux_tiled, transform_factor)
+        # multiply by ignoremask
+        flux = np.where(ignore_np, 0, flux_tiled)
+        mf_true = calculate_mfs(fp_true, flux, transform_factor)
+        mf_pred = calculate_mfs(fp_pred, flux, transform_factor)
 
         results[label] = compute_mfs_metrics(mf_true, mf_pred)
 
