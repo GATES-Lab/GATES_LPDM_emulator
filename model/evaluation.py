@@ -344,8 +344,8 @@ def get_loss(model_name, directory=None):
     print(f"loading last checkpoint for {model_name}")
     if directory is None:
         # change to default directory!
-        directory="/user/work/ef17148/GCN/graphnet/graph_weather/trained_satellite_models_fixedmet/"
-    files = sorted(glob.glob(glob.escape(f"{directory}{model_name}/{model_name}_")+"*.pt"), key=getint)
+        directory="/group/chem/acrg/ef17148/trained_satellite_models/"
+    files = sorted(glob.glob(glob.escape(f"{directory}{model_name}/")+"*.pt"), key=getint)
     assert len(files)>0, f"no files found for model name {model_name} at {directory}{model_name}/{model_name}"
     checkpoint_to_load = files[-1] 
         
@@ -674,8 +674,7 @@ def quantile_mapping_interp(truths, preds, to_correct, n_quantiles=100, mode="re
     return corrected
 
 
-def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], cut_lons=[0,0], title_modifier="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title="top", return_cbar=False):
-    
+def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", extent="default", cut_lats=[0,0], cut_lons=[0,0], title_modifier="", bin=False, domain_lats=None, domain_lons=None, divergent=False, vmin_vmax = None, cmap="metrics", fig=None, cbar=True, cbar_position="bottom", title="top", return_cbar=False, cbar_label=None):
     
     if domain_lats is None:
         print("need domain lats!")
@@ -727,24 +726,33 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
             coord = -0.2
         ax.text(coord, 0.5, metric_name,  
               va="center", ha="center",  
-              rotation="vertical", fontsize=15,  
+              rotation="vertical", fontsize=18,  
               transform=ax.transAxes, multialignment="center")
 
 
 
     if cbar:
         assert fig is not None, "fig cant be empty if you want a cbar in this axis!"
-        
-        if metric_name in higher_or_lower.keys():
-            cbar_label = f"{metric_name} \n {higher_or_lower[metric_name]} is better"
-        else:
-            cbar_label = f"{metric_name}" 
+
+        if cbar_label is None:
+            if metric_name in higher_or_lower.keys():
+                cbar_label = f"{metric_name} \n {higher_or_lower[metric_name]} is better"
+            else:
+                cbar_label = f"{metric_name}"
 
         if cbar_position == "bottom":
-            cbar = fig.colorbar(im, ax=ax, orientation="horizontal", extend='both', shrink=0.7).set_label(cbar_label)
-        if cbar_position == "right":
-            cbar_label = "ppb"
-            cbar = fig.colorbar(im, ax=ax, orientation="vertical", extend='both', shrink=0.7).set_label(cbar_label)
+            cbar = fig.colorbar(
+                im, ax=ax, orientation="horizontal", extend='both', shrink=0.7
+            )
+        elif cbar_position == "right":
+            cbar = fig.colorbar(
+                im, ax=ax, orientation="vertical", extend='both', shrink=0.7
+            )
+
+        cbar.set_label(cbar_label, fontsize=20)
+
+        cbar.ax.tick_params(labelsize=20)
+
 
     ax.coastlines()
     ax.add_feature(cartopy.feature.BORDERS,linewidth=1.)

@@ -12,7 +12,8 @@ author: Elena Fillola @elenafillo
 import torch
 import einops 
 
-from model.layers.graph_net_block import GraphSatelliteProcessor
+from graphnet_LPDM_emulator.model.layers.graph_net_block import GraphSatelliteProcessor
+
 
 
 class SatelliteProcessor(torch.nn.Module):

@@ -8,13 +8,13 @@ import matplotlib.patches as mpatches
 
 import numpy as np
 
-sys.path.insert(0,"/software/local/languages/miniforge3/envs/elena/lib/python3.12/site-packages/")
+#sys.path.insert(0,"/software/local/languages/miniforge3/envs/elena/lib/python3.12/site-packages/")
 
-sys.path.insert(0,"/user/work/ef17148/oldstuff/ef17148/.conda/envs/new_graphnet/lib/python3.12/site-packages")
+#sys.path.insert(0,"/user/work/ef17148/oldstuff/ef17148/.conda/envs/new_graphnet/lib/python3.12/site-packages")
 
-print(sys.path)
+#print(sys.path)
 
-import torch
+#import torch
 import os
 import pickle
 import einops
@@ -25,7 +25,7 @@ from model.data.load_data import *
 #from loss_functions import *
 #from evaluation import *
 
-import torch.optim as optim
+#import torch.optim as optim
 from sklearn.metrics import mean_squared_error, r2_score
 import time
 from datetime import datetime
@@ -78,16 +78,16 @@ class FPModel():
             print("adding a different domain doesnt work yet!")
 
         print("loading footprints")
-        print(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
+        print(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
         if months is None:
-            true_fp = load_fps(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
+            true_fp = load_fps(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
             #true_fp = xr.open_mfdataset(glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc"))
-            pred_fp = load_fps(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
+            pred_fp = load_fps(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc")
             #pred_fp = xr.open_mfdataset(glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}*.nc"))
         else:
-            true_files = [x for x in glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}{"*"}.nc") if np.any([mo in x for mo in months])]
+            true_files = [x for x in glob.glob(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}{"*"}.nc") if np.any([mo in x for mo in months])]
             true_fp = xr.open_mfdataset(true_files)
-            em_files = [x for x in glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}{"*"}.nc") if np.any([mo in x for mo in months])]
+            em_files = [x for x in glob.glob(f"/group/chem/acrg/LPDM/fp_Elena/{fp_folder}/{pred_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{year}{"*"}.nc") if np.any([mo in x for mo in months])]
             pred_fp = xr.open_mfdataset(em_files)
 
 
@@ -131,7 +131,7 @@ class FPModel():
 
     
     def load_emissions(self, same_month=True):
-        true_fp = xr.open_mfdataset(glob.glob(f"/group/chemistry/acrg/LPDM/fp_Elena/{self.fp_folder}/{self.true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{self.year}*.nc"))
+        true_fp = xr.open_mfdataset(glob.glob(f"/group/chem/acrg/LPDM/fp_Elena/{self.fp_folder}/{self.true_fp_path}/{self.domain}/GOSAT-{self.region}-column_{self.domain}_{self.year}*.nc"))
         shared_times = np.intersect1d(true_fp.time.values, self.all_fps.time)
         true_fp = true_fp.sel(time=shared_times)
         self.all_fps = self.all_fps.sel(time=shared_times)
@@ -861,7 +861,7 @@ def plot_emissions_ax(ax_ems, ax_true, ax_pred, model, idx, lon_squeeze=0, vmin=
 
 def get_gosat(site, species, 
               start_date = None, end_date = None, max_level=17,
-              data_directory = "/group/chemistry/acrg/obs"):
+              data_directory = "/group/chem/acrg/obs"):
     """
     FROM ACRG!
     retrieves obervations for a set of sites and species between start and 
@@ -1026,7 +1026,7 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
     if domain_lons is None:
         print("need domain lons!")
 
-    extent = (domain_lons[0], domain_lons[-1], domain_lats[cut_lats[0]], domain_lats[-1-cut_lats[1]])
+    extent = (domain_lons[cut_lons[0]], domain_lons[-1-cut_lons[1]], domain_lats[cut_lats[0]], domain_lats[-1-cut_lats[1]])
     ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
 
 
@@ -1050,7 +1050,7 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
     """
 
     if vmin_vmax is None:
-        print("repla")
+        print("calculating vmin and vmax from data")
         vmin_vmax = [np.nanmin(metric), np.nanmax(metric)]
         
     
@@ -1058,17 +1058,18 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
         norm = TwoSlopeNorm(vmin=vmin_vmax[0], vcenter=0, vmax=vmin_vmax[1])
         cmap="PiYG"
     else:
+        
         norm = Normalize(vmin=vmin_vmax[0], vmax=vmin_vmax[1])
 
-    im = ax.pcolormesh(binned_lons, binned_lats, metric, transform=ccrs.PlateCarree(),cmap=cmap, norm=norm) 
+    im = ax.pcolormesh(binned_lons, binned_lats, metric, transform=cartopy.crs.PlateCarree(),cmap=cmap, norm=norm) 
 
-    if title=="top":    
-        ax.set_title(metric_name)
-    if title=="left":
+    if title_loc=="top":    
+        ax.set_title(title_str)
+    if title_loc=="left":
         coord = -0.1
-        if "\n" in metric_name:
+        if "\n" in title_str:
             coord = -0.2
-        ax.text(coord, 0.5, metric_name,  
+        ax.text(coord, 0.5, title_str,  
               va="center", ha="center",  
               rotation="vertical", fontsize=15,  
               transform=ax.transAxes, multialignment="center")
@@ -1077,22 +1078,28 @@ def plot_binned_map(ax, binned_lons, binned_lats, metric, metric_name = "", exte
 
     if cbar:
         assert fig is not None, "fig cant be empty if you want a cbar in this axis!"
-        
-        if metric_name in higher_or_lower.keys():
-            cbar_label = f"{metric_name} \n {higher_or_lower[metric_name]} is better"
-        else:
-            cbar_label = f"{metric_name}" 
+
+        if cbar_label is None:
+            if metric_name in higher_or_lower.keys():
+                cbar_label = f"{metric_name} \n {higher_or_lower[metric_name]} is better"
+            else:
+                cbar_label = f"{metric_name}"
+
+            if vmin_vmax[0] == 0:
+                extend="max"
+            else:
+                extend="both"
 
         if cbar_position == "bottom":
-            cbar = fig.colorbar(im, ax=ax, orientation="horizontal", extend='both', shrink=0.7).set_label(cbar_label)
+            cbar = fig.colorbar(im, ax=ax, orientation="horizontal", extend=extend, shrink=0.7).set_label(cbar_label)
         if cbar_position == "right":
-            cbar_label = "ppb"
-            cbar = fig.colorbar(im, ax=ax, orientation="vertical", extend='both', shrink=0.7).set_label(cbar_label)
+            if metric_name is None: cbar_label = "ppb"
+            cbar = fig.colorbar(im, ax=ax, orientation="vertical", extend=extend, shrink=0.7).set_label(cbar_label)
 
     ax.coastlines()
     ax.add_feature(cartopy.feature.BORDERS,linewidth=1.)
-    ax.add_feature(cfeature.LAND)
-    ax.add_feature(cfeature.OCEAN)
+    ax.add_feature(cartopy.feature.LAND)
+    ax.add_feature(cartopy.feature.OCEAN)
 
     if return_cbar:
         return ax, im

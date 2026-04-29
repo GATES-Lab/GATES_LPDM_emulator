@@ -31,7 +31,8 @@ from torch_geometric.data import Data
 from torch_scatter import scatter_mean
 from torch_geometric.utils import to_dense_adj
 
-from model.layers.graph_net_block import MLP
+from graphnet_LPDM_emulator.model.layers.graph_net_block import MLP
+
 
 
 def concat_group_by(x: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
