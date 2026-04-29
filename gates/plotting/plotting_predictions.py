@@ -116,7 +116,6 @@ def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeserie
     """
     plot_prior=False
 
-
     # altnerative fig creating for more flexibility
     n_rows = 2 + plot_timeseries + 2*plot_fluxes + print_stats
     height_ratios = [1] * n_rows  # Default all equal
@@ -172,7 +171,7 @@ def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeserie
     """
     
     #contour=True
-    if levels is None and which_dataspace=="original":
+    if levels is None and (which_dataspace=="original" or which_dataspace=="thresholded"):
         levels = np.arange(-5.5, -1.5+0.6, 0.5)
         levels = [-4, -3.5, -3,  -2.5, -2, -1.5]
 
@@ -199,6 +198,10 @@ def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeserie
     elif which_dataspace == "thresholded":
         plotting_labels= ["fp_original", "fp_pred_thres"]
         log=True
+        if "fp_pred_thres" not in prediction_ds:
+            raise ValueError("Warning: fp_pred_thres not found in prediction_ds. Apply thresholding and try again.")
+
+            
     elif which_dataspace == "transformed":
         plotting_labels= ["fp_transformed", "fp_transformed_pred"]
         log=False
