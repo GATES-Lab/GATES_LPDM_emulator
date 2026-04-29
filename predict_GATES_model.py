@@ -33,7 +33,8 @@ Notes
 - ``model_save_name`` defaults to the reference model's base name (timestamp
   stripped). Pass an explicit name when predicting on a different region or size.
 - Output NetCDF files are written to
-  ``{save_path}/{model_save_name}/predictions_{year}_{month}.nc``
+  ``{save_path}/{model_save_name}/predictions/predictions_{year}_{month}.nc``
+  If the region or prediction size are different from the training settings, the prediction folder name is automatically suffixed with the region and size (e.g. ``predictions_BRAZIL``
 """
 
 import sys
@@ -188,6 +189,7 @@ class GATESPredictor:
         scalers: dict,
         model_name: str,
         model_save_name: str,
+        prediction_folder_name: str,
         save_path: Path,
         device: torch.device,
         data_params: dict,
@@ -203,6 +205,7 @@ class GATESPredictor:
         self.scalers = scalers
         self.model_name = model_name
         self.model_save_name = model_save_name
+        self.prediction_folder_name = prediction_folder_name
         self.save_path = Path(save_path)
         self.device = device
         self.data_params = data_params
@@ -236,7 +239,7 @@ class GATESPredictor:
 
         # Save name and output path
         model_save_name = determine_save_name(args.model_save_name, model_dir)
-        save_path = Path(args.save_path) / model_save_name if args.save_path else model_dir 
+        save_path = Path(args.save_path) if args.save_path else model_dir 
         ## attach args.region or args.size to prediction_folder_name if provided
         prediction_folder_name = "predictions" + (f"_{args.region}" if args.region else "") + (f"_size{args.size}" if args.size else "")
 
@@ -306,6 +309,7 @@ class GATESPredictor:
             scalers=scalers,
             model_name=model_name,
             model_save_name=model_save_name,
+            prediction_folder_name=prediction_folder_name,
             save_path=save_path,
             device=device,
             data_params=data_params,
@@ -438,7 +442,7 @@ class GATESPredictor:
         #     },
         # )
 
-        out_dir = self.save_path / self.model_save_name
+        out_dir = self.save_path / self.model_save_name / self.prediction_folder_name
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"predictions_{test_year}_{month_str}.nc"
         fps_dataset.to_netcdf(out_path)
@@ -464,7 +468,7 @@ class GATESPredictor:
             months = months[:1]
             print(f"Dry run: processing only month {months[0]} with freq=60.")
 
-        out_dir = self.save_path / self.model_save_name
+        out_dir = self.save_path / self.model_save_name / self.prediction_folder_name
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Write run record before predictions start so there is always a trace,
