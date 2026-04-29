@@ -110,17 +110,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
             if verbose: print("you have passed an empty list for bad_files_list, so no files will be skipped. If you are encountering errors opening files, check that the problematic files are in the bad files list")
         if not isinstance(bad_files_list, list):
             raise ValueError("bad_files_list should be a list of filenames (not full paths), or None to load from config. Pass an empty list to not skip any files.")
-        """
-        bad_files = ["GOSAT-BRAZIL-column_SOUTHAMERICA_201511.nc", 
-            "GOSAT-SAHARA-column_NORTHAFRICA_201409.nc", 
-            'GOSAT-SAHARA-column_NORTHAFRICA_201501.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201502.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201503.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201504.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201609.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201610.nc',
-            'GOSAT-SAHARA-column_NORTHAFRICA_201612.nc']
-        """
+
         # remove any files from the list that were in the bad files list
 
         
@@ -145,12 +135,10 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
                 bad_arrays = []
                 for badfile in bad_files_list:
                     if badfile in fp_files:
-                        try:
-                            # load each bad file separately
-                            f_bad = xr.open_mfdataset(badfile, preprocess=_round_time_to_seconds, **chunk_args)
-                        except Exception as bad_e:
-                            print(f"Could not open bad file {badfile}, skipping: {bad_e}")
-                            continue
+                        print("loading bad file with workaround:", badfile)
+                        # load each bad file separately
+                        f_bad = xr.open_mfdataset(badfile, **chunk_args)
+                        #f_bad = xr.open_mfdataset(badfile)
                         if "NORTHAFRICA_2015" in badfile:
                             try:
                                 f_bad = f_bad.drop(["mean_age_particles_n", "mean_age_particles_e", "mean_age_particles_w", "mean_age_particles_s"])        
@@ -158,6 +146,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
                                 print("something went wrong trying to load the bad North Africa 2015 files")
                                 print(e)
                         bad_arrays.append(f_bad)
+
                 # concatenate all the good files with the bad ones along the time dimension
                 fp_data_full = xr.concat([most]+bad_arrays, dim="time")
         else:
@@ -1377,18 +1366,32 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
               f"({em_dlat:.4f}, {em_dlon:.4f}) differs from fp resolution "
               f"({fp_dlat:.4f}, {fp_dlon:.4f}). Spatial alignment may be off.")
 
-    # --- 3. Release indices + padding ---
-    release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
-    flux_matched, domain_lats, domain_lons, release_idxs = _pad_domain(
-        flux_matched, fp, release_idxs, half, pad_mode="nans", verbose=verbose)
+    if hasattr(fp, "release_lat") and hasattr(fp, "release_lon"):
+        # --- 3. Release indices + padding ---
+        release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
+        flux_matched, domain_lats, domain_lons, release_idxs = _pad_domain(
+            flux_matched, fp, release_idxs, half, pad_mode="nans", verbose=verbose)
 
-    # --- 4. Vectorised isel ---
-    lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
-    lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
-    lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": fp.time})
-    lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": fp.time})
-    with dask.config.set(**{"array.slicing.split_large_chunks": False}):
-        cropped = flux_matched.isel(lat=lat_da, lon=lon_da)
+        # --- 4. Vectorised isel ---
+        lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
+        lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
+        lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": fp.time})
+        lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": fp.time})
+        with dask.config.set(**{"array.slicing.split_large_chunks": False}):
+            cropped = flux_matched.isel(lat=lat_da, lon=lon_da)
+        
+        lat_coords = xr.DataArray(
+                domain_lats[lat_indices], dims=["time", "lat"],
+                coords={"time": fp.time})
+        lon_coords=  xr.DataArray(
+                domain_lons[lon_indices], dims=["time", "lon"],
+                coords={"time": fp.time})
+    
+    elif hasattr(fp, "lat_coords") or hasattr(fp, "lon_coords"):
+        print("Using lat_coords and lon_coords to cut flux data, assuming they are aligned and have the same resolution as the flux data.")
+        cropped = flux_matched.sel(lat=fp.lat_coords, lon=fp.lon_coords, method="nearest") 
+        lat_coords = fp.lat_coords
+        lon_coords = fp.lon_coords 
 
     # --- 5. Assign coordinates + return ---
     cropped = (
@@ -1396,12 +1399,8 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
         .assign_coords(lat=np.arange(size), lon=np.arange(size))
         .to_dataset(name="flux")
         .assign({
-            "lat_coords": xr.DataArray(
-                domain_lats[lat_indices], dims=["time", "lat"],
-                coords={"time": fp.time}),
-            "lon_coords": xr.DataArray(
-                domain_lons[lon_indices], dims=["time", "lon"],
-                coords={"time": fp.time}),
+            "lat_coords": lat_coords,
+            "lon_coords": lon_coords,
         })
     )
     cropped
