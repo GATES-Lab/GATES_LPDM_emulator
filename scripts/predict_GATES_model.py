@@ -266,8 +266,12 @@ class GATESPredictor:
             model_save_dir=model_path, model_name=model_name, model_path=model_dir
         )
         datapath_args = paths_ctx.resolve_datapath_args(training_params)
-        data_params = copy.deepcopy(training_params["train_load_data"])
-        data_params.update(training_params.get("test_load_data", {}))
+        if "train_load_data" in training_params:
+            data_params = copy.deepcopy(training_params["train_load_data"])
+            data_params.update(training_params.get("test_load_data", {}))
+        else:
+            # multiregion model — use shared_load_parameters as base
+            data_params = copy.deepcopy(training_params.get("shared_load_parameters", {}))
         if args.region:
             data_params["region"] = args.region
             # remove parameter domain if it is in data_params
