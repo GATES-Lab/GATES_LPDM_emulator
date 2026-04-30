@@ -11,10 +11,10 @@ Developed from code by Climate Fix (Copyright (c) 2022 Open Climate Fix) impleme
 import torch
 from typing import Optional
 
-
-from graphnet_LPDM_emulator.model.layers.encoder import SatelliteEncoder, FixedSatelliteEncoder
-from graphnet_LPDM_emulator.model.layers.decoder import SatelliteDecoder
-from graphnet_LPDM_emulator.model.layers.processor import SatelliteProcessor
+import gates
+from model.layers.encoder import SatelliteEncoder, FixedSatelliteEncoder
+from model.layers.decoder import SatelliteDecoder
+from model.layers.processor import SatelliteProcessor
 import numpy as np
 
 

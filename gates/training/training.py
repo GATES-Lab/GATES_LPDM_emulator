@@ -1,5 +1,3 @@
-from pyexpat import model
-
 from model.forecast import GraphSatelliteForecaster
 
 
@@ -408,9 +406,9 @@ def setup_GATES_model(parameters, training_ctx, paths_ctx):
     
 
 import os
-from dask.distributed import Client, LocalCluster
 
 def make_cluster():
+    from dask.distributed import Client, LocalCluster
     n_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
     mem_gb = int(os.environ.get("SLURM_MEM_PER_NODE", 8000)) / 1024  # MB → GB
 

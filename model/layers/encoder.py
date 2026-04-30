@@ -31,7 +31,7 @@ from torch_geometric.data import Data
 from torch_scatter import scatter_mean
 from torch_geometric.utils import to_dense_adj
 
-from graphnet_LPDM_emulator.model.layers.graph_net_block import MLP
+from model.layers.graph_net_block import MLP
 
 
 
