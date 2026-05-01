@@ -214,6 +214,7 @@ def plot_multiple_data_series(
     save=False,
     outdir="multi_domain_characterisation",
     filename="domain_bounds.png",
+    show_measurement_locs=False,
 ):
     """
     Plot a single bounding rectangle per region, using different colours per region.
@@ -228,6 +229,9 @@ def plot_multiple_data_series(
         Single-element tuple, e.g. ("met",), ("fp",), or ("topo",)
     colours : sequence of str
         Colours per region (cycled if fewer than regions)
+    show_measurement_locs : bool
+        If True, overlay an "x" marker at each unique footprint release location
+        (release_lat / release_lon from fp_data_full), coloured to match the region.
     """
 
     if len(show) != 1:
@@ -298,6 +302,21 @@ def plot_multiple_data_series(
                 first = False
 
             bounds_list.append(b)
+
+            if show_measurement_locs:
+                try:
+                    fp = data.fp_data_full
+                    lats = np.asarray(fp["release_lat"]).ravel()
+                    lons = np.asarray(fp["release_lon"]).ravel()
+                    # Deduplicate to avoid overplotting thousands of identical points
+                    coords = np.unique(np.stack([lats, lons], axis=1), axis=0)
+                    ax.scatter(
+                        coords[:, 1], coords[:, 0],
+                        marker="x", color=colour, s=40, linewidths=1.5,
+                        transform=ccrs.PlateCarree(), zorder=10,
+                    )
+                except Exception as me:
+                    print(f"[plot_multiple_data_series] Could not plot measurement locs for '{name}': {me}")
 
         except Exception as e:
             print(f"[plot_multiple_data_series] Skipped '{name}': {e}")
