@@ -1,8 +1,34 @@
+import glob as _glob
 import numpy as np
 import matplotlib.pyplot as plt
+import xarray as xr
 import cartopy
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+
+from gates.evaluation.post_processing import threshold_fps
+
+BASE_DIR = "/mnt/shared/home/kr21883/GATES_LPDM_emulator"
+
+
+def _pred_dir(model_region, test_region):
+    """Return the relative predictions directory for a given model/test region pair."""
+    if model_region == "MULTI_REGION":
+        return f"model_test_predictions/multi_region_model/sahara_india_china_brazil_multiregion_proper/predictions_{test_region}"
+    elif model_region != "INDIA":
+        return f"model_test_predictions/{model_region.lower()}_model/{model_region}_proper/predictions_{test_region}"
+    else:
+        return f"model_test_predictions/india_model/INDIA_proper_train_freq_2_test_freq_25/predictions_{test_region}"
+
+
+def _load_preds(model_region, test_region, year=2014, threshold=1.75e-5):
+    """Load and threshold prediction files for one model/test-region pair."""
+    pred_dir = _pred_dir(model_region, test_region)
+    files = _glob.glob(f"{BASE_DIR}/{pred_dir}/predictions_{year}_*.nc")
+    if not files:
+        raise FileNotFoundError(f"No prediction files found in {BASE_DIR}/{pred_dir}")
+    preds = xr.open_mfdataset(sorted(files))
+    return threshold_fps(preds, threshold=threshold)
 
 
 
@@ -103,6 +129,37 @@ def plot_footprint_ax(ax_true, ax_pred, prediction_ds, plotting_labels=["fp_orig
         return vmin, vmax
     if cbar:
         return cb
+
+
+def _plot_fp_on_ax(ax, ds_sel, var, vmin, vmax, log, contour, levels, thres=0):
+    """Plot a single footprint variable onto one cartopy axis. Returns the mappable."""
+    np.seterr(divide="ignore")
+    extent = (
+        ds_sel.lon_coords.values[0], ds_sel.lon_coords.values[-1],
+        ds_sel.lat_coords.values[0], ds_sel.lat_coords.values[-1],
+    )
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
+    ax.coastlines(resolution="110m", color="black", linewidth=1, alpha=0.5)
+    ax.add_feature(cfeature.LAND)
+    ax.add_feature(cfeature.OCEAN)
+
+    f = np.copy(ds_sel[var].values)
+    f_plot = np.log10(f) if log else f
+
+    cmap = plt.cm.Reds
+    plot_params = {"transform": ccrs.PlateCarree(), "cmap": cmap, "vmin": vmin, "vmax": vmax}
+
+    if contour:
+        alpha = 0.6
+        cb = ax.contourf(ds_sel.lon_coords.values, ds_sel.lat_coords.values,
+                         f_plot, **plot_params, levels=levels, extend="both", alpha=alpha)
+        f_plot[f < thres] = np.nan
+        cb = ax.contourf(ds_sel.lon_coords.values, ds_sel.lat_coords.values,
+                         f_plot, **plot_params, levels=levels, extend="both")
+    else:
+        cb = ax.imshow(f_plot, extent=extent, origin="lower", **plot_params, zorder=5)
+    return cb
+
 
 
 def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeseries=False, plot_fluxes=False, print_stats=False, contour=False, thres=0, ylim_timeseries=45, levels=None, vmin_vmax=None, which_dataspace="original"):
@@ -274,3 +331,132 @@ def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeserie
     if fig_title is not None:
         #fig.suptitle(fig_title)
         fig.text(0.3, 1, fig_title, va="center",  fontsize=21,multialignment="center")
+
+
+REGION_COLOURS = {
+    "BRAZIL":       "#4C96D7",
+    "CHINA":        "#D4732A",
+    "INDIA":        "#5A9E30",
+    "SAHARA":       "#C0504D",
+    "MULTI_REGION": "#7B5EA7",
+}
+
+
+def plot_multi_model_predictions(
+    test_region,
+    idx,
+    model_regions=("BRAZIL", "CHINA", "INDIA", "SAHARA", "MULTI_REGION"),
+    year=2014,
+    threshold=1.75e-5,
+    vmin_vmax=None,
+    contour=True,
+    which_dataspace="original",
+    fig_title=None,
+    colour_outlines=True,
+    save=False,
+    filename="multi_model_predictions.png",
+):
+    """
+    Plot a single time index in one row: LPDM truth first, then one panel per model.
+
+    Loads prediction files from disk using the standard directory layout.
+
+    Parameters
+    ----------
+    test_region : str
+        Region whose footprints are being tested, e.g. "INDIA".
+    idx : int
+        Integer index along the time dimension to plot.
+    model_regions : sequence of str
+        Which trained models to compare, e.g. ("BRAZIL", "CHINA", "INDIA", "SAHARA", "MULTI_REGION").
+    year : int
+        Year of prediction files to load (default 2014).
+    threshold : float
+        Footprint threshold passed to threshold_fps (default 1.75e-5).
+    vmin_vmax : tuple(float, float) or None
+        Shared colour-scale limits. Auto-set to (-4, -2) for original space if None.
+    contour : bool
+        Use contourf instead of imshow.
+    which_dataspace : str
+        "original"    → fp_original / fp_pred  (log scale)
+        "transformed" → fp_transformed / fp_transformed_pred (linear scale)
+    fig_title : str or None
+        Overall figure title. Defaults to "<test_region> footprints — all models — <date>".
+    colour_outlines : bool
+        If True (default), draw a coloured border on each model panel matching the
+        region colour defined in REGION_COLOURS.
+    save : bool
+        If True, save figure to `filename`.
+    filename : str
+        Output filename when save=True.
+    """
+    datasets, names = [], []
+    for model_region in model_regions:
+        try:
+            preds = _load_preds(model_region, test_region, year=year, threshold=threshold)
+            datasets.append(preds)
+            names.append(f"{model_region.replace('_', ' ').title()}-trained")
+        except FileNotFoundError as e:
+            print(f"[plot_multi_model_predictions] Skipping {model_region}: {e}")
+
+    if not datasets:
+        raise RuntimeError("No prediction datasets could be loaded.")
+
+    if which_dataspace == "original":
+        truth_var = "fp_original"
+        pred_var  = "fp_pred"
+        log = True
+        levels = [-4, -3.5, -3, -2.5, -2, -1.5]
+        vmin, vmax = vmin_vmax if vmin_vmax is not None else (-4, -2)
+    elif which_dataspace == "transformed":
+        truth_var = "fp_transformed"
+        pred_var  = "fp_transformed_pred"
+        log = False
+        levels = None
+        vmin, vmax = vmin_vmax if vmin_vmax is not None else (None, None)
+    else:
+        raise ValueError("which_dataspace must be 'original' or 'transformed'")
+
+    n_cols = 1 + len(datasets)  # truth + one per model
+    fig = plt.figure(figsize=(3.5 * n_cols, 4), dpi=200)
+    gs = fig.add_gridspec(1, n_cols + 1, width_ratios=[1] * n_cols + [0.06], wspace=0.05)
+
+    axes = [fig.add_subplot(gs[0, c], projection=ccrs.PlateCarree()) for c in range(n_cols)]
+
+    # Use the first dataset's time for the truth panel (truth is shared across models)
+    time_val = datasets[0].time.values[idx]
+    ds_sel_0 = datasets[0].sel(time=time_val)
+
+    # Plot truth once on the first axis
+    cb = _plot_fp_on_ax(axes[0], ds_sel_0, truth_var, vmin, vmax, log, contour, levels)
+    formatted_time = ds_sel_0.time.values.astype("datetime64[m]").astype("O").strftime("%d-%m-%Y %H:%M")
+    axes[0].set_title("LPDM (truth)", fontsize=13)
+
+    # Plot each model's prediction
+    for col, (ds, name, model_region) in enumerate(zip(datasets, names, model_regions), start=1):
+        time_val = ds.time.values[idx]
+        ds_sel = ds.sel(time=time_val)
+        cb = _plot_fp_on_ax(axes[col], ds_sel, pred_var, vmin, vmax, log, contour, levels)
+        axes[col].set_title(name, fontsize=13)
+        if colour_outlines:
+            colour = REGION_COLOURS.get(model_region.upper(), "black")
+            for spine in axes[col].spines.values():
+                spine.set_edgecolor(colour)
+                spine.set_linewidth(3)
+
+    # Shared colorbar
+    cbar_ax = fig.add_subplot(gs[0, -1])
+    plt.colorbar(cb, cax=cbar_ax, extend="both").set_label(
+        label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12
+    )
+
+    if fig_title is None:
+        fig_title = f"{test_region} footprints — all models — {formatted_time}, index - {idx}"
+    fig.suptitle(fig_title, fontsize=16, y=1.02)
+
+    plt.tight_layout()
+
+    if save:
+        fig.savefig("model_test_predictions/plots/"+filename, dpi=300, bbox_inches="tight")
+
+    return fig, axes
