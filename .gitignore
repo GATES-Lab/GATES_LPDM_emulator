@@ -9,5 +9,7 @@ __pycache__/
 *.png
 *.eps
 *.pyc
-
+graph_weather/
+model_runs/
+*.npz
 

@@ -1,0 +1,77 @@
+{
+    "env": "bp",
+    "model_name": "test_run",
+
+    "train_load_data": {
+        "year": "2014",
+        "freq": 100,
+        "region": "BRAZIL",
+        "size": 50,
+        "verbose": true,
+        "met_args": {
+            "met_levels": [3, 15, 21]
+        }
+    },
+
+    "test_load_data": {
+        "year": "2018",
+        "freq": 100
+    },
+
+    "variables": {
+        "met_variables": {
+            "x_wind": [3, 15],
+            "y_wind": [3, 15],
+            "upward_air_velocity": [3, 15],
+            "atmosphere_boundary_layer_thickness": [],
+            "surface_air_pressure": []
+        },
+        "static_variables": ["lat_coords", "lon_coords"],
+        "time_deltas": [6]
+    },
+
+    "dataloader_parameters": {
+        "input_transforms": ["clever_transform_3"],
+    },
+
+    "model_parameters": {
+        "num_blocks": 4,
+        "node_dim": 64,
+        "edge_dim": 64,
+        "hidden_layers_processor_node": 2,
+        "hidden_layers_processor_edge": 2,
+        "hidden_layers_decoder": 1,
+        "hidden_dim_processor_node": 16,
+        "hidden_dim_processor_edge": 16,
+        "hidden_dim_decoder": 16,
+        "resolution": 4,
+        "output_dim": 8,
+        "residuals": false,
+        "attention": false
+    },
+
+    "loss_functions": {
+        "criterion": "torch.nn.MSELoss()",
+        "criterion_test": "torch.nn.MSELoss()"
+    },
+
+    "epochs": {
+        "training": 300,
+        "visualize": 5,
+        "patience": 3,
+        "model_saving": 50
+    },
+
+    "learning_rate": 5e-5,
+    "seed": 42,
+    "use_wandb": false,
+
+    "num_classes": 1,
+    "use_baselines": true,
+    "network_decoder": "gnn",
+    "output_format": "corrected",
+    "auxiliary": "multiple",
+    "normalization": "all",
+
+    "grid_reference_fp": null
+}
