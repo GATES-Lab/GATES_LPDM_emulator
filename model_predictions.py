@@ -99,7 +99,8 @@ def perform_inference():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     api = wandb.Api()
-    run = api.run('nerdk312/BoundaryCondition-Prediction/wc2vux78')
+    #run = api.run('nerdk312/BoundaryCondition-Prediction/wc2vux78')
+    run = api.run('nerdk312/BoundaryCondition-Prediction/sjveshy3')
     parameters = run.config
 
     folder_name = 'boundary_condition'
@@ -134,7 +135,6 @@ def perform_inference():
     num_classes = parameters['num_classes']
     name_output_format = parameters['output_format']
     height_indices = [4, 5, 6, 7] if parameters['auxiliary'] == 'multiple' else [4]
-    import ipdb; ipdb_set_trace()
     # ---------------------------------------------------------------
     # Recompute auxiliary normalisation parameters from training data
     # These aren't stored in the checkpoint so we need to recompute them
@@ -143,7 +143,7 @@ def perform_inference():
     train_data = LoadSquareSatelliteData(**train_load_data)
     train_months = ['01','02','03','04','05','06','07','08','09','10','11','12']
     train_year = parse_years(train_load_data['year'])
-
+    
     _, _, train_auxiliary_cams, _ = baseline_mol_correction(
         train_data, train_months, train_year,
         output_format=name_output_format,
@@ -199,14 +199,19 @@ def perform_inference():
         model.cuda()
 
     print("Model loaded successfully.")
-
+    # Nawid - getting the parameters of interest for the model
+    '''
+    inputs, _ = get_square_satellite_inputs(train_data, **input_variables, return_variable_names=True, return_asarray=True)
+    train_dataset = BoundaryDataset(inputs,train_auxiliary_cams,outputs,use_baselines=use_baselines,input_names=names, **parameters["dataloader_parameters"])
+    '''
     # ---------------------------------------------------------------
     # Monthly inference loop
     # ---------------------------------------------------------------
     all_months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
     all_predictions = []
     all_truths = []
-    all_meta = []
+    all_subsets = []  # will store the xarray subset for each month
+
     for month in all_months:
         print(f"\nRunning inference for month {month}...")
         test_data = LoadSquareSatelliteData(month=month, **test_load_data)
@@ -219,11 +224,11 @@ def perform_inference():
         )
 
         # Normalise outputs and baselines using checkpoint parameters
-        test_outputs, _ = normalize_boundary_data(test_outputs,outputs_norm_vals=(output_mean,output_std))
-        test_baseline_list, _ = normalize_boundary_data(test_outputs,outputs_norm_vals=(baselines_mean,baselines_std))
+        test_outputs, _ = normalize_boundary_data(test_outputs, outputs_norm_vals=(output_mean, output_std))
+        test_baseline_list, _ = normalize_boundary_data(test_baseline_list, outputs_norm_vals=(baselines_mean, baselines_std))
 
         # Normalise auxiliary cams using training-derived parameters
-        test_auxiliary_cams, _ = normalize_boundary_data(test_auxiliary_cams,outputs_norm_vals=((auxiliary_mean_values,auxiliary_std_values)))
+        test_auxiliary_cams, _ = normalize_boundary_data(test_auxiliary_cams, outputs_norm_vals=(auxiliary_mean_values, auxiliary_std_values))
 
         denormalized_test_truths = (test_outputs * output_std) + output_mean
         denormalized_test_truths_summed = np.sum(denormalized_test_truths, axis=1)
@@ -253,33 +258,42 @@ def perform_inference():
         all_predictions.append(denormalized_test_predictions_summed)
         all_truths.append(denormalized_test_truths_summed)
 
-        # --- 1. Extract Meta with Coordinates ---
-        # This keeps the release variables AND the spatial grid context
+        # Extract the spatial and temporal metadata for this month
+        # We align with the dataset's time dimension in case freq subsampling removed some timesteps
+        valid_times = test_data.fp_data_full.time.values
         test_subset = test_data.fp_data_full[["release_lon", "release_lat"]].assign_coords(
             lat=test_data.fp_data_full["lat"],
             lon=test_data.fp_data_full["lon"]
-        )
-        all_meta.append(test_subset)
+        ).sel(time=valid_times)
+        all_subsets.append(test_subset)
 
+        test_mae = np.mean(np.abs(denormalized_test_truths_summed - denormalized_test_predictions_summed))
+        print(f"Month {month}: MAE = {test_mae:.4f}")
 
+    # Concatenate predictions, truths and spatial metadata across all months
     all_predictions = np.concatenate(all_predictions, axis=0)
     all_truths = np.concatenate(all_truths, axis=0)
+    prediction_save_path = 'predictions_2018.npz'
+    np.savez(
+                prediction_save_path,
+                predictions=all_predictions,
+                truths=all_truths
+            )
+    all_subsets = xr.concat(all_subsets, dim="time")
+    # Nawid- Saved the coordinates only
+    all_subsets.to_netcdf(f"full_year_coords_2018.nc")
+    # Attach predictions and truths as new variables on the combined xarray dataset
+    all_subsets = all_subsets.assign({
+        "predictions": ("time", all_predictions),
+        "truths": ("time", all_truths),
+    })
 
-    # --- 5. Concatenation & NetCDF Export ---
-    # Concatenate NumPy results
-    all_predictions_final = np.concatenate(all_predictions, axis=0)
-    all_truths_final = np.concatenate(all_truths, axis=0)
-
-    # Concatenate Xarray metadata along the 'time' dimension
-    combined_ds = xr.concat(all_meta, dim="time")
-
-    # Attach the inference results as new variables
-    combined_ds["predictions"] = (("time"), all_predictions_final)
-    combined_ds["truths"] = (("time"), all_truths_final)
-
-    # Save the complete object
+    overall_mae = np.mean(np.abs(all_truths - all_predictions))
+    print(f"\nOverall MAE across all months = {overall_mae:.4f}")
+    print(all_subsets)
+    # Nawid - Save the complete object, coordinates and predictions
     save_path = f"full_year_inference_with_coords_2018.nc"
-    combined_ds.to_netcdf(save_path)
+    all_subsets.to_netcdf(save_path)
 
     print(f"\nSaved full year results with grid coordinates to: {save_path}")
     wandb.finish()

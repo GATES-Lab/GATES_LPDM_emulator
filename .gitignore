@@ -9,3 +9,4 @@ modloss
 *.png
 *.eps
 model_runs
+*.npz
