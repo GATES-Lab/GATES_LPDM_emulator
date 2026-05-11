@@ -1,0 +1,168 @@
+{
+    "model_name" : "SAHARA_gpu_freq3_2year50_fullinputs_PixelWeightedMSELoss_a05_shuffled",
+    "verbose": true,
+    "parallel_loading": true,
+    "load_into_memory": true,
+    "_ignore_model_save_dir": "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/test_jobs/working_GPU_experiments",
+    "train_load_data" : {
+        "year":"2014",
+        "freq":100,
+        "region":"BRAZIL",
+        "size":50,
+        "met_args":{"met_levels":[3, 9], 
+    "met_variables":["x_wind", "y_wind" ]},
+    "crop_met": false
+    },
+
+    "test_load_data" : {
+        "year":"2016",
+        "freq":100
+    },
+
+    "variables" : {
+        "met_variables":["x_wind", "y_wind"],
+        "met_levels":[3, 9],
+        "static_variables":["sin_lat_coords", "sin_lon_coords"], 
+        "time_deltas":[6,12],
+        "add_wind_direction":true
+    },
+
+    "input_scaler" : {
+        "scaler":"DefaultInputsScaler",
+        "fit_on_subsample":0.7,
+        "scaler_params":{}
+    },
+
+
+    "dataloader":{
+        "batch_size": 5,
+        "test_batch_size": 5,
+        "nans_to_zeros": true,
+
+        "dataloader_params": {
+                "prefetch_factor": 3,
+                "num_workers": 2,
+                "pin_memory": true,
+                "persistent_workers": true,
+                "multiprocessing_context": "forkserver",
+            "shuffle": true}
+    },
+
+    "model_parameters":{
+        "num_blocks":4, 
+        "node_dim":64, 
+        "edge_dim":64, 
+        "hidden_layers_processor_node":2, 
+        "hidden_layers_processor_edge":2,  
+        "hidden_layers_decoder":1, 
+        "hidden_dim_processor_node":16, 
+        "hidden_dim_processor_edge":16, 
+        "hidden_dim_decoder":16, 
+        "resolution":4, 
+        "output_dim":1, 
+        "residuals":false, 
+        "attention":false
+    },
+
+    "learning_rate":5e-5,
+    "use_wandb":true,
+    "wandb": {
+        "project": "BoundaryCondition-Prediction",
+        "entity": "gates-lab",
+        "tags": ["SAHARA", "gpu", "PixelWeightedMSELoss"]
+    },
+
+    "epochs" : {
+        "training": 250,
+        "visualize": 10,
+        "patience": 100,
+        "model_save": 50
+    },    
+
+    "loss_functions" : {
+        "criterion": "gates_losses.PixelWeightedMSELoss",
+        "criterion_params": {"weight_label":"fp_original", "transform_fn":"scale_and_shift", "w":1000, "a":0.5},
+        "criterion_test": "gates_losses.MSELoss",
+        "criterion_test_params": {}
+    }  
+      
+}
+
+
+
+{
+    "env": "bp",
+    "model_name": "test_run",
+
+    "train_load_data": {
+        "year": "2014",
+        "freq": 100,
+        "region": "BRAZIL",
+        "size": 50,
+        "met_args": {
+            "met_levels": [3, 15, 21]
+        }
+    },
+
+    "test_load_data": {
+        "year": "2018",
+        "freq": 100
+    },
+
+    "variables": {
+        "met_variables": {
+            "x_wind": [3, 15],
+            "y_wind": [3, 15],
+            "upward_air_velocity": [3, 15],
+            "atmosphere_boundary_layer_thickness": [],
+            "surface_air_pressure": []
+        },
+        "static_variables": ["lat_coords", "lon_coords"],
+        "time_deltas": [6]
+    },
+
+    "dataloader_parameters": {
+        "input_transforms": ["clever_transform_3"]
+    },
+
+    "model_parameters": {
+        "num_blocks": 4,
+        "node_dim": 64,
+        "edge_dim": 64,
+        "hidden_layers_processor_node": 2,
+        "hidden_layers_processor_edge": 2,
+        "hidden_layers_decoder": 1,
+        "hidden_dim_processor_node": 16,
+        "hidden_dim_processor_edge": 16,
+        "hidden_dim_decoder": 16,
+        "resolution": 4,
+        "output_dim": 8,
+        "residuals": false,
+        "attention": false
+    },
+
+    "loss_functions": {
+        "criterion": "torch.nn.MSELoss()",
+        "criterion_test": "torch.nn.MSELoss()"
+    },
+
+    "epochs": {
+        "training": 300,
+        "visualize": 5,
+        "patience": 3,
+        "model_saving": 50
+    },
+
+    "learning_rate": 0.00005,
+    "seed": 42,
+    "use_wandb": false,
+
+    "num_classes": 1,
+    "use_baselines": true,
+    "network_decoder": "gnn",
+    "output_format": "corrected",
+    "auxiliary": "multiple",
+    "normalization": "all",
+
+    "grid_reference_fp": null
+}

@@ -276,6 +276,131 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
     return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
 
 
+def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inputs, test_outputs,
+                                train_times, test_times,
+                                train_auxiliary_cams=None, test_auxiliary_cams=None,
+                                output_names=None):
+    """
+    Sets up dataloaders for boundary condition prediction using xbatcher,
+    analogous to setup_GATES_dataloaders but for boundary condition outputs.
+
+    Args:
+        parameters (dict): Training configuration. Expected keys include 'dataloader' with
+            sub-keys 'batch_size', 'test_batch_size', and 'dataloader_params'.
+        train_inputs (xr.DataArray): Training meteorological inputs of shape
+            (fp_time, lat, lon, variable_name).
+        train_outputs (np.ndarray): Training boundary condition outputs of shape
+            (N_train, num_classes). Already normalised by load_and_normalise_boundary_data.
+        test_inputs (xr.DataArray): Test meteorological inputs of shape
+            (fp_time, lat, lon, variable_name).
+        test_outputs (np.ndarray): Test boundary condition outputs of shape
+            (N_test, num_classes). Already normalised by load_and_normalise_boundary_data.
+        train_times: Time coordinate values for the training set, matching N_train.
+        test_times: Time coordinate values for the test set, matching N_test.
+        train_auxiliary_cams (np.ndarray, optional): Auxiliary CAMS features for training,
+            shape (N_train, aux_features). Appended to inputs if use_baselines=True.
+        test_auxiliary_cams (np.ndarray, optional): Auxiliary CAMS features for test,
+            shape (N_test, aux_features). Appended to inputs if use_baselines=True.
+        output_names (list of str, optional): Names for each output column, e.g.
+            ['north', 'south', 'east', 'west']. Defaults to ['output_0', ...].
+
+    Returns:
+        tuple:
+            - train_loader (DataLoader): DataLoader for training set.
+            - test_loader (DataLoader): DataLoader for test set.
+            - boundary_labels (list): Output label names.
+            - scalers (dict): Contains 'inputs_scaler' for reuse at inference.
+    """
+    
+    # Scale inputs using training statistics
+    input_dataset = setup_input_dataset(parameters, train_inputs)
+    train_scaled_inputs = input_dataset.transform(train_inputs)
+    test_scaled_inputs = input_dataset.transform(test_inputs)
+
+    # Append pre-normalised auxiliary CAMS features to inputs if use_baselines is True
+    use_baselines = parameters.get("use_baselines", True)
+    if use_baselines and train_auxiliary_cams is not None and test_auxiliary_cams is not None:
+        train_aux_expanded = np.repeat(
+        train_auxiliary_cams[:, np.newaxis, np.newaxis, :],
+        train_inputs.shape[1],  # lat
+        axis=1
+    )
+        train_aux_expanded = np.repeat(
+            train_aux_expanded,
+            train_inputs.shape[2],  # lon
+            axis=2
+        )
+        print('concenating inputs and auxillaty train')
+        train_scaled_inputs = np.concatenate([train_scaled_inputs, train_aux_expanded], axis=-1)
+
+        test_aux_expanded = np.repeat(
+        test_auxiliary_cams[:, np.newaxis, np.newaxis, :],
+        test_inputs.shape[1],  # lat
+        axis=1
+        )
+        test_aux_expanded = np.repeat(
+            test_aux_expanded,
+            test_inputs.shape[2],  # lon
+            axis=2
+        )
+        print('concenating inputs and auxillaty train')
+        test_scaled_inputs = np.concatenate([test_scaled_inputs, test_auxiliary_cams], axis=-1)
+
+    # Convert numpy outputs to xarray DataArrays with time coordinates
+    train_outputs_xr = gates_datasets.outputs_to_xarray(train_outputs, times=train_times, output_names=output_names)
+    test_outputs_xr = gates_datasets.outputs_to_xarray(test_outputs, times=test_times, output_names=output_names)
+
+    dataloader_info = parameters.get("dataloader", {})
+    batch_size = dataloader_info.get("batch_size", 5)
+    test_batch_size = dataloader_info.get("test_batch_size", 5)
+    dataloader_params = dataloader_info.get("dataloader_params", {})
+
+    if "prefetch_factor" in dataloader_params and dataloader_params["prefetch_factor"] == 0:
+        dataloader_params["prefetch_factor"] = None
+
+    # Trim to batch size to avoid partial batches
+    # train_scaled_inputs has fp_time dim (xarray), train_outputs_xr has time dim
+    train_scaled_inputs, train_outputs_xr = gates_datasets.trim_to_batch_size(
+        train_scaled_inputs, train_outputs_xr, batch_size
+    )
+    test_scaled_inputs, test_outputs_xr = gates_datasets.trim_to_batch_size(
+        test_scaled_inputs, test_outputs_xr, test_batch_size
+    )
+
+    train_loader, boundary_labels_train = gates_datasets.make_boundary_dataloader(
+        train_scaled_inputs, train_outputs_xr,
+        batch_size=batch_size,
+        randomize=True,
+        dataloader_params=dataloader_params,
+        flatten=True
+    )
+
+    # num_workers=0 for test to avoid deadlock with persistent forkserver workers
+    test_dataloader_params = {
+        "num_workers": 0,
+        "persistent_workers": False,
+        "prefetch_factor": None
+    }
+    print("SPECIAL TEST PARAMS", test_dataloader_params)
+
+    test_loader, boundary_labels_test = gates_datasets.make_boundary_dataloader(
+        test_scaled_inputs, test_outputs_xr,
+        batch_size=test_batch_size,
+        randomize=False,
+        dataloader_params=test_dataloader_params,
+        flatten=True
+    )
+
+    if boundary_labels_train != boundary_labels_test:
+        raise ValueError(
+            "The labels for the training and test boundary datasets do not match. "
+            "Check that train and test outputs have the same structure and number of columns."
+        )
+
+    scalers = {"inputs_scaler": input_dataset.scaler}
+
+    return train_loader, test_loader, boundary_labels_train, scalers
+
 def initialise_losses():
     """
     Return a dictionary to store losses and metrics during training and evaluation. 
