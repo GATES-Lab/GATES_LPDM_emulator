@@ -333,25 +333,7 @@ def train_and_save_model(parameters, model_save_dir):
 
     verbose = parameters.get("verbose", True)
 
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_name = f"{parameters['model_name']}_{timestamp}"
-    model_path = Path(model_save_dir) / model_name
-    print(f"Initialising model run for model_name: {model_name}")
-
-    # the paths are all stored in this dataclass (e.g. paths_ctx.model_path)
-    paths_ctx = PathContext(
-        model_save_dir=model_save_dir,
-        model_name=model_name,
-        model_path=model_path # model_save_dir / model_name
-    )
-
-    paths_ctx.make_dirs()
-
-    seed = parameters.get("seed", 34)
-    set_reproducibility(seed)
-    if verbose: print(f"Set random seed to {seed} for reproducibility.")
-
+    # Initialise W&B early to get run ID for unique directory naming in concurrent runs
     if use_wandb:
         wandb_project = parameters.get("wandb", {}).get("project", None)
         wandb_entity = parameters.get("wandb", {}).get("entity", None)
@@ -372,6 +354,33 @@ def train_and_save_model(parameters, model_save_dir):
             else:
                 # Sweep agents may create runs before this function is called.
                 wandb.config.update(parameters, allow_val_change=True)
+
+    # Generate unique model name with W&B run ID if available
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_name_base = f"{parameters['model_name']}_{timestamp}"
+    
+    if use_wandb and wandb.run is not None:
+        run_id = wandb.run.id
+        model_name = f"{model_name_base}_{run_id}"
+    else:
+        model_name = model_name_base
+    
+    model_path = Path(model_save_dir) / model_name
+    print(f"Initialising model run for model_name: {model_name}")
+
+    # the paths are all stored in this dataclass (e.g. paths_ctx.model_path)
+    paths_ctx = PathContext(
+        model_save_dir=model_save_dir,
+        model_name=model_name,
+        model_path=model_path # model_save_dir / model_name
+    )
+
+    paths_ctx.make_dirs()
+
+    seed = parameters.get("seed", 34)
+    set_reproducibility(seed)
+    if verbose: print(f"Set random seed to {seed} for reproducibility.")
+
 
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

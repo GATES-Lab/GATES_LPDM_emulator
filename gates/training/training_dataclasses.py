@@ -19,7 +19,7 @@ class PathContext:
         os.mkdir(self.training_imgs_path)
         
         # store the training outputs, including scalers, training settings, and training logs
-        self.   training_outputs_path = self.model_path / "training_outputs"
+        self.training_outputs_path = self.model_path / "training_outputs"
         os.mkdir(self.training_outputs_path)
         
         # write the training updates to a text file in the training outputs directory
