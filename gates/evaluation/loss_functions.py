@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import inspect
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +128,40 @@ def _label_index(fp_labels, label, arg_name='weight_label'):
             f"{arg_name} '{label}' not found in fp_labels {fp_labels}"
         )
     return fp_labels.index(label)
+
+
+def _filter_kwargs(func, kwargs):
+    """Filter kwargs to only include parameters that func accepts.
+    
+    Uses inspect.signature to determine which parameters the function accepts,
+    then returns only the kwargs that match those parameters.
+    Handles None gracefully by returning an empty dict.
+    
+    Args:
+        func: callable object to inspect
+        kwargs: dict of keyword arguments to filter
+    
+    Returns:
+        dict: filtered kwargs containing only valid parameters for func
+    """
+    if func is None or not callable(func):
+        return {}
+    
+    try:
+        sig = inspect.signature(func)
+        # Get parameter names, excluding 'self' and the first positional param (s)
+        valid_params = set(sig.parameters.keys())
+        # Remove the first parameter (usually 's' for transform functions)
+        param_list = list(sig.parameters.keys())
+        if param_list:
+            valid_params.discard(param_list[0])
+        
+        # Filter kwargs to only include valid parameters
+        return {k: v for k, v in kwargs.items() if k in valid_params}
+    except Exception as e:
+        print(f"Warning: Could not inspect function signature: {e}")
+        # If inspection fails, return all kwargs (original behavior)
+        return kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +347,9 @@ class PixelWeightedMSELoss(nn.Module):
         weights = _resolve_dims(weights, pred.shape)
 
         if self.transform_fn is not None:
-            weights = self.transform_fn(weights, **self.transform_kwargs)
+            # Filter kwargs to only include parameters that transform_fn accepts
+            filtered_kwargs = _filter_kwargs(self.transform_fn, self.transform_kwargs)
+            weights = self.transform_fn(weights, **filtered_kwargs)
         loss = _mask((pred - target) ** 2 * weights, nan_mask)
         return torch.nanmean(loss)
 
@@ -391,7 +428,9 @@ class SumWeightedMSELoss(nn.Module):
             weights_sum = self.normalize_fn(weights_sum)
 
         if self.transform_fn is not None:
-            weights_sum = self.transform_fn(weights_sum, **self.transform_kwargs)   # (B,)
+            # Filter kwargs to only include parameters that transform_fn accepts
+            filtered_kwargs = _filter_kwargs(self.transform_fn, self.transform_kwargs)
+            weights_sum = self.transform_fn(weights_sum, **filtered_kwargs)   # (B,)
 
         return torch.nanmean(per_sample_mse * weights_sum)
 
@@ -485,7 +524,9 @@ class MSEPlusSumLoss(nn.Module):
             w = _mask(w, nan_mask)
 
         if self.transform_fn is not None:
-            w = self.transform_fn(w, **self.transform_kwargs)
+            # Filter kwargs to only include parameters that transform_fn accepts
+            filtered_kwargs = _filter_kwargs(self.transform_fn, self.transform_kwargs)
+            w = self.transform_fn(w, **filtered_kwargs)
         
         w = _resolve_dims(w, pred.shape)
 
