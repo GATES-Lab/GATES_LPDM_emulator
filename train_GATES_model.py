@@ -356,18 +356,22 @@ def train_and_save_model(parameters, model_save_dir):
         wandb_project = parameters.get("wandb", {}).get("project", None)
         wandb_entity = parameters.get("wandb", {}).get("entity", None)
         wandb_tags = parameters.get("wandb", {}).get("tags", [])
-        if use_wandb and wandb_project is None or wandb_entity is None:
+        if use_wandb and (wandb_project is None or wandb_entity is None):
             print("Warning: 'use_wandb' is True but no 'wandb.project' or 'wandb.entity' specified in parameters. W&B will not be initialised.")
             use_wandb = False
             parameters["use_wandb"] = False
 
         if use_wandb:
-            wandb.init(
-                entity=wandb_entity,
-                project=wandb_project, 
-                config=parameters,
-                tags=wandb_tags
-            )
+            if wandb.run is None:
+                wandb.init(
+                    entity=wandb_entity,
+                    project=wandb_project,
+                    config=parameters,
+                    tags=wandb_tags
+                )
+            else:
+                # Sweep agents may create runs before this function is called.
+                wandb.config.update(parameters, allow_val_change=True)
 
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -580,5 +584,9 @@ if __name__ == "__main__":
     
 
     # Train the model with the loaded parameters
-    train_and_save_model(parameters, model_save_dir=model_saving_dir)
+    try:
+        train_and_save_model(parameters, model_save_dir=model_saving_dir)
+    finally:
+        if wandb.run is not None:
+            wandb.finish()
 

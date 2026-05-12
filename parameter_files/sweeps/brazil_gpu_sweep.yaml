@@ -1,0 +1,63 @@
+program: run_wandb_sweep.py
+method: bayes
+name: brazil-gpu-new3-sweep-small-test
+metric:
+  name: test/loss
+  goal: minimize
+
+early_terminate:
+  type: hyperband
+  min_iter: 40
+
+parameters:
+  train_load_data.freq:
+    values: [1, 2, 3, 5, 8, 12]
+
+  variables.time_deltas:
+    values:
+      - [3]
+      - [6]
+      - [12]
+      - [36]
+      - [3, 6]
+      - [6, 12]
+      - [3, 6, 12]
+      - [12, 24]
+
+  variables.static_variables:
+    values:
+      - [sin_lat_coords, sin_lon_coords, cos_lat_coords, cos_lon_coords, lat_coords, lon_coords, x_coords, y_coords, xy_distance_centre, topog, landcover]
+      - [sin_lat_coords, sin_lon_coords, cos_lat_coords, cos_lon_coords, x_coords, y_coords, xy_distance_centre, topog, landcover]
+      - [sin_lat_coords, sin_lon_coords, cos_lat_coords, cos_lon_coords, lat_coords, x_coords, y_coords, xy_distance_centre, topog, landcover]
+      - [sin_lat_coords, sin_lon_coords, cos_lat_coords, cos_lon_coords, lon_coords, x_coords, y_coords, xy_distance_centre, topog, landcover]
+
+  loss_functions.criterion:
+    value: gates_losses.PixelWeightedMSELoss
+
+  loss_functions.criterion_params.weight_label:
+    values: [fp_original]
+
+  loss_functions.criterion_params.transform_fn:
+    values: [scale, scale_and_shift, power]
+
+  loss_functions.criterion_params.w:
+    distribution: log_uniform_values
+    min: 50
+    max: 5000
+
+  loss_functions.criterion_params.a:
+    distribution: uniform
+    min: 0.0
+    max: 1.0
+
+  loss_functions.criterion_test:
+    value: gates_losses.MSELoss
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - NEW_parameter_template_gpu_new3_brazil.json
+  - --file_path
+  - parameter_files
+  - ${args_no_hyphens}
