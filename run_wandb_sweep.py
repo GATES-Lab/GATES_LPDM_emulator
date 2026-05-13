@@ -8,6 +8,7 @@ import wandb
 import gates
 from gates.training.training_helperfuns import load_parameter_file
 from train_GATES_model import train_and_save_model
+from train_GATES_model_multiregion import train_and_save_model_multiregion
 
 
 def _set_nested(config_dict, dotted_key, value):
@@ -42,6 +43,14 @@ def _apply_cli_overrides(parameters, overrides):
 
     for key, value in overrides.items():
         if key in reserved_keys:
+            continue
+        if key == "multiregion.shared_train_freq":
+            if "regions" not in parameters or not isinstance(parameters["regions"], dict):
+                raise ValueError("Received multiregion.shared_train_freq but parameter file has no 'regions' dictionary")
+            for region_cfg in parameters["regions"].values():
+                if "train_load_data" not in region_cfg or not isinstance(region_cfg["train_load_data"], dict):
+                    region_cfg["train_load_data"] = {}
+                region_cfg["train_load_data"]["freq"] = value
             continue
         if "." in key:
             _set_nested(parameters, key, value)
@@ -118,7 +127,10 @@ def main():
         else:
             model_save_dir = Path(args.model_save_dir)
 
-        train_and_save_model(parameters, model_save_dir=model_save_dir)
+        if "regions" in parameters and isinstance(parameters["regions"], dict):
+            train_and_save_model_multiregion(parameters, model_save_dir=model_save_dir)
+        else:
+            train_and_save_model(parameters, model_save_dir=model_save_dir)
 
 
 if __name__ == "__main__":
