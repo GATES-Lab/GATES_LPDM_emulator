@@ -614,6 +614,7 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
 
     # Image plots are drawn from the first test region
     first_region = test_regions[0]
+    random.seed(seed)
     image_plots = random.sample(list(range(len(first_region["inputs"]))), k=min(4, len(first_region["inputs"])))
     image_dates = np.datetime_as_string(
         first_region["fp_xr"].time.values[sorted(image_plots)])
