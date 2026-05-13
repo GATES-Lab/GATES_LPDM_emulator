@@ -22,8 +22,7 @@
     },
 
     "dataloader_parameters":{
-        "input_transforms":["clever_transform_3"],
-        "output_transforms":["logv4"]  
+        "input_transforms":["clever_transform_3"]
     },
 
     "model_parameters":{
@@ -41,9 +40,14 @@
         "residuals":false, 
         "attention":false
     },
-
+    "normalization":"all",
     "learning_rate":5e-5,
+    "num_classes":4,
+    "use_baselines":true,
     "use_wandb":false,
+    "output_format":"corrected",
+    "auxilliary":"multiple",
+    "network_decoder":"conv",
 
     "epochs" : {
         "training": 300,
@@ -53,7 +57,7 @@
     },    
 
     "loss_functions" : {
-        "criterion": "MSE_weighted_by_truth_nans(multiply_by_add, w=1000)",
+        "criterion": "torch.nn.MSELoss()",
         "criterion_test": "torch.nn.MSELoss()"
     }    
 }

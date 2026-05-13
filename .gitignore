@@ -14,4 +14,4 @@ model/data/load_data_old.py
 model_runs
 *.pyc
 debug_notebook.ipynb
-
+*.npz
