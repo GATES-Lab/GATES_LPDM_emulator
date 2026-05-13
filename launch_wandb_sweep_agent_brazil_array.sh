@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=wandb_brazil_sweep_array
-#SBATCH --output=logs/%A_%a_wandb_brazil_sweep.out
+#SBATCH --job-name=brazil_freq_sweep
+#SBATCH --output=logs/%A_%a_brazil_freq_sweep.out
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
-#SBATCH --mem=200G
+#SBATCH --mem=230G
 #SBATCH --time=36:00:00
 #SBATCH --array=0-3
 
@@ -34,8 +34,9 @@ export PYTHONPATH="${HOME}/my_gates_env/lib/python3.12/site-packages:${PYTHONPAT
 export PYTHONNOUSERSITE=1
 export PATH="${HOME}/.local/bin:${PATH}"
 
-# Helps identify each array worker in the W&B UI.
-export WANDB_NAME="${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}_${SLURM_JOB_NAME}"
+# Do not force a fixed WANDB_NAME for sweep agents.
+# A fixed name makes multiple distinct runs appear identical in W&B charts.
+unset WANDB_NAME
 
 wandb agent --count "${COUNT_PER_AGENT}" "${SWEEP_PATH}"
 
