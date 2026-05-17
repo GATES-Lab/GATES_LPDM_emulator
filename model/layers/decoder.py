@@ -12,6 +12,7 @@ from torch_geometric.utils import to_dense_batch
 from torch_scatter import scatter_mean
 
 from model.layers.graph_net_block import MLP
+import math
 
 
 class SatelliteDecoderClassifier(torch.nn.Module):

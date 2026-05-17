@@ -72,7 +72,7 @@ from pathlib import Path
 import gates.training.training as gates_training
 import gates
 from gates.data.load_data import get_grid
-from gates.training.training_dataclasses import PathContext, TrainingContext
+from gates.training.training_dataclasses import PathContext, TrainingContext, BoundaryTrainingContext
 
 from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility
 
@@ -82,20 +82,26 @@ from gates.training.training_helperfuns import load_parameter_file, save_object,
 
 def normalize_boundary_data(outputs, outputs_norm_vals=None):
     """
-    Normalise an array using provided or computed mean and std.
+    Normalise an array or xarray DataArray using provided or computed mean and std.
 
     Args:
-        outputs (np.ndarray): Array to normalise.
+        outputs (np.ndarray or xr.DataArray): Array to normalise.
         outputs_norm_vals (tuple, optional): (mean, std) to reuse from training.
             If None, mean and std are computed from outputs.
 
     Returns:
         tuple:
-            - np.ndarray: Normalised array.
+            - np.ndarray or xr.DataArray: Normalised array, same type as input.
             - tuple: (mean, std) used for normalisation.
     """
     if outputs_norm_vals is None:
-        outputs_norm_vals = (np.mean(outputs), np.std(outputs))
+        if isinstance(outputs, xr.DataArray):
+            outputs_mean = float(outputs.mean())
+            outputs_std = float(outputs.std())
+        else:
+            outputs_mean = np.mean(outputs)
+            outputs_std = np.std(outputs)
+        outputs_norm_vals = (outputs_mean, outputs_std)
 
     outputs_mean, outputs_std = outputs_norm_vals
     normalized_outputs = (outputs - outputs_mean) / outputs_std
@@ -122,13 +128,15 @@ def denormalize(array, mean, std):
 # Utilities
 # ---------------------------------------------------------------
 
-def parse_years(year_str):
+def parse_years(year_input):
     """
-    Parse a year string into a list of integer years.
+    Parse a year or list of years into a flat list of integer years.
 
     Args:
-        year_str (str): Year string, either an exact year (e.g. '2014') or a
-            bracketed range (e.g. '201[4-5]').
+        year_input (str, int, or list): Accepted formats:
+            - int: 2014
+            - str: '2014' or bracketed range '201[4-5]'
+            - list of int or str: [2014, 2015] or ['2014', '2015']
 
     Returns:
         list of int: List of years.
@@ -136,20 +144,181 @@ def parse_years(year_str):
     Raises:
         ValueError: If the format is not recognised.
     """
+    # Handle list or tuple input by parsing each element and flattening
+    # Must happen before str() conversion to avoid str(['2015']) = "['2015']"
+    if isinstance(year_input, (list, tuple)):
+        years = []
+        for y in year_input:
+            years.extend(parse_years(y))
+        return years
+
+    # Handle plain integer
+    if isinstance(year_input, int):
+        year_str = str(year_input)
+        if re.fullmatch(r'20\d{2}', year_str):
+            return [year_input]
+        raise ValueError(f"Invalid year format: {year_input}")
+
+    # Handle string
+    year_str = str(year_input)
+
+    # Bracketed range like '201[4-5]'
     match = re.fullmatch(r'201\[(\d)-(\d)\]', year_str)
     if match:
         start, end = map(int, match.groups())
         return [2010 + i for i in range(start, end + 1)]
 
+    # Exact four-digit year like '2014'
     if re.fullmatch(r'20\d{2}', year_str):
         return [int(year_str)]
 
-    raise ValueError(f"Invalid year format: {year_str}")
+    raise ValueError(f"Invalid year format: {year_input}")
 
 
 # ---------------------------------------------------------------
 # CAMS boundary condition computation
 # ---------------------------------------------------------------
+def baseline_mol_correction_xr(desired_data, months, years, output_format, height_indices=None):
+    """
+    Compute CAMS-based boundary condition outputs and auxiliary features,
+    keeping everything as xarray operations.
+
+    Args:
+        desired_data: Data object with fp_data_full containing particle locations and times.
+        months (list of str): Months to process, e.g. ['01', '02'].
+        years (list of int): Years to process.
+        output_format (str): One of 'sum' or 'corrected'.
+        height_indices (list of int, optional): Height levels to extract. Defaults to [4].
+
+    Returns:
+        tuple:
+            - xr.DataArray: Baseline list, shape (time, 4), dim 'direction'.
+            - xr.DataArray: Outputs, shape (time, 1) or (time,), dim 'time'.
+            - xr.DataArray: Auxiliary CAMS values, shape (time, n_aux), dim 'aux'.
+            - xr.DataArray: Correction values, shape (time,).
+    """
+    if height_indices is None:
+        height_indices = [4]
+
+    fp_full = desired_data.fp_data_full
+    times = fp_full.particle_locations_n.time
+
+    # Parse time coordinates into year and month arrays
+    times_pd = pd.DatetimeIndex(times.values)
+    time_years  = xr.DataArray(times_pd.year,  dims=["time"], coords={"time": times})
+    time_months = xr.DataArray(times_pd.month, dims=["time"], coords={"time": times})
+
+    df = pd.read_csv(
+        '/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/CH4_Semihemispheric_modelled_mole_fractions.csv'
+    )
+
+    n_times = len(times)
+    n_aux = 4 * len(height_indices)
+
+    # Initialise output DataArrays
+    baseline_list = xr.DataArray(
+        np.zeros((n_times, 4)),
+        dims=["time", "direction"],
+        coords={"time": times, "direction": ["north", "south", "east", "west"]}
+    )
+    north_list          = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    south_list          = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    east_list           = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    west_list           = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    total_list          = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    collated_corrections = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+
+    aux_names = [f"aux_{i}" for i in range(n_aux)]
+    auxiliary_cams = xr.DataArray(
+        np.zeros((n_times, n_aux)),
+        dims=["time", "aux"],
+        coords={"time": times, "aux": aux_names}
+    )
+
+    for year in years:
+        print(f"Processing year {year}")
+        for month in months:
+            # Boolean mask for this year/month combination
+            mask = (time_years == int(year)) & (time_months == int(month))
+            if not mask.any():
+                continue
+
+            cams_path = (
+                f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion_climatology.nc"
+                if int(year) > 2017
+                else f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion.nc"
+            )
+            cams = xr.open_dataset(cams_path)
+
+            # Baseline CSV lookup
+            filtered_df = df[(df["Year"] == int(year)) & (df["Month"] == int(month))]
+            baseline_vals = filtered_df.iloc[:, [3, 4, 5, 6]].values / 1000
+            baseline_list.loc[{"time": mask}] = baseline_vals
+
+            # Select particle locations for this month
+            # north/south have dims (height, lon, time)
+            # east/west have dims (height, lat, time)
+            pl_n = fp_full.particle_locations_n.sel(time=mask)
+            pl_s = fp_full.particle_locations_s.sel(time=mask)
+            pl_e = fp_full.particle_locations_e.sel(time=mask)
+            pl_w = fp_full.particle_locations_w.sel(time=mask)
+
+            # CAMS vmr arrays have different grid sizes from particle locations
+            # so interpolate CAMS onto the particle location grid before multiplying
+            cams_vmr_n = cams.vmr_n.interp(lon=pl_n.lon, method="linear")  # (height, lon)
+            cams_vmr_s = cams.vmr_s.interp(lon=pl_s.lon, method="linear")  # (height, lon)
+            cams_vmr_e = cams.vmr_e.interp(lat=pl_e.lat, method="linear")  # (height, lat)
+            cams_vmr_w = cams.vmr_w.interp(lat=pl_w.lat, method="linear")  # (height, lat)
+
+            # Weighted sum over height and boundary dimension, result is (time,)
+            north_mol = (cams_vmr_n * pl_n).sum(dim=["height", "lon"])
+            south_mol = (cams_vmr_s * pl_s).sum(dim=["height", "lon"])
+            east_mol  = (cams_vmr_e * pl_e).sum(dim=["height", "lat"])
+            west_mol  = (cams_vmr_w * pl_w).sum(dim=["height", "lat"])
+
+            north_list.loc[{"time": mask}] = north_mol.values
+            south_list.loc[{"time": mask}] = south_mol.values
+            east_list.loc[{"time": mask}]  = east_mol.values
+            west_list.loc[{"time": mask}]  = west_mol.values
+
+            # Auxiliary CAMS values at specific height levels and boundary midpoints
+            mid_n_index = cams.vmr_n.shape[1] // 2
+            mid_e_index = cams.vmr_e.shape[1] // 2
+
+            all_vals = []
+            for h in height_indices:
+                all_vals.extend([
+                    float(cams.vmr_n.values[h, mid_n_index]),
+                    float(cams.vmr_s.values[h, mid_n_index]),
+                    float(cams.vmr_e.values[h, mid_e_index]),
+                    float(cams.vmr_w.values[h, mid_e_index]),
+                ])
+            # Same auxiliary value repeated for all timesteps in this month
+            auxiliary_cams.loc[{"time": mask}] = np.array(all_vals)
+
+            # Correction term — mean of southern boundary at level 1
+            correction = float(cams.vmr_s[1].mean())
+            total_mol = north_mol + south_mol + east_mol + west_mol
+            total_list.loc[{"time": mask}] = (total_mol - correction).values
+            collated_corrections.loc[{"time": mask}] = correction
+
+            cams.close()
+
+    # Stack direction outputs into a single DataArray (time, direction)
+    outputs_stacked = xr.concat(
+        [north_list, south_list, east_list, west_list],
+        dim=pd.Index(["north", "south", "east", "west"], name="direction")
+    ).transpose("time", "direction")
+
+    if output_format == "sum":
+        outputs = outputs_stacked.sum(dim="direction").expand_dims("direction", axis=-1)
+    elif output_format == "corrected":
+        outputs = total_list.expand_dims("direction", axis=-1)
+    else:
+        outputs = outputs_stacked
+
+    return baseline_list, outputs, auxiliary_cams, collated_corrections
+
 
 def baseline_mol_correction(desired_data, months, years, output_format, height_indices=None):
     """
@@ -282,10 +451,14 @@ def load_and_normalise_boundary_data(data, months, years, output_format, height_
             - np.ndarray: Raw correction values.
             - dict: Normalisation values used, with keys 'outputs', 'baselines', 'auxiliary'.
     """
+    baseline_list, outputs, auxiliary_cams, corrections = baseline_mol_correction_xr(
+        data, months, years, output_format=output_format, height_indices=height_indices
+    )
+    '''
     baseline_list, outputs, auxiliary_cams, corrections = baseline_mol_correction(
         data, months, years, output_format=output_format, height_indices=height_indices
     )
-
+    '''
     if norm_vals is None:
         outputs, outputs_norm = normalize_boundary_data(outputs)
         baseline_list, baselines_norm = normalize_boundary_data(baseline_list)
@@ -304,45 +477,6 @@ def load_and_normalise_boundary_data(data, months, years, output_format, height_
     return outputs, baseline_list, auxiliary_cams, corrections, norm_vals_out
 
 
-# ---------------------------------------------------------------
-# Model construction
-# ---------------------------------------------------------------
-
-def build_model(parameters, grid, feature_dim, aux_dim, num_lat, num_lon):
-    """
-    Construct the appropriate model variant based on parameters.
-
-    Args:
-        parameters (dict): Training parameters including 'network_decoder', 'num_classes',
-            and 'model_parameters'.
-        grid: Lat/lon grid passed to the model encoder.
-        feature_dim (int): Number of input features per node.
-        aux_dim (int): Number of auxiliary input features.
-        num_lat (int): Number of latitude points (used by conv decoder).
-        num_lon (int): Number of longitude points (used by conv decoder).
-
-    Returns:
-        torch.nn.Module: The constructed model.
-    """
-    num_classes = parameters['num_classes']
-
-    if parameters['network_decoder'] == 'conv':
-        print('Using conv network')
-        model = GraphSatelliteForecasterConvClassifier(
-            grid, whole_world=False, feature_dim=feature_dim,
-            aux_dim=aux_dim, num_classes=num_classes,
-            input_height=num_lat, input_width=num_lon,
-            **parameters["model_parameters"]
-        )
-    else:
-        print('Using normal network')
-        model = GraphSatelliteForecasterClassifier(
-            grid, whole_world=False, feature_dim=feature_dim,
-            aux_dim=aux_dim, num_classes=num_classes,
-            **parameters["model_parameters"]
-        )
-
-    return model
 
 
 # ---------------------------------------------------------------
@@ -350,24 +484,10 @@ def build_model(parameters, grid, feature_dim, aux_dim, num_lat, num_lon):
 # ---------------------------------------------------------------
 
 def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device, epoch):
-    """
-    Runs a single training epoch.
-
-    Args:
-        model (torch.nn.Module): The model to train.
-        loader (DataLoader): Training data loader providing (inputs, labels) batches.
-        optimizer (torch.optim.Optimizer): Optimiser for weight updates.
-        criterion (callable): Training loss function.
-        criterion_test (callable): Display loss function (no gradient).
-        device (torch.device): Compute device.
-        epoch (int): Current epoch number, used for logging.
-
-    Returns:
-        float: Mean display loss across all batches.
-    """
     model.train()
     running_loss = 0.0
     start_time = time.time()
+    n_batches = 0
 
     for i, batch in enumerate(loader):
         ins, labels = batch[0].to(device), batch[1].to(device)
@@ -382,31 +502,20 @@ def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device,
             display_loss = criterion_test(outputs, labels)
             running_loss += display_loss.item()
 
+        n_batches += 1
+
         if i % 10 == 0:
             print(f"[{epoch}, {i:5d}] Loss: {running_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s")
 
-    return running_loss / len(loader)
+    return running_loss / max(n_batches, 1)
 
 
 @torch.no_grad()
 def validate_and_predict(model, loader, criterion_test, device):
-    """
-    Evaluates the model on a validation or test set.
-
-    Args:
-        model (torch.nn.Module): The model to evaluate.
-        loader (DataLoader): Validation data loader providing (inputs, labels) batches.
-        criterion_test (callable): Loss function for scoring.
-        device (torch.device): Compute device.
-
-    Returns:
-        tuple:
-            - float: Mean loss across all batches.
-            - np.ndarray: Predictions of shape (total_samples, features).
-    """
     model.eval()
     test_error = 0.0
     preds_list = []
+    n_batches = 0
 
     for batch in loader:
         ins, labels = batch[0].to(device), batch[1].to(device)
@@ -415,95 +524,82 @@ def validate_and_predict(model, loader, criterion_test, device):
         test_error += criterion_test(outputs, labels).item()
         pred_np = outputs.cpu().numpy().reshape(outputs.shape[0], -1)
         preds_list.append(pred_np)
+        n_batches += 1
 
-    return test_error / len(loader), np.vstack(preds_list)
+    return test_error / max(n_batches, 1), np.vstack(preds_list)
 
 
-def run_full_training(model, parameters, train_loader, test_loader, optimizer, criterion,
-                      criterion_test, device, epoch_so_far, losses, path, model_name):
+def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx, paths_ctx, losses):
     """
-    Executes the full training loop with early stopping and checkpointing.
+    Executes the full training loop with early stopping and checkpointing,
+    using context dataclasses for configuration.
 
     Args:
         model (torch.nn.Module): The model to train.
-        parameters (dict): Training configuration. Expected keys: 'learning_rate',
-            'epochs' (with sub-keys 'training', 'model_saving', 'patience'), 'use_wandb'.
         train_loader (DataLoader): Training data loader.
         test_loader (DataLoader): Validation data loader.
-        optimizer (torch.optim.Optimizer): Optimiser.
-        criterion (callable): Training loss function.
-        criterion_test (callable): Validation/display loss function.
-        device (torch.device): Compute device.
-        epoch_so_far (int): Starting epoch, for resuming from a checkpoint.
+        model_ctx (ModelContext): Model configuration including optimizer, criterion,
+            early stopping, and epoch settings.
+        training_ctx (BoundaryTrainingContext): Training context including device,
+            use_wandb flag, and other training parameters.
+        paths_ctx (PathContext): Path context including model_path, model_name,
+            and updates_path.
         losses (dict): Accumulator dict with 'train' and 'test' lists.
-        path (str): Base directory for saving checkpoints and logs.
-        model_name (str): Model identifier used in file paths and W&B artifact names.
 
     Returns:
         None
     """
-    lr = parameters['learning_rate']
-    num_epochs = parameters['epochs']['training']
-    saving_epochs = parameters['epochs']['model_saving']
-    patience_epochs = parameters['epochs']['patience']
-    use_wandb = parameters.get('use_wandb', True)
-
-    best_model_path = f"{path}{model_name}/{model_name}_best.pt"
-    early_stopping = EarlyStopping(
-        patience=patience_epochs,
-        verbose=True,
-        path=best_model_path,
-        use_wandb=use_wandb,
-        model_name=model_name
-    )
-
-    for epoch_idx in range(num_epochs):
-        epoch = epoch_idx + epoch_so_far
+    updates_path = paths_ctx.model_path / f"{paths_ctx.model_name}_updates.txt"
+    for epoch_idx in range(model_ctx.epochs_num):
+        epoch = epoch_idx
         print(f"\n--- Start Epoch: {epoch} ---")
-
         avg_train_loss = train_one_epoch(
-            model, train_loader, optimizer, criterion, criterion_test, device, epoch
+            model, train_loader, model_ctx.optimizer,
+            model_ctx.criterion, model_ctx.criterion_test,
+            model_ctx.device, epoch
         )
-        avg_test_loss, _ = validate_and_predict(model, test_loader, criterion_test, device)
+        avg_test_loss, _ = validate_and_predict(
+            model, test_loader, model_ctx.criterion_test, model_ctx.device
+        )
 
         losses["train"].append(avg_train_loss)
         losses["test"].append(avg_test_loss)
 
-        if use_wandb:
+        if training_ctx.use_wandb:
             wandb.log({
                 "epoch": epoch + 1,
                 "train/loss": avg_train_loss,
                 "test/loss": avg_test_loss,
             }, step=epoch)
 
-        early_stopping(avg_test_loss, model)
+        model_ctx.early_stopping(avg_test_loss, model)
 
-        if early_stopping.early_stop:
+        if model_ctx.early_stopping.early_stop:
             print("Early stopping triggered. Ending training.")
             break
 
         write_to_file(
             f"Epoch {epoch}, Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}",
-            path, model_name
+            updates_path
         )
 
-        if epoch % saving_epochs == 0:
-            checkpoint_path = f"{path}{model_name}/{model_name}_{epoch}.pt"
+        if epoch % model_ctx.epochs_save == 0:
+            checkpoint_path = paths_ctx.model_path / f"{paths_ctx.model_name}_{epoch}.pt"
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
+                'optimizer_state_dict': model_ctx.optimizer.state_dict(),
                 'loss': losses,
-                'learning_rate': lr,
+                'learning_rate': model_ctx.lr,
             }, checkpoint_path)
 
-            if use_wandb:
+            if training_ctx.use_wandb:
                 checkpoint_artifact = wandb.Artifact(
-                    name=f"{model_name}-checkpoint",
+                    name=f"{paths_ctx.model_name}-checkpoint",
                     type="model",
                     description="Model checkpoint saved during training"
                 )
-                checkpoint_artifact.add_file(checkpoint_path)
+                checkpoint_artifact.add_file(str(checkpoint_path))
                 wandb.log_artifact(checkpoint_artifact)
 
     print("Finished Training.")
@@ -532,7 +628,6 @@ def train_and_save_model(parameters, model_save_dir):
     #name_output_format = parameters['output_format']
     name_output_format = 'corrected'
     cfg = gates.config.get_config()
-
     verbose = parameters.get("verbose", True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -591,7 +686,7 @@ def train_and_save_model(parameters, model_save_dir):
 
     if load_monthly:
         data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))
-        train_fp_data = data
+        train_fp_data = data.fp_xr
     
     write_to_file(f"Successfully load training met and fp data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
@@ -601,7 +696,7 @@ def train_and_save_model(parameters, model_save_dir):
         test_fp_data = test_data.fp_xr
     if load_monthly:
         test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
-        test_fp_data = test_data
+        test_fp_data = test_data.fp_xr
 
     write_to_file(f"Successfully load test met and fp data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
@@ -692,7 +787,7 @@ def train_and_save_model(parameters, model_save_dir):
 
     if load_monthly:
         data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))
-        train_fp_data = data
+        train_fp_data = data.fp_xr
 
     write_to_file(f"Successfully load training met and fp data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
@@ -702,7 +797,7 @@ def train_and_save_model(parameters, model_save_dir):
         test_fp_data = test_data.fp_xr
     if load_monthly:
         test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
-        test_fp_data = test_data
+        test_fp_data = test_data.fp_xr
 
     if use_wandb:
         # save the number of testing and training samples to wandb config for reference
@@ -720,26 +815,15 @@ def train_and_save_model(parameters, model_save_dir):
     if cluster is not None:
         cluster.close()
         client.close()
-    '''
-    # Get inputs
-    input_variables = parameters["variables"]
-    inputs, names = get_square_satellite_inputs(
-        data, **input_variables, return_variable_names=True, return_asarray=True
-    )
-    test_inputs = get_square_satellite_inputs(test_data, **input_variables, return_asarray=True)
 
-    for label, arr in [("training", inputs), ("test", test_inputs)]:
-        nan_indices = np.argwhere(np.isnan(arr))
-        if nan_indices.size > 0:
-            print(f"NaNs found in {label} set at indices: {nan_indices[:10]}")
-    '''
     # Compute boundary condition outputs and normalise
     # Note: 'auxiliary' key used here — check parameter file uses this spelling
     height_indices = [4, 5, 6, 7] if parameters.get('auxiliary') == 'multiple' else [4]
     all_months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
-    train_year = parse_years(train_load_data_params['year'])
-    test_year = parse_years(test_load_data_params['year'])
-
+    
+    train_year = parse_years(train_load_data_params['years'])
+    test_year = parse_years(test_load_data_params['years'])
+    
     outputs, baseline_list, auxiliary_cams, _, norm_vals = load_and_normalise_boundary_data(
         data, all_months, train_year, name_output_format, height_indices
     )
@@ -753,10 +837,9 @@ def train_and_save_model(parameters, model_save_dir):
     baseline_mean_values, baseline_std_values = norm_vals['baselines']
     auxiliary_mean_values, auxiliary_std_values = norm_vals['auxiliary']
 
-    
 
     use_baselines = True
-    aux_dim = auxiliary_cams.shape[1] if use_baselines else 0
+    aux_dim = auxiliary_cams.sizes["aux"] if use_baselines and auxiliary_cams is not None else 0
 
     # Build grid and datasets
     '''
@@ -765,10 +848,9 @@ def train_and_save_model(parameters, model_save_dir):
     use_baselines = parameters['use_baselines']
     aux_dim = auxiliary_cams.shape[1] if use_baselines else 0
     '''
-    train_times = data.fp_xr.time.values
-    test_times = test_data.fp_xr.time.values
-
-    train_loader, test_loader, boundary_labels, scalers = gates_training.setup_boundary_dataloaders(
+    
+    '''
+    train_loader, test_loader, scalers = gates_training.setup_boundary_dataloaders(
         parameters,
         train_inputs=train_inputs,
         train_outputs=outputs,
@@ -780,23 +862,63 @@ def train_and_save_model(parameters, model_save_dir):
         test_auxiliary_cams=test_auxiliary_cams if use_baselines else None,
     output_names=["sum"]  # adjust to match your output_format
 )
-    train_loader, test_loader, scalers = gates_training.setup_boundary_dataloaders(parameters, train_inputs, outputs, test_inputs, test_outputs,
+    '''
+    print("Computing inputs into memory before dataloader setup...")
+    train_inputs = train_inputs.compute()
+    test_inputs = test_inputs.compute()
+    train_loader, test_loader,boundary_labels, scalers = gates_training.setup_boundary_dataloaders(parameters, train_inputs, outputs, test_inputs, test_outputs,
                                 auxiliary_cams, test_auxiliary_cams)
 
-    '''
-    train_dataset = BoundaryDataset(
-        train_inputs, auxiliary_cams, outputs,
-        use_baselines=use_baselines, input_names=names,
-        **parameters["dataloader_parameters"]
-    )
-    test_dataset = BoundaryDataset(
-        test_inputs, test_auxiliary_cams, test_outputs,
-        use_baselines=use_baselines, input_names=names,
-        test_mode=train_dataset.transform_parameters,
-        **parameters["dataloader_parameters"]
-    )
-    train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=5)
+    
+    save_object(scalers, "scalers",
+    paths_ctx.training_outputs_path, model_name, description=f"Input and output scaler objects used in model {model_name}", use_wandb=use_wandb)
+
+    # images will get plotted and saved for a random selection of 4 dates from the test set - these indeces are saved to parameters for reference 
+    image_plots = random.sample(list(range(len(test_inputs))), k=4)
+    image_dates = np.datetime_as_string(test_fp_data.time.values[sorted(image_plots)])
+
+    parameters["plotted_dates"] = image_dates.tolist()
+
+    save_object(parameters, "training_settings", paths_ctx.training_outputs_path, model_name,  file_type="json", description=f"Training settings and hyperparameters for model {model_name}", use_wandb=use_wandb)
+
+    # create the grid object to make the mesh with and save
+    grid, _ = get_grid(train_fp_data, parameters.get("grid_reference_fp"))
+    save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
+                           description="Grid object used during training", use_wandb=use_wandb)
+    
+    
+
+    training_ctx = BoundaryTrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, boundary_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values),aux_dim) # get size from train params
+
+
+    print("Successfully set up dataloaders!!! using the contexts!!!")
+
+    write_to_file("setting up model", paths_ctx.updates_path)
+
+    
+    model, model_ctx = gates_training.setup_boundary_model(parameters, training_ctx, paths_ctx)
+
+
+    if use_wandb:
+        wandb.watch(model, log="all", log_freq=100)
+    
+    losses = gates_training.initialise_boundary_losses()
+
+    if torch.cuda.is_available():
+        model.cuda()
+    run_full_training(
+    model,
+    train_loader,
+    test_loader,
+    model_ctx=model_ctx,
+    training_ctx=training_ctx,
+    paths_ctx=paths_ctx,
+    losses=losses
+)
+
+    if use_wandb:
+        wandb.finish()
+
     '''
     # Log artifacts
     log_object_as_artifact(grid, "grid", training_outputs_path, model_name,
@@ -831,18 +953,8 @@ def train_and_save_model(parameters, model_save_dir):
 
     if use_wandb:
         wandb.watch(model, log="all", log_freq=100)
+    '''
 
-    if torch.cuda.is_available():
-        model.cuda()
-
-    run_full_training(
-        model, parameters, train_loader, test_loader, optimizer,
-        criterion, criterion_test, device, epoch_so_far=0,
-        losses=losses, path=path, model_name=model_name
-    )
-
-    if use_wandb:
-        wandb.finish()
 
 
 # ---------------------------------------------------------------

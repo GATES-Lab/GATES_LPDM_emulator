@@ -1,6 +1,6 @@
 from pyexpat import model
 
-from model.forecast import GraphSatelliteForecaster
+from model.forecast import GraphSatelliteForecaster, GraphSatelliteForecasterConvClassifier,GraphSatelliteForecasterClassifier
 
 
 import torch.optim as optim
@@ -23,6 +23,7 @@ import os
 import pickle
 import random
 import xarray as xr
+import pandas as pd
 
 from pathlib import Path
 
@@ -102,7 +103,7 @@ def _resolve_years_months(data_parameters):
     return years, months
 
 
-def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False):
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=True):
     """
     Loads footprints and inputs for each year-month pair specified in data_parameters,
     returning them as concatenated xarrays rather than a LoadSquareSatelliteData object.
@@ -175,8 +176,8 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
 
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
     inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
-
-    return fp_xr, inputs
+    return data, inputs
+    #return fp_xr, inputs
 
 
 def _get_scaler(scaler_name, scaler_module=None):
@@ -275,11 +276,53 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
 
     return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
 
+def concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams):
+    """
+    Concatenate auxiliary CAMS features onto scaled inputs along the variable_name dimension,
+    broadcasting the auxiliary values across all lat/lon grid cells.
+
+    Args:
+        scaled_inputs (xr.DataArray): Shape (fp_time, lat, lon, variable_name).
+        auxiliary_cams (xr.DataArray): Shape (time, aux) with aux coordinate names.
+
+    Returns:
+        xr.DataArray: Concatenated inputs of shape (fp_time, lat, lon, variable_name)
+            with aux features appended along variable_name.
+    """
+    aux_names = list(auxiliary_cams.aux.values)
+    lat_size = scaled_inputs.sizes["lat"]
+    lon_size = scaled_inputs.sizes["lon"]
+    n_aux = len(aux_names)
+
+    # Rename 'time' to 'fp_time' to match scaled_inputs
+    aux_fp_time = auxiliary_cams.rename({"time": "fp_time"})
+
+    # Expand (fp_time, aux) -> (fp_time, lat, lon, aux) by broadcasting
+    # Use expand_dims then broadcast_to via xarray
+    aux_expanded = aux_fp_time.expand_dims(
+        dim={"lat": scaled_inputs.lat, "lon": scaled_inputs.lon},
+    )
+    # Reorder to match scaled_inputs dim order
+    aux_expanded = aux_expanded.transpose("fp_time", "lat", "lon", "aux")
+
+    # Build a MultiIndex compatible with the variable_name MultiIndex on scaled_inputs
+    aux_multiindex = pd.MultiIndex.from_arrays(
+        [aux_names,
+         [0] * n_aux,   # levels — no pressure level for auxiliary
+         [0] * n_aux],  # time_delta — no time shift for auxiliary
+        names=["variable", "levels", "time_delta"]
+    )
+
+    # Rename aux dim to variable_name and assign the MultiIndex coordinate
+    aux_expanded = aux_expanded.rename({"aux": "variable_name"})
+    aux_expanded = aux_expanded.assign_coords(
+        variable_name=aux_multiindex
+    )
+
+    return xr.concat([scaled_inputs, aux_expanded], dim="variable_name")
 
 def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inputs, test_outputs,
-                                train_times, test_times,
-                                train_auxiliary_cams=None, test_auxiliary_cams=None,
-                                output_names=None):
+                                train_auxiliary_cams=None, test_auxiliary_cams=None):
     """
     Sets up dataloaders for boundary condition prediction using xbatcher,
     analogous to setup_GATES_dataloaders but for boundary condition outputs.
@@ -319,7 +362,13 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
 
     # Append pre-normalised auxiliary CAMS features to inputs if use_baselines is True
     use_baselines = parameters.get("use_baselines", True)
+    
     if use_baselines and train_auxiliary_cams is not None and test_auxiliary_cams is not None:
+
+        train_scaled_inputs = concat_auxiliary_to_inputs(train_scaled_inputs, train_auxiliary_cams)
+        test_scaled_inputs = concat_auxiliary_to_inputs(test_scaled_inputs, test_auxiliary_cams)
+
+        '''
         train_aux_expanded = np.repeat(
         train_auxiliary_cams[:, np.newaxis, np.newaxis, :],
         train_inputs.shape[1],  # lat
@@ -344,11 +393,13 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
             axis=2
         )
         print('concenating inputs and auxillaty train')
-        test_scaled_inputs = np.concatenate([test_scaled_inputs, test_auxiliary_cams], axis=-1)
-
+        test_scaled_inputs = np.concatenate([test_scaled_inputs, test_aux_expanded], axis=-1)
+        '''
+    '''
     # Convert numpy outputs to xarray DataArrays with time coordinates
     train_outputs_xr = gates_datasets.outputs_to_xarray(train_outputs, times=train_times, output_names=output_names)
     test_outputs_xr = gates_datasets.outputs_to_xarray(test_outputs, times=test_times, output_names=output_names)
+    '''
 
     dataloader_info = parameters.get("dataloader", {})
     batch_size = dataloader_info.get("batch_size", 5)
@@ -357,18 +408,17 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
 
     if "prefetch_factor" in dataloader_params and dataloader_params["prefetch_factor"] == 0:
         dataloader_params["prefetch_factor"] = None
-
     # Trim to batch size to avoid partial batches
     # train_scaled_inputs has fp_time dim (xarray), train_outputs_xr has time dim
-    train_scaled_inputs, train_outputs_xr = gates_datasets.trim_to_batch_size(
-        train_scaled_inputs, train_outputs_xr, batch_size
+    train_scaled_inputs, train_outputs = gates_datasets.trim_to_batch_size(
+        train_scaled_inputs, train_outputs, batch_size
     )
-    test_scaled_inputs, test_outputs_xr = gates_datasets.trim_to_batch_size(
-        test_scaled_inputs, test_outputs_xr, test_batch_size
+    test_scaled_inputs, test_outputs = gates_datasets.trim_to_batch_size(
+        test_scaled_inputs, test_outputs, test_batch_size
     )
 
     train_loader, boundary_labels_train = gates_datasets.make_boundary_dataloader(
-        train_scaled_inputs, train_outputs_xr,
+        train_scaled_inputs, train_outputs,
         batch_size=batch_size,
         randomize=True,
         dataloader_params=dataloader_params,
@@ -384,7 +434,7 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
     print("SPECIAL TEST PARAMS", test_dataloader_params)
 
     test_loader, boundary_labels_test = gates_datasets.make_boundary_dataloader(
-        test_scaled_inputs, test_outputs_xr,
+        test_scaled_inputs, test_outputs,
         batch_size=test_batch_size,
         randomize=False,
         dataloader_params=test_dataloader_params,
@@ -418,6 +468,17 @@ def initialise_losses():
             "checkerboard": flux_metrics_dict.copy(),
             "checkerboard_10": flux_metrics_dict.copy(),
         }
+    }
+    return losses
+
+def initialise_boundary_losses():
+    """
+    Return a dictionary to store losses and metrics during training and evaluation. 
+    """
+    losses = {
+        "train": [],
+        "test": [],
+
     }
     return losses
 
@@ -518,6 +579,97 @@ def setup_GATES_model(parameters, training_ctx, paths_ctx):
 
 
     return model, model_ctx
+
+
+def setup_boundary_model(parameters, training_ctx, paths_ctx):
+    lr = parameters["learning_rate"]
+    
+
+    if parameters["network_decoder"] == "conv":
+        print("Using conv network")
+        model = GraphSatelliteForecasterConvClassifier(
+            training_ctx.grid,
+            whole_world=False,
+            feature_dim=training_ctx.n_variables,
+            aux_dim=training_ctx.aux_dim,
+            num_classes=parameters['num_classes'],
+            input_height=training_ctx.size,
+            input_width=training_ctx.size,
+            **parameters["model_parameters"],
+        )
+    else:
+        print("Using normal network")
+        model = GraphSatelliteForecasterClassifier(
+            training_ctx.grid,
+            whole_world=False,
+            feature_dim=training_ctx.n_variables,
+            aux_dim=training_ctx.aux_dim,
+            num_classes=parameters['num_classes'],
+            **parameters["model_parameters"],
+        )
+
+    criterion_params = parameters["loss_functions"].get("criterion_params", {})
+    criterion_test_params = parameters["loss_functions"].get("criterion_test_params", {})
+
+    loss_fn = eval(parameters["loss_functions"]["criterion"])
+    loss_fn_test = eval(parameters["loss_functions"]["criterion_test"])
+
+    # Only pass fp_labels and nan_mask_label if the loss function needs them
+    # (i.e. if weight_label or nan_mask_label are specified in criterion_params)
+    needs_fp_labels = (
+        "weight_label" in criterion_params
+        or "nan_mask_label" in criterion_params
+    )
+
+    if needs_fp_labels:
+        nan_mask_label = criterion_params.pop("nan_mask_label", None)
+        criterion = loss_fn(
+            fp_labels=training_ctx.fp_labels,
+            nan_mask_label=nan_mask_label,
+            **criterion_params
+        )
+        nan_mask_label_test = criterion_test_params.pop("nan_mask_label", None)
+        criterion_test = loss_fn_test(
+            fp_labels=training_ctx.fp_labels,
+            nan_mask_label=nan_mask_label_test,
+            **criterion_test_params
+        )
+    else:
+        # Simple loss like MSELoss with no spatial weighting
+        criterion = loss_fn(**criterion_params)
+        criterion_test = loss_fn_test(**criterion_test_params)
+
+    optimizer = optim.AdamW(model.parameters(), lr=lr)
+
+    early_stopping = EarlyStopping(
+        patience=parameters["epochs"]["patience"],
+        verbose=parameters.get("verbose", True),
+        path=paths_ctx.model_path / f"{paths_ctx.model_name}_best.pt",
+        use_wandb=parameters["use_wandb"],
+        model_name=paths_ctx.model_name
+    )
+
+    if torch.cuda.is_available():
+        model.cuda()
+
+    model_ctx = ModelContext(
+        model_name=parameters["model_name"],
+        use_wandb=parameters["use_wandb"],
+        device=training_ctx.device,
+        optimizer=optimizer,
+        criterion=criterion,
+        criterion_test=criterion_test,
+        lr=lr,
+        early_stopping=early_stopping,
+        epochs_num=parameters["epochs"]["training"],
+        epochs_visualise=parameters["epochs"].get("visualize", 5),
+        epochs_save=parameters["epochs"]["model_save"],
+        epochs_patience=parameters["epochs"]["patience"]
+    )
+
+    return model, model_ctx
+
+    
     
 
 import os

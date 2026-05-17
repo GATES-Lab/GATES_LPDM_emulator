@@ -1064,60 +1064,7 @@ def outputs_to_xarray(outputs, times, output_names=None):
         name="boundary_outputs"
     )
 
-def make_boundary_dataloader(inputs, outputs, batch_size=10, randomize=False,
-                              random_seed=42, dataloader_params=None, flatten=False):
-    """
-    Build a PyTorch DataLoader for boundary condition prediction using xbatcher.
 
-    Inputs must have dimensions (fp_time, lat, lon, variable_name).
-    Outputs must be an xarray DataArray of shape (time, num_classes).
-
-    Args:
-        inputs (xr.DataArray): Shape (fp_time, lat, lon, variable_name).
-        outputs (xr.DataArray): Shape (time, num_classes).
-        batch_size (int): Batch size.
-        randomize (bool): Whether to shuffle along the time dimension.
-        random_seed (int): Seed for reproducibility when randomize=True.
-        dataloader_params (dict, optional): Additional kwargs for DataLoader.
-        flatten (bool): Whether to flatten lat/lon in the inputs.
-
-    Returns:
-        tuple:
-            - DataLoader: yields (inputs_batch, outputs_batch) tensors.
-            - list: output label names.
-    """
-    if inputs.sizes["fp_time"] != outputs.sizes["time"]:
-        raise ValueError(
-            f"inputs and outputs have mismatched time dimensions: "
-            f"inputs fp_time={inputs.sizes['fp_time']}, outputs time={outputs.sizes['time']}"
-        )
-
-    if randomize:
-        np.random.seed(random_seed)
-        permuted_time = np.random.permutation(inputs.fp_time.values)
-        inputs = inputs.sel(fp_time=permuted_time)
-        outputs = outputs.sel(time=permuted_time)
-
-    X_bgen = make_inputs_batcher(inputs, batch_size=batch_size, flatten=flatten)
-    y_bgen, output_labels = make_boundary_batcher(outputs, batch_size=batch_size)
-
-    dataset = xbatcher.loaders.torch.MapDataset(X_bgen, y_bgen)
-
-    if dataloader_params is None:
-        dataloader_params = {
-            "prefetch_factor": 3,
-            "num_workers": 4,
-            "persistent_workers": True,
-            "multiprocessing_context": "forkserver",
-        }
-
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=None,
-        **dataloader_params
-    )
-
-    return dataloader, output_labels
 
 def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42, dataloader_params=None, flatten=False):
     """
@@ -1241,6 +1188,14 @@ def make_boundary_dataloader(inputs, outputs, batch_size=10, randomize=False,
             "persistent_workers": True,
             "multiprocessing_context": "forkserver",
         }
+
+    # prefetch_factor is only valid when num_workers > 0 — remove it otherwise
+    # to avoid a ValueError from PyTorch
+    dataloader_params = dataloader_params.copy()
+    if dataloader_params.get("num_workers", 0) == 0:
+        dataloader_params.pop("prefetch_factor", None)
+        dataloader_params.pop("persistent_workers", None)
+        dataloader_params.pop("multiprocessing_context", None)
 
     dataloader = torch.utils.data.DataLoader(
         dataset,
