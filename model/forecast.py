@@ -347,9 +347,9 @@ class GraphSatelliteForecasterConvClassifier(torch.nn.Module): #, PyTorchModelHu
         #print("run encoder")
         #print("getting encoder inputs")
         # Nawid - encoder output
-        #print('features',features.shape)
+        print('features',features.shape)
         x, edge_idx, edge_attr = self.encoder(features)
-        #print('encoder outout',x.shape)
+        print('encoder outout',x.shape)
         # here x has size (bxn, f) where the nodes are in order 0-max
         #print(x.size(), edge_idx.size(), edge_attr.size())
         #print("run processor", self.encoder.batch_size)
@@ -358,9 +358,9 @@ class GraphSatelliteForecasterConvClassifier(torch.nn.Module): #, PyTorchModelHu
         #print('processor outout',x)
         #print("processed", x.size())
         #print("run decoder")
-        #print('before decoder',x.size())
+        print('before decoder',x.size())
         x = self.decoder(x, features)#
-        #print('decoder output',x.size())
+        print('decoder output',x.size())
 
         return x
 

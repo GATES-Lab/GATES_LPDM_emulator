@@ -892,11 +892,11 @@ def make_inputs_batcher(inputs, batch_size=10, flatten=False):
         inputs,
         input_dims=input_dims,
         batch_dims={'fp_time': batch_size},
-        preload_batch=False,
+        preload_batch=True,
     )
     return X_bgen
 
-def make_boundary_batcher(outputs, batch_size=10):
+def make_boundary_batcher(outputs, batch_size=5):
     """
     Build an xbatcher BatchGenerator for boundary condition outputs.
 
@@ -952,7 +952,7 @@ def make_boundary_batcher(outputs, batch_size=10):
         outputs,
         input_dims={output_dim: outputs.sizes[output_dim]},
         batch_dims={"time": batch_size},
-        preload_batch=False,
+        preload_batch=True,
     )
 
     return y_bgen, output_labels

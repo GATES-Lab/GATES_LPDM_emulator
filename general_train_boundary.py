@@ -553,6 +553,7 @@ def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx,
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx
         print(f"\n--- Start Epoch: {epoch} ---")
+        import ipdb; ipdb.set_trace()
         avg_train_loss = train_one_epoch(
             model, train_loader, model_ctx.optimizer,
             model_ctx.criterion, model_ctx.criterion_test,
@@ -715,52 +716,6 @@ def train_and_save_model(parameters, model_save_dir):
         wandb.summary.update({"num_features": num_features})
 
 
-    '''
-    os.makedirs(f"{path}{model_name}", exist_ok=True)
-    os.makedirs(f"{path}{model_name}/training_imgs", exist_ok=True)
-    training_outputs_path = f"{path}{model_name}/training_outputs"
-    os.makedirs(training_outputs_path, exist_ok=True)
-    open(f"{path}{model_name}/{model_name}_updates.txt", "x").close()
-    
-    # Load environment paths from config
-    with open("config.yml", "r") as f:
-        config = yaml.safe_load(f)
-
-    #env = parameters['env']
-    env_paths = config["data_paths"]
-    base_data_path = env_paths["base_data_path"]
-    fp_datadir = os.path.join(base_data_path, env_paths["fp_datadir"].lstrip("/"))
-    met_datadir = os.path.join(base_data_path, env_paths["met_datadir"].lstrip("/"))
-    topog_datadir = os.path.join(base_data_path, env_paths["topog_datadir"].lstrip("/"))
-    landcover_datadir = os.path.join(base_data_path, env_paths["landcover_datadir"].lstrip("/"))
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    write_to_file(
-        f"using device {device}, starting at {datetime.now().strftime('%d/%m/%y %H:%M:%S')}",
-        log_file
-    )
-
-    # Build data loading args
-    train_load_data = copy.deepcopy(parameters["train_load_data"])
-    test_load_data = copy.deepcopy(parameters["train_load_data"])
-    test_load_data.update(parameters["test_load_data"])
-
-    shared_data_args = dict(
-        load_everything=True,
-        base_data_path=base_data_path,
-        fp_datadir=fp_datadir,
-        met_datadir=met_datadir,
-        topog_args={"topog_path": topog_datadir, "landcover_path": landcover_datadir}
-    )
-
-    # Load data
-    write_to_file("Load training met and fp data", log_file)
-    data = LoadSquareSatelliteData(**train_load_data, **shared_data_args)
-    write_to_file("Successfully loaded training data. Now loading test data.", log_file)
-    test_data = LoadSquareSatelliteData(**test_load_data, **shared_data_args)
-    write_to_file("Successfully loaded test data.", log_file)
-    '''
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
     write_to_file("loading data", paths_ctx.updates_path)
@@ -831,7 +786,6 @@ def train_and_save_model(parameters, model_save_dir):
         test_data, all_months, test_year, name_output_format, height_indices,
         norm_vals=norm_vals
     )
-
     # Save auxiliary normalisation values into checkpoint-compatible format
     outputs_mean_values, outputs_std_values = norm_vals['outputs']
     baseline_mean_values, baseline_std_values = norm_vals['baselines']
@@ -842,27 +796,6 @@ def train_and_save_model(parameters, model_save_dir):
     aux_dim = auxiliary_cams.sizes["aux"] if use_baselines and auxiliary_cams is not None else 0
 
     # Build grid and datasets
-    '''
-    grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
-
-    use_baselines = parameters['use_baselines']
-    aux_dim = auxiliary_cams.shape[1] if use_baselines else 0
-    '''
-    
-    '''
-    train_loader, test_loader, scalers = gates_training.setup_boundary_dataloaders(
-        parameters,
-        train_inputs=train_inputs,
-        train_outputs=outputs,
-        test_inputs=test_inputs,
-        test_outputs=test_outputs,
-        train_times=train_times,
-        test_times=test_times,
-        train_auxiliary_cams=auxiliary_cams if use_baselines else None,
-        test_auxiliary_cams=test_auxiliary_cams if use_baselines else None,
-    output_names=["sum"]  # adjust to match your output_format
-)
-    '''
     print("Computing inputs into memory before dataloader setup...")
     train_inputs = train_inputs.compute()
     test_inputs = test_inputs.compute()
@@ -886,8 +819,6 @@ def train_and_save_model(parameters, model_save_dir):
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
                            description="Grid object used during training", use_wandb=use_wandb)
     
-    
-
     training_ctx = BoundaryTrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, boundary_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values),aux_dim) # get size from train params
 
 
@@ -906,6 +837,7 @@ def train_and_save_model(parameters, model_save_dir):
 
     if torch.cuda.is_available():
         model.cuda()
+
     run_full_training(
     model,
     train_loader,

@@ -88,9 +88,9 @@
     },    
 
     "loss_functions" : {
-        "criterion": "gates_losses.MSELoss",
+        "criterion": "torch.nn.MSELoss",
         "criterion_params": {},
-        "criterion_test": "gates_losses.MSELoss",
+        "criterion_test": "torch.nn.MSELoss",
         "criterion_test_params": {}
     }  
 }
