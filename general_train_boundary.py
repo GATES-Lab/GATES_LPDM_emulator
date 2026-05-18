@@ -613,20 +613,8 @@ def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx,
 def train_and_save_model(parameters, model_save_dir):
     """
     Top-level entry point for a full training run.
-
-    Args:
-        parameters (dict): Full training configuration. Expected top-level keys:
-            'model_name', 'env', 'learning_rate', 'epochs', 'variables',
-            'dataloader_parameters', 'model_parameters', 'loss_functions',
-            'train_load_data', 'test_load_data', 'output_format', 'normalization',
-            'use_baselines', 'num_classes', 'network_decoder', 'auxiliary', 'use_wandb'.
-        path (str): Base directory for saving all outputs.
-
-    Returns:
-        None
     """
     use_wandb = parameters.get('use_wandb', True)
-    #name_output_format = parameters['output_format']
     name_output_format = 'corrected'
     cfg = gates.config.get_config()
     verbose = parameters.get("verbose", True)
@@ -636,34 +624,33 @@ def train_and_save_model(parameters, model_save_dir):
     model_path = Path(model_save_dir) / model_name
     print(f"Initialising model run for model_name: {model_name}")
 
-    # the paths are all stored in this dataclass (e.g. paths_ctx.model_path)
     paths_ctx = PathContext(
         model_save_dir=model_save_dir,
         model_name=model_name,
-        model_path=model_path # model_save_dir / model_name
+        model_path=model_path
     )
-
     paths_ctx.make_dirs()
 
     seed = parameters.get("seed", 34)
     set_reproducibility(seed)
+
     if use_wandb:
         wandb_project = parameters.get("wandb", {}).get("project", None)
         wandb_entity = parameters.get("wandb", {}).get("entity", None)
         wandb_tags = parameters.get("wandb", {}).get("tags", [])
-        if use_wandb and wandb_project is None or wandb_entity is None:
-            print("Warning: 'use_wandb' is True but no 'wandb.project' or 'wandb.entity' specified in parameters. W&B will not be initialised.")
+        if wandb_project is None or wandb_entity is None:
+            print("Warning: 'use_wandb' is True but no 'wandb.project' or 'wandb.entity' specified. W&B will not be initialised.")
             use_wandb = False
             parameters["use_wandb"] = False
-
         if use_wandb:
             wandb.init(
-                project=wandb_project, 
+                project=wandb_project,
                 config=parameters,
                 tags=wandb_tags
             )
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
+    write_to_file(f"using device {device}, starting at " + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
     write_to_file("loading data", paths_ctx.updates_path)
 
     train_load_data_params = copy.deepcopy(parameters["train_load_data"])
@@ -671,7 +658,6 @@ def train_and_save_model(parameters, model_save_dir):
     test_load_data_params.update(parameters["test_load_data"])
     input_variables = parameters["variables"]
 
-    # the data is extracted from the config file, unless it is superced from parameters. resolve_datapath_args returns the correct path in a dictionary passed to the data objects 
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
 
     print("Loading met and fp data for model", model_name)
@@ -680,105 +666,63 @@ def train_and_save_model(parameters, model_save_dir):
     client, cluster = gates_training.make_cluster()
 
     load_monthly = parameters.get("load_data_monthly", False)
-    
+
     if not load_monthly:
-        data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
+        data, train_inputs = gates_training.load_GATES_data(
+            train_load_data_params, input_variables=input_variables,
+            datapath_args=datapath_args, verbose=verbose
+        )
+        train_fp_data = data.fp_xr
+    else:
+        data, train_inputs = gates_training.load_GATES_data_v2(
+            train_load_data_params, input_variables=input_variables,
+            datapath_args=datapath_args, verbose=verbose,
+            load_into_memory=parameters.get("load_into_memory", False)
+        )
         train_fp_data = data.fp_xr
 
-    if load_monthly:
-        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))
-        train_fp_data = data.fp_xr
-    
-    write_to_file(f"Successfully load training met and fp data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
+    write_to_file(f"Successfully loaded training data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
 
     if not load_monthly:
-        test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+        test_data, test_inputs = gates_training.load_GATES_data(
+            test_load_data_params, input_variables=input_variables,
+            datapath_args=datapath_args, verbose=verbose
+        )
         test_fp_data = test_data.fp_xr
-    if load_monthly:
-        test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+    else:
+        test_data, test_inputs = gates_training.load_GATES_data_v2(
+            test_load_data_params, input_variables=input_variables,
+            datapath_args=datapath_args, verbose=verbose,
+            load_into_memory=parameters.get("load_into_memory", False)
+        )
         test_fp_data = test_data.fp_xr
 
-    write_to_file(f"Successfully load test met and fp data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
+    write_to_file(f"Successfully loaded test data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
 
+    num_features = train_inputs.shape[-1]
+    parameters["num_features"] = num_features
+
     if use_wandb:
-        # save the number of testing and training samples to wandb config for reference
         wandb.summary.update({
             "num_training_samples": len(train_fp_data.time),
             "num_testing_samples": len(test_fp_data.time),
+            "num_features": num_features,
         })
 
-    ## add the number of features to the parameter file, and to wandb
-    num_features = train_inputs.shape[-1]
-    parameters["num_features"] = num_features
-    if use_wandb:
-        wandb.summary.update({"num_features": num_features})
-
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
-    write_to_file("loading data", paths_ctx.updates_path)
-
-    train_load_data_params = copy.deepcopy(parameters["train_load_data"])
-    test_load_data_params = copy.deepcopy(parameters["train_load_data"])
-    test_load_data_params.update(parameters["test_load_data"])
-
-    input_variables = parameters["variables"]
-
-    # the data is extracted from the config file, unless it is superced from parameters. resolve_datapath_args returns the correct path in a dictionary passed to the data objects 
-    datapath_args = paths_ctx.resolve_datapath_args(parameters)
-
-    print("Loading met and fp data for model", model_name)
-    write_to_file("Load training and testing met and fp data", paths_ctx.updates_path)
-
-    client, cluster = gates_training.make_cluster()
-
-    load_monthly = parameters.get("load_data_monthly", False)
-    
-    if not load_monthly:
-        data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
-        train_fp_data = data.fp_xr
-
-    if load_monthly:
-        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))
-        train_fp_data = data.fp_xr
-
-    write_to_file(f"Successfully load training met and fp data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
-    print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
-
-    if not load_monthly:
-        test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
-        test_fp_data = test_data.fp_xr
-    if load_monthly:
-        test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
-        test_fp_data = test_data.fp_xr
-
-    if use_wandb:
-        # save the number of testing and training samples to wandb config for reference
-        wandb.summary.update({
-            "num_training_samples": len(train_fp_data.time),
-            "num_testing_samples": len(test_fp_data.time),
-        })
-
-    ## add the number of features to the parameter file, and to wandb
-    num_features = train_inputs.shape[-1]
-    parameters["num_features"] = num_features
-    if use_wandb:
-        wandb.summary.update({"num_features": num_features})
     write_to_file("scaling data and setting up dataloaders", paths_ctx.updates_path)
     if cluster is not None:
         cluster.close()
         client.close()
 
     # Compute boundary condition outputs and normalise
-    # Note: 'auxiliary' key used here — check parameter file uses this spelling
-    height_indices = [4, 5, 6, 7] if parameters.get('auxiliary') == 'multiple' else [4]
+    height_indices = [4, 5, 6, 7] if parameters.get('auxilliary') == 'multiple' else [4]
     all_months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
-    
+
     train_year = parse_years(train_load_data_params['years'])
     test_year = parse_years(test_load_data_params['years'])
-    
+
     outputs, baseline_list, auxiliary_cams, _, norm_vals = load_and_normalise_boundary_data(
         data, all_months, train_year, name_output_format, height_indices
     )
@@ -786,108 +730,71 @@ def train_and_save_model(parameters, model_save_dir):
         test_data, all_months, test_year, name_output_format, height_indices,
         norm_vals=norm_vals
     )
-    # Save auxiliary normalisation values into checkpoint-compatible format
+
+    '''
     outputs_mean_values, outputs_std_values = norm_vals['outputs']
     baseline_mean_values, baseline_std_values = norm_vals['baselines']
     auxiliary_mean_values, auxiliary_std_values = norm_vals['auxiliary']
+    '''
+    save_object(norm_vals, "norm_vals", paths_ctx.training_outputs_path, model_name,
+            file_type="json", description=f"Normalisation values for boundary condition outputs in model {model_name}",
+            use_wandb=use_wandb)
 
-
-    use_baselines = True
+    use_baselines = parameters.get("use_baselines", True)
     aux_dim = auxiliary_cams.sizes["aux"] if use_baselines and auxiliary_cams is not None else 0
-
-    # Build grid and datasets
-    print("Computing inputs into memory before dataloader setup...")
-    train_inputs = train_inputs.compute()
-    test_inputs = test_inputs.compute()
-    train_loader, test_loader,boundary_labels, scalers = gates_training.setup_boundary_dataloaders(parameters, train_inputs, outputs, test_inputs, test_outputs,
-                                auxiliary_cams, test_auxiliary_cams)
-
     
-    save_object(scalers, "scalers",
-    paths_ctx.training_outputs_path, model_name, description=f"Input and output scaler objects used in model {model_name}", use_wandb=use_wandb)
+    train_loader, test_loader, boundary_labels, scalers = gates_training.setup_boundary_dataloaders(
+        parameters, train_inputs, outputs, test_inputs, test_outputs,
+        auxiliary_cams, test_auxiliary_cams
+    )
 
-    # images will get plotted and saved for a random selection of 4 dates from the test set - these indeces are saved to parameters for reference 
+    save_object(scalers, "scalers", paths_ctx.training_outputs_path, model_name,
+                description=f"Input and output scaler objects used in model {model_name}",
+                use_wandb=use_wandb)
+
     image_plots = random.sample(list(range(len(test_inputs))), k=4)
     image_dates = np.datetime_as_string(test_fp_data.time.values[sorted(image_plots)])
-
     parameters["plotted_dates"] = image_dates.tolist()
 
-    save_object(parameters, "training_settings", paths_ctx.training_outputs_path, model_name,  file_type="json", description=f"Training settings and hyperparameters for model {model_name}", use_wandb=use_wandb)
+    save_object(parameters, "training_settings", paths_ctx.training_outputs_path, model_name,
+                file_type="json", description=f"Training settings for model {model_name}",
+                use_wandb=use_wandb)
 
-    # create the grid object to make the mesh with and save
     grid, _ = get_grid(train_fp_data, parameters.get("grid_reference_fp"))
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
-                           description="Grid object used during training", use_wandb=use_wandb)
-    
-    training_ctx = BoundaryTrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, boundary_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values),aux_dim) # get size from train params
+                description="Grid object used during training", use_wandb=use_wandb)
 
+    training_ctx = BoundaryTrainingContext(
+        parameters, device, use_wandb, image_dates, image_plots, grid,
+        boundary_labels, scalers, train_inputs.variable_name.size,
+        len(train_fp_data.lat.values), aux_dim
+    )
 
-    print("Successfully set up dataloaders!!! using the contexts!!!")
-
+    print("Successfully set up dataloaders!")
     write_to_file("setting up model", paths_ctx.updates_path)
 
-    
     model, model_ctx = gates_training.setup_boundary_model(parameters, training_ctx, paths_ctx)
-
 
     if use_wandb:
         wandb.watch(model, log="all", log_freq=100)
-    
+
     losses = gates_training.initialise_boundary_losses()
 
     if torch.cuda.is_available():
         model.cuda()
 
     run_full_training(
-    model,
-    train_loader,
-    test_loader,
-    model_ctx=model_ctx,
-    training_ctx=training_ctx,
-    paths_ctx=paths_ctx,
-    losses=losses
-)
+        model,
+        train_loader,
+        test_loader,
+        model_ctx=model_ctx,
+        training_ctx=training_ctx,
+        paths_ctx=paths_ctx,
+        losses=losses
+    )
 
     if use_wandb:
         wandb.finish()
-
-    '''
-    # Log artifacts
-    log_object_as_artifact(grid, "grid", training_outputs_path, model_name,
-                           description="Grid used during training", use_wandb=use_wandb)
-    log_object_as_artifact(train_dataset.transform_parameters, "transform_parameters",
-                           training_outputs_path, model_name,
-                           description="Transform parameters used in training", use_wandb=use_wandb)
-    log_object_as_artifact(parameters, "training_settings", training_outputs_path, model_name,
-                           file_type="json", description="Training settings", use_wandb=use_wandb)
-
-    # Save auxiliary normalisation values so inference can reuse them without reloading train data
-    auxiliary_norm_vals = {
-        "auxiliary_mean": auxiliary_mean_values,
-        "auxiliary_std": auxiliary_std_values
-    }
-    log_object_as_artifact(auxiliary_norm_vals, "auxiliary_norm_vals", training_outputs_path,
-                           model_name, file_type="json",
-                           description="Auxiliary normalisation values", use_wandb=use_wandb)
-
-    # Build model
-    feature_dim = np.shape(train_inputs)[-1]
-    num_lat, num_lon = len(data.met.lat.values), len(data.met.lon.values)
-
-    model = build_model(parameters, grid, feature_dim, aux_dim, num_lat, num_lon)
-    criterion = eval(parameters["loss_functions"]["criterion"])
-    criterion_test = eval(parameters["loss_functions"]["criterion_test"])
-    optimizer = optim.AdamW(model.parameters(), lr=parameters["learning_rate"])
-
-    normalization_vals = {"outputs_mean": outputs_mean_values, "outputs_std": outputs_std_values}
-    baseline_normalization_vals = {"baselines_mean": baseline_mean_values, "baselines_std": baseline_std_values}
-    losses = {"train": [], "test": []}
-
-    if use_wandb:
-        wandb.watch(model, log="all", log_freq=100)
-    '''
-
-
 
 # ---------------------------------------------------------------
 # Entry point

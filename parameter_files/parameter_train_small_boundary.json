@@ -68,12 +68,15 @@
         "residuals":false, 
         "attention":false
     },
-
+    
+    "normalization":"all",
     "network_decoder":"conv",
-
+    "use_baselines":true,
+    "output_format":"corrected",
+    "auxilliary":"multiple",
     "learning_rate": 0.00005,
     "num_classes":1,
-
+    
     "use_wandb":false,
     "wandb": {
         "project": "BoundaryCondition-Prediction",

@@ -329,11 +329,12 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
     train_scaled_inputs = input_dataset.transform(train_inputs)
     test_scaled_inputs = input_dataset.transform(test_inputs)
 
+    '''
     # Force compute after scaling — scaler may return dask-backed xarray
     print("Computing scaled inputs into memory...")
     train_scaled_inputs = train_scaled_inputs.compute() if hasattr(train_scaled_inputs, 'compute') else train_scaled_inputs
     test_scaled_inputs = test_scaled_inputs.compute() if hasattr(test_scaled_inputs, 'compute') else test_scaled_inputs
-
+    '''
     # Append pre-normalised auxiliary CAMS features to inputs if use_baselines is True
     use_baselines = parameters.get("use_baselines", True)
 
@@ -342,15 +343,18 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
         train_scaled_inputs = concat_auxiliary_to_inputs(train_scaled_inputs, train_auxiliary_cams)
         test_scaled_inputs = concat_auxiliary_to_inputs(test_scaled_inputs, test_auxiliary_cams)
 
+        '''
         # xr.concat can reintroduce dask backing — force compute again
         print("Computing concatenated inputs into memory...")
         train_scaled_inputs = train_scaled_inputs.compute() if hasattr(train_scaled_inputs, 'compute') else train_scaled_inputs
         test_scaled_inputs = test_scaled_inputs.compute() if hasattr(test_scaled_inputs, 'compute') else test_scaled_inputs
+        '''
     
+    '''
     # Also ensure outputs are computed if they are xarray-backed
     train_outputs = train_outputs.compute() if hasattr(train_outputs, 'compute') else train_outputs
     test_outputs = test_outputs.compute() if hasattr(test_outputs, 'compute') else test_outputs
-
+    '''
     dataloader_info = parameters.get("dataloader", {})
     batch_size = dataloader_info.get("batch_size", 5)
     test_batch_size = dataloader_info.get("test_batch_size", 5)
