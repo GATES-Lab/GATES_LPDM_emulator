@@ -730,7 +730,7 @@ def train_and_save_model(parameters, model_save_dir):
         client.close()
 
     # Compute boundary condition outputs and normalise
-    height_indices = [4, 5, 6, 7] if parameters.get('auxilliary') == 'multiple' else [4]
+    height_indices = [4, 5, 6, 7] if parameters.get('auxiliary') == 'multiple' else [4]
     all_months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
 
     train_year = parse_years(train_load_data_params['years'])
@@ -758,6 +758,7 @@ def train_and_save_model(parameters, model_save_dir):
     use_baselines = parameters.get("use_baselines", True)
     aux_dim = auxiliary_cams.sizes["aux"] if use_baselines and auxiliary_cams is not None else 0
     parameters["aux_dim"] = aux_dim
+    parameters['feature_dim'] = num_features
     train_loader, test_loader, boundary_labels, scalers = gates_training.setup_boundary_dataloaders(
         parameters, train_inputs, outputs, test_inputs, test_outputs,
         auxiliary_cams, test_auxiliary_cams

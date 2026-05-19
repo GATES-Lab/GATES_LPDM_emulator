@@ -74,7 +74,7 @@
     "network_decoder":"conv",
     "use_baselines":true,
     "output_format":"corrected",
-    "auxilliary":"multiple",
+    "auxiliary":"multiple",
     "learning_rate": 0.00005,
     "num_classes":1,
     

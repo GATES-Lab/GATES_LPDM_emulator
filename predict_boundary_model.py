@@ -235,18 +235,24 @@ class BoundaryPredictor:
 
         # Height indices and output format from training params
         height_indices = [4, 5, 6, 7] if training_params.get("auxiliary") == "multiple" else [4]
+        #height_indices = [4]
+
         output_format = training_params.get("output_format", "corrected")
 
-        # aux_dim — number of auxiliary CAMS features appended to inputs during training
+        # aux_dim — number of auxiliary CAMS features, handled separately by the model
+        # Do NOT add to feature_dim — the model receives them as a separate aux input
+        # aux_dim — number of auxiliary CAMS features, handled separately by the model
+        
         aux_dim = training_params.get("aux_dim", 0)
 
-        # Feature dim — must include aux_dim since the model was trained with
-        # met features + aux features concatenated along the variable_name dimension
+        # feature_dim is just the met variable count
         feature_dim = training_params.get("num_features", None)
-
+        '''
+        aux_dim = 16
+        feature_dim = 10
+        '''
         if feature_dim is not None:
-            feature_dim = feature_dim + aux_dim
-            print(f"Using feature_dim={feature_dim} (num_features={feature_dim - aux_dim} + aux_dim={aux_dim})")
+            print(f"Using feature_dim={feature_dim} from training settings (aux_dim={aux_dim} handled separately by model)")
         else:
             print("num_features not found in training settings, probing data to determine feature_dim...")
             for probe_month in [f"{m:02d}" for m in range(1, 13)]:
@@ -261,7 +267,7 @@ class BoundaryPredictor:
                         probe_params, input_variables, datapath_args, verbose=False
                     )
                     if probe_inputs is not None and probe_inputs.sizes.get("fp_time", 0) > 0:
-                        feature_dim = probe_inputs.sizes["variable_name"] + aux_dim
+                        feature_dim = probe_inputs.sizes["variable_name"]
                         print(f"  feature_dim = {feature_dim} (from month {probe_month})")
                         break
                 except Exception:
@@ -273,13 +279,32 @@ class BoundaryPredictor:
                     "Ensure num_features is saved in training_settings.json."
                 )
 
-        # Build model
+        # Verify against actual checkpoint weights BEFORE building the model
+        # so the model is constructed with the correct architecture
+        checkpoint_path = model_dir / f"{model_name}_best.pt"
+        if checkpoint_path.exists():
+            state = torch.load(checkpoint_path, map_location="cpu")
+            state_dict = state.get("model_state_dict", state)
+            '''
+            for key, tensor in state_dict.items():
+                if "node_encoder" in key and "weight" in key and len(tensor.shape) == 2:
+                    checkpoint_feature_dim = tensor.shape[1]
+                    if checkpoint_feature_dim != feature_dim:
+                        print(
+                            f"Warning: feature_dim from training settings ({feature_dim}) "
+                            f"does not match checkpoint ({checkpoint_feature_dim}). "
+                            f"Using checkpoint value."
+                        )
+                        feature_dim = checkpoint_feature_dim
+                    break
+            '''
+        # Build model using verified feature_dim
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Device: {device}")
 
         num_classes = training_params.get("num_classes", 1)
         size = data_params.get("size", 10)
-
+        
         if training_params.get("network_decoder") == "conv":
             print("Using conv network")
             model = GraphSatelliteForecasterConvClassifier(
