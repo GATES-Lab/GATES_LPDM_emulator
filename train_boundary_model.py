@@ -178,7 +178,8 @@ def parse_years(year_input):
 # ---------------------------------------------------------------
 # CAMS boundary condition computation
 # ---------------------------------------------------------------
-def baseline_mol_correction_xr(desired_data, months, years, output_format, height_indices=None):
+def baseline_mol_correction_xr(desired_data, months, years, output_format, 
+                                height_indices=None, domain="SOUTHAMERICA"):
     """
     Compute CAMS-based boundary condition outputs and auxiliary features,
     keeping everything as xarray operations.
@@ -189,6 +190,8 @@ def baseline_mol_correction_xr(desired_data, months, years, output_format, heigh
         years (list of int): Years to process.
         output_format (str): One of 'sum' or 'corrected'.
         height_indices (list of int, optional): Height levels to extract. Defaults to [4].
+        domain (str): Domain name matching the CAMS bc directory, e.g. 'SOUTHAMERICA',
+            'NORTHAFRICA'. Defaults to 'SOUTHAMERICA'.
 
     Returns:
         tuple:
@@ -199,6 +202,20 @@ def baseline_mol_correction_xr(desired_data, months, years, output_format, heigh
     """
     if height_indices is None:
         height_indices = [4]
+
+    bc_base_path = "/group/chem/acrg/LPDM/bc"
+
+    # Different domains have different file naming conventions
+    def get_cams_path(domain, year, month):
+        year = int(year)
+        if domain == "SOUTHAMERICA":
+            if year > 2017:
+                return f"{bc_base_path}/{domain}/ch4_{domain}_{year}{month}_CAMS-inversion_climatology.nc"
+            else:
+                return f"{bc_base_path}/{domain}/ch4_{domain}_{year}{month}_CAMS-inversion.nc"
+        else:
+            # NORTHAFRICA and other domains use plain format without CAMS-inversion suffix
+            return f"{bc_base_path}/{domain}/ch4_{domain}_{year}{month}.nc"
 
     fp_full = desired_data.fp_data_full
     times = fp_full.particle_locations_n.time
@@ -221,11 +238,11 @@ def baseline_mol_correction_xr(desired_data, months, years, output_format, heigh
         dims=["time", "direction"],
         coords={"time": times, "direction": ["north", "south", "east", "west"]}
     )
-    north_list          = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
-    south_list          = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
-    east_list           = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
-    west_list           = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
-    total_list          = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    north_list           = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    south_list           = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    east_list            = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    west_list            = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
+    total_list           = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
     collated_corrections = xr.DataArray(np.zeros(n_times), dims=["time"], coords={"time": times})
 
     aux_names = [f"aux_{i}" for i in range(n_aux)]
@@ -238,16 +255,16 @@ def baseline_mol_correction_xr(desired_data, months, years, output_format, heigh
     for year in years:
         print(f"Processing year {year}")
         for month in months:
-            # Boolean mask for this year/month combination
             mask = (time_years == int(year)) & (time_months == int(month))
             if not mask.any():
                 continue
 
-            cams_path = (
-                f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion_climatology.nc"
-                if int(year) > 2017
-                else f"/group/chem/acrg/LPDM/bc/SOUTHAMERICA/ch4_SOUTHAMERICA_{year}{month}_CAMS-inversion.nc"
-            )
+            cams_path = get_cams_path(domain, year, month)
+
+            if not Path(cams_path).exists():
+                print(f"Warning: CAMS file not found at {cams_path}, skipping {year}-{month}")
+                continue
+
             cams = xr.open_dataset(cams_path)
 
             # Baseline CSV lookup
@@ -256,19 +273,16 @@ def baseline_mol_correction_xr(desired_data, months, years, output_format, heigh
             baseline_list.loc[{"time": mask}] = baseline_vals
 
             # Select particle locations for this month
-            # north/south have dims (height, lon, time)
-            # east/west have dims (height, lat, time)
             pl_n = fp_full.particle_locations_n.sel(time=mask)
             pl_s = fp_full.particle_locations_s.sel(time=mask)
             pl_e = fp_full.particle_locations_e.sel(time=mask)
             pl_w = fp_full.particle_locations_w.sel(time=mask)
 
-            # CAMS vmr arrays have different grid sizes from particle locations
-            # so interpolate CAMS onto the particle location grid before multiplying
-            cams_vmr_n = cams.vmr_n.interp(lon=pl_n.lon, method="linear")  # (height, lon)
-            cams_vmr_s = cams.vmr_s.interp(lon=pl_s.lon, method="linear")  # (height, lon)
-            cams_vmr_e = cams.vmr_e.interp(lat=pl_e.lat, method="linear")  # (height, lat)
-            cams_vmr_w = cams.vmr_w.interp(lat=pl_w.lat, method="linear")  # (height, lat)
+            # Interpolate CAMS onto particle location grid before multiplying
+            cams_vmr_n = cams.vmr_n.interp(lon=pl_n.lon, method="linear")
+            cams_vmr_s = cams.vmr_s.interp(lon=pl_s.lon, method="linear")
+            cams_vmr_e = cams.vmr_e.interp(lat=pl_e.lat, method="linear")
+            cams_vmr_w = cams.vmr_w.interp(lat=pl_w.lat, method="linear")
 
             # Weighted sum over height and boundary dimension, result is (time,)
             north_mol = (cams_vmr_n * pl_n).sum(dim=["height", "lon"])
@@ -293,10 +307,8 @@ def baseline_mol_correction_xr(desired_data, months, years, output_format, heigh
                     float(cams.vmr_e.values[h, mid_e_index]),
                     float(cams.vmr_w.values[h, mid_e_index]),
                 ])
-            # Same auxiliary value repeated for all timesteps in this month
             auxiliary_cams.loc[{"time": mask}] = np.array(all_vals)
 
-            # Correction term — mean of southern boundary at level 1
             correction = float(cams.vmr_s[1].mean())
             total_mol = north_mol + south_mol + east_mol + west_mol
             total_list.loc[{"time": mask}] = (total_mol - correction).values
@@ -430,7 +442,7 @@ def baseline_mol_correction(desired_data, months, years, output_format, height_i
 # ---------------------------------------------------------------
 
 def load_and_normalise_boundary_data(data, months, years, output_format, height_indices,
-                                     norm_vals=None):
+                                     norm_vals=None,domain="SOUTHAMERICA"):
     """
     Run baseline_mol_correction and normalise all outputs.
 
@@ -452,7 +464,8 @@ def load_and_normalise_boundary_data(data, months, years, output_format, height_
             - dict: Normalisation values used, with keys 'outputs', 'baselines', 'auxiliary'.
     """
     baseline_list, outputs, auxiliary_cams, corrections = baseline_mol_correction_xr(
-        data, months, years, output_format=output_format, height_indices=height_indices
+        data, months, years, output_format=output_format, 
+        height_indices=height_indices, domain=domain
     )
     '''
     baseline_list, outputs, auxiliary_cams, corrections = baseline_mol_correction(
@@ -553,7 +566,7 @@ def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx,
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx
         print(f"\n--- Start Epoch: {epoch} ---")
-        import ipdb; ipdb.set_trace()
+        
         avg_train_loss = train_one_epoch(
             model, train_loader, model_ctx.optimizer,
             model_ctx.criterion, model_ctx.criterion_test,
@@ -722,13 +735,15 @@ def train_and_save_model(parameters, model_save_dir):
 
     train_year = parse_years(train_load_data_params['years'])
     test_year = parse_years(test_load_data_params['years'])
-
+    
+    domain = parameters.get("domain", "SOUTHAMERICA")
     outputs, baseline_list, auxiliary_cams, _, norm_vals = load_and_normalise_boundary_data(
-        data, all_months, train_year, name_output_format, height_indices
+        data, all_months, train_year, name_output_format, height_indices, domain=domain
     )
+
     test_outputs, test_baseline_list, test_auxiliary_cams, _, _ = load_and_normalise_boundary_data(
         test_data, all_months, test_year, name_output_format, height_indices,
-        norm_vals=norm_vals
+        norm_vals=norm_vals, domain=domain
     )
 
     '''
@@ -742,7 +757,7 @@ def train_and_save_model(parameters, model_save_dir):
 
     use_baselines = parameters.get("use_baselines", True)
     aux_dim = auxiliary_cams.sizes["aux"] if use_baselines and auxiliary_cams is not None else 0
-    
+    parameters["aux_dim"] = aux_dim
     train_loader, test_loader, boundary_labels, scalers = gates_training.setup_boundary_dataloaders(
         parameters, train_inputs, outputs, test_inputs, test_outputs,
         auxiliary_cams, test_auxiliary_cams

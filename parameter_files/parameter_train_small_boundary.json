@@ -4,6 +4,7 @@
     "parallel_loading": false,
     "load_into_memory": true,
     "load_data_monthly": true,
+    "domain": "NORTHAFRICA",
     "train_load_data" : {
         "years":["2015"],
         "months":["01"],
@@ -68,7 +69,7 @@
         "residuals":false, 
         "attention":false
     },
-    
+
     "normalization":"all",
     "network_decoder":"conv",
     "use_baselines":true,
