@@ -816,9 +816,7 @@ def train_and_save_model(parameters, model_save_dir):
 # Entry point
 # ---------------------------------------------------------------
 
-if __name__ == "__main__":  
-    os.environ["WANDB_API_KEY"] = "11d787a211e05ca01c50131c5724e375cd5d3364"  # <<-- REPLACE THIS
-    wandb.login()
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Load parameters. Example usage: python train_GATES_model.py parameters.json")
     parser.add_argument("file_name", help="Parameter file name")
     parser.add_argument("--file_path", help="Parameter file path. By default, the path in config.yml will be used.", default=None)
@@ -831,12 +829,11 @@ if __name__ == "__main__":
 
     if file_path is None:
         file_path = cfg.parameter_files_dir
-    
+
     parameter_path = Path(file_path) / file_name
-    
-    #### 1 Set up
+
     parameters = load_parameter_file(parameter_path)
-    
+
     if parameters is None:
         print("Error loading parameters. Exiting.")
         sys.exit(1)
@@ -846,14 +843,10 @@ if __name__ == "__main__":
 
     if parameters.get("use_wandb", False):
         wandb.login()
-    
-    if parameters.get("model_save_dir", None) is None: 
-        model_saving_dir=cfg.save_models_dir
+
+    if parameters.get("model_save_dir", None) is None:
+        model_saving_dir = cfg.save_models_dir
     else:
         model_saving_dir = Path(parameters["model_save_dir"])
 
-    #TODO write a function that checks minimum parameters exist
-    
-
-    # Train the model with the loaded parameters
     train_and_save_model(parameters, model_save_dir=model_saving_dir)
