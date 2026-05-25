@@ -226,7 +226,7 @@ class BoundaryPredictor:
             data_params["region"] = args.region
             data_params.pop("domain", None)
         input_variables = training_params["variables"]
-        data_params.pop("years", None)
+        data_params.pop("year", None)
         data_params.pop("months", None)
 
         # Domain for CAMS files

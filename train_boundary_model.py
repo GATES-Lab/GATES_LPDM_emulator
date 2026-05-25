@@ -694,6 +694,7 @@ def train_and_save_model(parameters, model_save_dir):
         )
         train_fp_data = data.fp_xr
 
+    
     write_to_file(f"Successfully loaded training data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
 
@@ -733,8 +734,8 @@ def train_and_save_model(parameters, model_save_dir):
     height_indices = [4, 5, 6, 7] if parameters.get('auxiliary') == 'multiple' else [4]
     all_months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
 
-    train_year = parse_years(train_load_data_params['years'])
-    test_year = parse_years(test_load_data_params['years'])
+    train_year = parse_years(train_load_data_params['year'])
+    test_year = parse_years(test_load_data_params['year'])
     
     domain = parameters.get("domain", "SOUTHAMERICA")
     outputs, baseline_list, auxiliary_cams, _, norm_vals = load_and_normalise_boundary_data(
