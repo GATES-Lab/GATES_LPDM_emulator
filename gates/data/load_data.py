@@ -245,7 +245,7 @@ class LoadBaseSatelliteData:
 
 
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, load_bcs=False, cfg=None, parallel_loading=False, load_fps_in_mem=True):
         
         self.dataset_format = "base" 
         self.data_type="satellite"
@@ -297,7 +297,7 @@ class LoadBaseSatelliteData:
         
         #### load footprint (fp) data     
         if verbose: print("---- LOADING FOOTPRINTS")  
-        self._load_footprints(self.fp_datadir)
+        self._load_footprints(self.fp_datadir, load_bcs=load_bcs)
 
         self.met_processed = False
 
@@ -580,7 +580,7 @@ class LoadBaseSatelliteData:
                 UserWarning
             )
 
-    def _load_footprints(self, fp_datadir, load_fps_in_mem=True):
+    def _load_footprints(self, fp_datadir, load_fps_in_mem=True, load_bcs=False):
         """
         Load footprint from fp_datadir and applies subsampling according to the freq and sampling_mode parameters. 
         
@@ -588,19 +588,24 @@ class LoadBaseSatelliteData:
         """
         if self.verbose: print("Loading footprint data from " + str(fp_datadir))
 
-        self.fp_data_full = load_fps(
-            fp_datadir,
-            verbose=self.verbose,
-            parallel_loading=self.parallel_loading,
-            drop_variables_except=[
+        vars_to_load = [
                 "fp",
                 "release_lat",
-                "release_lon",
+                "release_lon"]
+        if load_bcs:
+            bc_vars = [
                 "particle_locations_n",
                 "particle_locations_s",
                 "particle_locations_e",
                 "particle_locations_w",
             ]
+            vars_to_load = vars_to_load + bc_vars
+        print("getting variables :", vars_to_load)
+        self.fp_data_full = load_fps(
+            fp_datadir,
+            verbose=self.verbose,
+            parallel_loading=self.parallel_loading,
+            drop_variables_except= vars_to_load
         )
 
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
@@ -909,7 +914,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, load_bcs=False, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
 
         print(dask.__version__)
 
@@ -975,7 +980,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         
         #### load footprint (fp) data, subsample, crop
         if verbose: print("---- LOADING FOOTPRINTS") 
-        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem)
+        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem, load_bcs=load_bcs)
         self._process_footprints(lazy_load)
 
         self.met_processed = False
