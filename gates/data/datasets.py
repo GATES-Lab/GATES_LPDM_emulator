@@ -416,16 +416,26 @@ class XarrayMinMaxScaler:
     def fit(self, da: xr.DataArray):
         #if self.min is None or self.max is None:
             #da = da.astype("float32", copy=False)
-        
         if self.min is None:
             self.min = da.min()
             if self.compute:
                 print("Computing min for scaler...")
                 self.min = self.min.compute().astype("float32").values
+                print("min:", self.min)
+                if abs(self.min) > 1e25 or self.min<-50000:
+                    self.min = np.min(da.values).astype("float32")
+                    print("recalculated min from values:", self.min)
         if self.max is None:
             self.max = da.max()
             if self.compute:
+                print("Computing max for scaler...")
                 self.max = self.max.compute().astype("float32").values
+                #self.max = np.max(da.values).astype("float32")
+                print("max:", self.max)
+                if abs(self.max) > 1e25:
+                    self.max = np.max(da.values).astype("float32")
+                    print("recalculated max from values:", self.max)
+
 
         self.params = {"min": self.min, "max": self.max, "feature_range": self.feature_range}
         return self
@@ -503,7 +513,7 @@ class DefaultInputsScaler:
     Variables listed in ``minmax_variables`` are scaled with min-max scaling. The fitted scalers are stored by full variable tuple, and `transform` returns a new DataArray
     named ``stacked_transformed_inputs`` with the same dims and ``variable_name`` labels as the inputs.
     """
-    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords", "xy_distance_centre", "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords"], verbose=True, compute=True):
+    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords", "xy_distance_centre", "earth_distance_centre", "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords"], verbose=True, compute=True):
         self.minmax_variables = minmax_variables
         self.scalers = {}
         self.scaler_name = "DefaultInputsScaler"
@@ -513,11 +523,15 @@ class DefaultInputsScaler:
     def fit(self, inputs: xr.DataArray):
 
         variable_names = inputs.variable_name.values
-        varnames = [var[0] for var in inputs.variable_name.values]
-        varnames = np.unique(varnames)
+        varnames = []
+        for var in variable_names:
+            if var[0] not in varnames:
+                varnames.append(var[0])
+        #varnames = np.unique(varnames)
         self.fitted_variable_names = list(variable_names)
+        print(varnames)
 
-        for varname in np.unique(varnames):
+        for varname in varnames: #np.unique(varnames):
             var_data = inputs.sel(variable=varname)
             if varname in self.minmax_variables:
                 if self.verbose: print(f"fitting minmax scaler for var {varname}")
@@ -1483,6 +1497,11 @@ def get_square_satellite_inputs_v2(
             elif "domain" in var:
                 if var in static_variables_functions:
                     static_ds = static_variables_functions[var](data.fp_data_full, static_ds)
+                else:
+                    warnings.warn(f"variable {var} was not found and will be skipped")
+            elif "earth" in var:
+                if var in static_variables_functions:
+                    static_ds = static_variables_functions[var](data.fp_xr, static_ds)
                 else:
                     warnings.warn(f"variable {var} was not found and will be skipped")
             elif var in static_variables_functions and var not in ["lat_coords", "lon_coords"]:
