@@ -247,6 +247,120 @@ def plot_bc_timeseries(dataset, start_date, min_length=30, days_to_plot=7, ylim=
     plt.show()
 
 
+def plot_cams(cams_dataset, month=None, figsize=6):
+    """
+    Plot the four "curtains" of cams data for a particular, with the same shape as the fp_and_bcs_plot (with an empty space in the middle)
+    """
+    if cams_dataset.time.size>1:
+        if month is None:
+            raise ValueError("CAMS dataset contains multiple time steps, please specify a month to plot.")
+        cams_month = cams_dataset.sel(time=cams_dataset.time.dt.month==month)
+        if len(cams_month)==0:
+            raise ValueError("No CAMS data found for the specified month.")
+        cams_to_plot = cams_month.mean(dim="time")
+    else:
+        cams_to_plot = cams_dataset
+
+    width_ratios=[1, 6, 1]
+    height_ratios=[1, 12, 1]
+    figsize = (figsize, figsize)
+    # create figure and subplots
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(3, 3, width_ratios=width_ratios, height_ratios=height_ratios)
+
+    cams_minmax = (1500, 1900)
+    #nlevels=8
+    #levels = np.linspace(cams_minmax[0], cams_minmax[1], nlevels)
+    level_step = 50
+    levels = np.arange(cams_minmax[0], cams_minmax[1]+level_step, level_step)
+
+    ## plot the four sides
+    cams_min, cams_max = cams_minmax    
+    cams_cmap = plt.cm.viridis
+    cams_cmap.set_over("yellow")
+    cams_cmap.set_under("k")
+
+    ax_north = fig.add_subplot(gs[0, 1])
+    c_north = ax_north.contourf(cams_to_plot.lon.values, cams_to_plot.height.values, cams_to_plot.vmr_n.values, origin="lower", extend="both", cmap=cams_cmap, levels=levels)
+    ax_north.set_xticks([])
+    ax_north.set_yticks([0,15500])
+
+
+    ax_south = fig.add_subplot(gs[2, 1])
+    c_south = ax_south.contourf(cams_to_plot.lon.values, cams_to_plot.height.values, cams_to_plot.vmr_s.values, origin="lower", extend="both", cmap=cams_cmap,  levels=levels)
+    ax_south.set_xticks([])
+    ax_south.set_yticks([0,15500])
+    ax_south.invert_yaxis()
+
+    ax_west = fig.add_subplot(gs[1, 0])
+    c_west = ax_west.contourf(cams_to_plot.height.values, cams_to_plot.lat.values, cams_to_plot.vmr_w.values.T, origin="lower", extend="both", cmap=cams_cmap, levels=levels)
+    ax_west.invert_xaxis()
+    ax_west.set_yticks([])
+    ax_west.set_xticks([0,15500])
+
+    ax_east = fig.add_subplot(gs[1, 2])
+    c_east = ax_east.contourf(cams_to_plot.height.values, cams_to_plot.lat.values, cams_to_plot.vmr_e.values.T, extend="both", cmap=cams_cmap, levels=levels) # vmin=cams_min, vmax=cams_max, 
+    ax_east.set_yticks([])
+    ax_east.set_xticks([0,15500])
+
+    # add the colorbar to the central axis, taking only a column of 10% width and 70% height in the middle of the figure
+    ax_main = fig.add_subplot(gs[1, 1], projection=ccrs.PlateCarree())
+    extent = (np.min(cams_dataset.lon.values), np.max(cams_dataset.lon.values), np.min(cams_dataset.lat.values), np.max(cams_dataset.lat.values))
+    ax_main.set_extent(extent, crs=cartopy.crs.PlateCarree())
+    ax_main.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
+    ax_main.add_feature(cfeature.LAND)
+    ax_main.add_feature(cfeature.OCEAN)  
+
+    cbar_ax = fig.add_subplot(gs[1, 1])
+    cbar_ax.set_position([0.38, 0.37, 0.05, 0.3])  # [left, bottom, width, height]
+    # change ticks in cbar manually to be at min and max only
+
+    
+    cbar = fig.colorbar(c_east, cax=cbar_ax, orientation='vertical')
+    cbar.set_label('CAMS CH4 (ppb)', fontsize=12)
+    cbar.set_ticks([1500,1700,1900])
+
+
+def plot_flux(flux, month=None, figsize=6, levels=None, title="Fluxes", cmap="Purples", cbar_label="log10(flux) (mol/m2/s)"):
+    """
+    Plot the fluxes from a flux file, for a particular month if specified.
+    """
+    # if flux has attr time:
+    if hasattr(flux, "time"):
+        if flux.time.size>1:
+            if month is None:
+                raise ValueError("CAMS dataset contains multiple time steps, please specify a month to plot.")
+            cams_month = flux.sel(time=flux.time.dt.month==month)
+            if len(cams_month)==0:
+                raise ValueError("No CAMS data found for the specified month.")
+            flux = cams_month.mean(dim="time")
+
+        
+    # levels = arange at 0.5 steps between -20 and -6
+    if levels is None:
+        level_step = 1
+        levels = np.arange(-16, -5+level_step, level_step)
+
+    fig, ax = plt.subplots(figsize=(figsize, figsize-1), subplot_kw={'projection': ccrs.PlateCarree()})
+
+    extent = (np.min(flux.lon.values), np.max(flux.lon.values), np.min(flux.lat.values), np.max(flux.lat.values))
+    ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
+    ax.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
+    ax.add_feature(cfeature.LAND)
+    ax.add_feature(cfeature.OCEAN)  
+
+    cmap = plt.get_cmap(cmap)
+    cmap.set_over = "w"
+
+    cbar = ax.contourf(flux.lon.values, flux.lat.values, np.log10(flux), cmap=cmap, origin="lower",levels= levels, extend="both")
+
+    # add cbar below
+    #cbar_ax = fig.add_axes([0.25, 0.1, 0.5, 0.02])  # [left, bottom, width, height]
+    fig.colorbar(cbar, ax=ax, location='bottom', extend="both", shrink=0.55, orientation='horizontal', label=cbar_label)
+    plt.title(title)
+    #ax.xlabel("Longitude")
+    #ax.ylabel("Latitude")
+
 def plot_fp_and_bcs(fp_dataset, idx=0, timestamp=None, levels=None, bc_minmax=(-4, -1), figsize=6):
     """
     Plot a full footprint and the corresponding boundary condition footprints on each direction.
