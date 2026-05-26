@@ -24,11 +24,13 @@ dependencies:
   - scikit-learn=1.5.1
   - einops=0.8.0
   - h3-py=3.7.7
+  - h5netcdf=1.8.1
   - pyyaml=6.0.3
   - tqdm=4.67.3
   - ipykernel=7.2.0
   - pip=26.0.1
   - pytest=8.3.5
+  - wandb=0.25.1
   - pip:
       - --find-links https://data.pyg.org/whl/torch-2.3.0+cu121.html
       - torch-scatter==2.1.2
