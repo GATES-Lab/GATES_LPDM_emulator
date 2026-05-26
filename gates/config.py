@@ -127,6 +127,7 @@ class Config():
             self.landcover_datadir = None
 
         self.flux_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["flux_datadir"].lstrip("/\\")
+        self.bc_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["bc_datadir"].lstrip("/\\")
 
         self.save_models_dir = Path(self.user_paths["save_models_dir"])
         self.parameter_files_dir = Path(self.user_paths["parameter_files_dir"])
