@@ -59,6 +59,8 @@ class TrainingContext:
 
     size: int
 
+    dynamic_edges_params:dict
+
 
 
 @dataclass()

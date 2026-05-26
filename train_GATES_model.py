@@ -1,3 +1,6 @@
+import faulthandler
+faulthandler.enable()
+
 import sys
 
 
@@ -11,16 +14,17 @@ import random
 import copy
 import wandb
 
+# PREVIOUS IMPORTS
+# sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
+# sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
+# from model.layers.encoder import *
+# from model.layers.decoder import *
+# from model.layers.processor import *
+# from model.layers.graph_net_block import *
 
-sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
-sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
-from model.layers.encoder import *
-from model.layers.decoder import *
-from model.layers.processor import *
-from model.layers.graph_net_block import *
-#from model.data.dataloader_graphnet import *
-#from model.data.load_data import *
-from model.loss_functions import *
+# # from model.data.dataloader_graphnet import *
+# # from model.data.load_data import *
+# from model.loss_functions import *
 
 
 
@@ -33,11 +37,14 @@ import random
 from pathlib import Path
 
 import gates.training.training as gates_training
-import gates
+
+#import gates
+from gates.config import get_config
 from gates.data.load_data import get_grid
 from gates.training.training_dataclasses import PathContext, TrainingContext
 
 from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility
+
 
 
 def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
@@ -329,8 +336,8 @@ def train_and_save_model(parameters, model_save_dir):
 
     ### setting up
     use_wandb = parameters.get('use_wandb', False)  
-
-    cfg = gates.config.get_config()
+    
+    #cfg = get_config()
 
     verbose = parameters.get("verbose", True)
 
@@ -396,11 +403,12 @@ def train_and_save_model(parameters, model_save_dir):
         train_fp_data = data.fp_xr
 
     if load_monthly:
-        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))
+        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
         train_fp_data = data
 
-    write_to_file(f"Successfully load training met and fp data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
-    print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
+    write_to_file(f"Successfully loaded training met and fp data with {len(train_fp_data.time)} time samples. Loading test data", paths_ctx.updates_path)
+    print("Successfully loaded training met and fp data with", len(train_fp_data.time), "time samples")
+    print("Loading test data")
 
     if not load_monthly:
         test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
@@ -435,16 +443,19 @@ def train_and_save_model(parameters, model_save_dir):
         train_inputs = train_inputs.compute()  # if using dask arrays, this will load into memory; if already numpy arrays, this does nothing
         print(f"    computing test inputs, with size {test_inputs.nbytes / 1e9:.2f} GB")
         test_inputs = test_inputs.compute()
-        print("    NOT computing training fp data (should already be in mem)")
+        print("computing training fp data (although it should already be in mem)")
         #data.fp_xr = data.fp_xr.compute()
-        print("   NOT computing test fp data (should already be in mem)")
+        train_fp_data = train_fp_data.compute()
+        print("computing test fp data (although it should already be in mem)")
         #test_data.fp_xr = test_data.fp_xr.compute()
+        test_fp_data = test_fp_data.compute()
 
     write_to_file("scaling data and setting up dataloaders", paths_ctx.updates_path)
 
     if cluster is not None:
-        cluster.close()
-        client.close()
+        print("closing client before cluster!")
+        client.close()    # drain and disconnect first
+        cluster.close()   # then shut down the workers
         # closes the dask clients and frees up the memory for other workers
 
     #inputs_dataset = gates_training.setup_input_dataset(parameters, train_inputs)
@@ -468,9 +479,25 @@ def train_and_save_model(parameters, model_save_dir):
     grid, _ = get_grid(train_fp_data, parameters.get("grid_reference_fp"))
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
                            description="Grid object used during training", use_wandb=use_wandb)
-    
+    print("dyanmic edges parameters:", parameters.get("dynamic_edges", None))
 
-    training_ctx = TrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values)) # get size from train params
+    
+    # parameters["dynamic_edges"] can be None (default), a dict (with specific dynamic edge settings), or True (which defaults to dynamic wind edges)
+
+    if parameters.get("dynamic_edges", None) is not None:
+        print("here")
+        # if its a dict
+        if isinstance(parameters["dynamic_edges"], dict):
+            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=train_inputs.variable_name.values, **parameters["dynamic_edges"])
+
+        elif parameters.get("dynamic_edges") is True:
+            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=train_inputs.variable_name.values)
+        
+    else:
+        dynamic_edges_params = {"dynamic_edges":False}
+            
+
+    training_ctx = TrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values), dynamic_edges_params) # get size from train params
 
  
     ########################
@@ -534,7 +561,7 @@ if __name__ == "__main__":
     file_name = args.file_name
     file_path = args.file_path
 
-    cfg = gates.config.get_config()
+    cfg = get_config()
 
     if file_path is None:
         file_path = cfg.parameter_files_dir

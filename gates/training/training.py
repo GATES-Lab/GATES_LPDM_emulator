@@ -1,32 +1,35 @@
-from pyexpat import model
+#from pyexpat import model
 
-from model.forecast import GraphSatelliteForecaster
+#from model.forecast import GraphSatelliteForecaster
 
 
 import torch.optim as optim
 import time
-from datetime import datetime
-import json
-import argparse
-from pathlib import Path
+# from datetime import datetime
+# import json
+# import argparse
+# from pathlib import Path
 
-import random
-import yaml
+# import random
+# import yaml
 
-import sys
-
-import matplotlib.pyplot as plt
+# import sys
+# import pickle
+# import random
 
 import numpy as np
 import torch
 import os
-import pickle
-import random
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
+
 import xarray as xr
 
 from pathlib import Path
 
 import wandb
+
+from gates.model.forecast import GraphSatelliteForecaster
 
 
 from gates import LoadSquareSatelliteData, get_square_satellite_inputs
@@ -35,7 +38,7 @@ from gates.data.datasets import get_square_satellite_inputs_v2
 import gates.evaluation.metrics as gates_metrics
 import gates.evaluation.loss_functions as gates_losses
 
-from .training_helperfuns import save_wandb_artifact, EarlyStopping
+from .training_helperfuns import EarlyStopping #save_wandb_artifact, 
 
 from .training_dataclasses import ModelContext
 
@@ -101,8 +104,22 @@ def _resolve_years_months(data_parameters):
 
     return years, months
 
+def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=True, wind_tuples=None, input_names=None):
+    if dynamic_wind:
+        if wind_tuples is None:
+            wind_tuples = [("x_wind", 3, 0), ("y_wind", 3, 0)]
+    wind_indices = [i for i, name in enumerate(input_names)
+                                            if name in wind_tuples]   
+    
+    dynamic_edge_params = {
+        "dynamic_edges":True,
+            #"dynamic_wind": dynamic_wind,
+            "wind_indices": wind_indices if dynamic_wind else None}
 
-def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False):
+    return dynamic_edge_params
+
+
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False):
     """
     Loads footprints and inputs for each year-month pair specified in data_parameters,
     returning them as concatenated xarrays rather than a LoadSquareSatelliteData object.
@@ -139,6 +156,10 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     all_fp_xr = []
     loading_times = {}
 
+    month_counter = 0
+    total_expected_months = len(list(zip(years, months)))
+    total_time=0
+    
     for year in years:
         for month in months:
             month_start = time.perf_counter()
@@ -150,21 +171,36 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
                 data = LoadSquareSatelliteData(**month_params, **datapath_args, verbose=verbose)
             except Exception as e:
                 print(f"Error loading data for {year}-{month}: {e}")
+
                 elapsed_mins = (time.perf_counter() - month_start) / 60
                 loading_times[month_key] = f"{elapsed_mins:.2f}mins"
                 print(f"{month_key} : {loading_times[month_key]}")
-                continue
+
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
             if load_into_memory:
                 print(f"Loading data into memory for {year}-{month} before concatenation...")
                 inputs = inputs.load()
+                inputs.close()
+                print("and footprints...")
                 data.fp_xr = data.fp_xr.load()
+                data.fp_xr.close()
             all_inputs.append(inputs)
             all_fp_xr.append(data.fp_xr)
 
             elapsed_mins = (time.perf_counter() - month_start) / 60
             loading_times[month_key] = f"{elapsed_mins:.2f}mins"
             print(f"{month_key} : {loading_times[month_key]}")
+            # sum of all loading times
+            total_time += elapsed_mins
+            if use_wandb:
+                wandb.log({
+                    "loading/months_loaded": month_counter + 1,
+                    "loading/train_time": elapsed_mins,
+                    "loading/total_time": total_time,
+                    "loading/total_months": total_expected_months,
+                    "loading/samples_loaded": len(all_fp_xr.fp.time),
+                }, step=None)
+            continue          
 
     print("")
     print("")
@@ -208,7 +244,7 @@ def setup_input_dataset(parameters, train_inputs):
         else:
             inputs_scaler = None
 
-    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params)
+    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params, verbose=parameters.get("verbose", False))
     input_dataset.fit()
 
     return input_dataset
@@ -353,7 +389,7 @@ def evaluate_outputs(test_outpts, true_fp, fp_mask):
 def setup_GATES_model(parameters, training_ctx, paths_ctx):
     lr = parameters["learning_rate"]
 
-    model = GraphSatelliteForecaster(training_ctx.grid, whole_world=False, feature_dim=training_ctx.n_variables, **parameters["model_parameters"])
+    model = GraphSatelliteForecaster(training_ctx.grid, whole_world=False, feature_dim=training_ctx.n_variables, **parameters["model_parameters"], **training_ctx.dynamic_edges_params)
 
     loss_fn = eval(parameters["loss_functions"]["criterion"])
 

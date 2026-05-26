@@ -3,7 +3,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import random
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import pickle
@@ -39,8 +39,6 @@ def load_parameter_file(file_path):
 
     Args:
         file_name (str): The name of the file to load (including extension).
-        file_path (str or bool): The directory path containing the file. If False, a hardcoded default path is used.
-
     Returns:
         dict or list: The parsed JSON contents of the file, or None if the file was not found or an error occurred.
     """
@@ -236,6 +234,8 @@ def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, col
     Returns:
         None
     """
+    import matplotlib.pyplot as plt
+
     image_plots = training_ctx.image_plots
     image_dates = training_ctx.image_dates
     size = training_ctx.size
@@ -317,7 +317,7 @@ def export_results_to_netcdf(test_fp_dataset, path, model_name, use_wandb=True):
 
     netcdf_save_path = f"{path}/sample_predictions_test.nc"
     test_fp_dataset.to_netcdf(netcdf_save_path)
-    print("NetCDF file saved.")
+    print("NetCDF file saved at path:", netcdf_save_path)
 
     if use_wandb:
         save_wandb_artifact(model_name, "predictions", "dataset", f"Sample predictions saved during training for model {model_name}", netcdf_save_path)
