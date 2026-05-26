@@ -159,6 +159,26 @@ def _domain_binary_release(fp_data, coordinate_ds):
 
 
 
+def _earth_distance_centre(fp_data, coordinate_ds):
+    # Haversine distance from each grid cell (using real lat/lon coords) to the release point
+    lat_coords = np.radians(fp_data.lat_coords.values)           # (n_time, n_lat)
+    lon_coords = np.radians(fp_data.lon_coords.values)           # (n_time, n_lon)
+    release_lat = np.radians(fp_data.release_lat.values)         # (n_time,)
+    release_lon = np.radians(fp_data.release_lon.values)         # (n_time,)
+
+    lat_3d = lat_coords[:, :, np.newaxis]                        # (n_time, n_lat, 1)
+    lon_3d = lon_coords[:, np.newaxis, :]                        # (n_time, 1, n_lon)
+    release_lat_3d = release_lat[:, np.newaxis, np.newaxis]      # (n_time, 1, 1)
+    release_lon_3d = release_lon[:, np.newaxis, np.newaxis]      # (n_time, 1, 1)
+
+    distances = haversine(lat_3d, lon_3d, release_lat_3d, release_lon_3d)  # (n_time, n_lat, n_lon)
+
+    coordinate_ds = coordinate_ds.assign({"earth_distance_centre":(("fp_time", "lat", "lon"), distances)})
+
+    return coordinate_ds
+
+
+
 def _binary_centre(coordinate_ds):
     assert coordinate_ds.lat.size == coordinate_ds.lon.size, "_binary_centre function only works for square datasets!"
 
@@ -171,7 +191,7 @@ def _binary_centre(coordinate_ds):
     return coordinate_ds
 
 def _xy_distance_centre(coordinate_ds):
-    assert coordinate_ds.lat.size == coordinate_ds.lon.size, "_binary_centre function only works for square datasets!"
+    assert coordinate_ds.lat.size == coordinate_ds.lon.size, "_xy_distance_centre function only works for square datasets!"
 
     centre = int(coordinate_ds.lat.size/2)
     grid_coords = np.meshgrid(np.arange(coordinate_ds.lat.size), np.arange(coordinate_ds.lon.size)) 
@@ -205,6 +225,8 @@ def get_static_variables_functions():
                                 _binary_centre,
                                 "xy_distance_centre":
                                 _xy_distance_centre, 
+                                "earth_distance_centre":
+                                _earth_distance_centre,
                                 "lat_degrees_distance":
                                 NotImplemented,
                                 "lon_degrees_distance":
