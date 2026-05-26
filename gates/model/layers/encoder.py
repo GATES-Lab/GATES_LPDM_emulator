@@ -260,7 +260,7 @@ class SatelliteEncoder(torch.nn.Module):
             distance_centre = (distance_centre-np.min(distance_centre))/(np.max(distance_centre)-np.min(distance_centre))
 
             both_features = np.hstack((binary_centre, distance_centre))
-            print(np.shape(both_features))
+            #print(np.shape(both_features))
             self.improved_mesh_nodes = torch.tensor(both_features, dtype=torch.float32)
 
         self.mesh_graph = self.create_mesh_graph()
@@ -301,7 +301,7 @@ class SatelliteEncoder(torch.nn.Module):
             mlp_norm_type,
             self.use_checkpointing, dropout=dropout
         )
-        print("mesh edge encoder inputs:", self.mesh_graph.edge_attr.size()[-1])
+        #print("mesh edge encoder inputs:", self.mesh_graph.edge_attr.size()[-1])
         self.mesh_edge_encoder = MLP(
             self.mesh_graph.edge_attr.size()[-1],
             output_edge_dim,
@@ -336,7 +336,7 @@ class SatelliteEncoder(torch.nn.Module):
             features = einops.rearrange(features, "(b n) f -> b n f", b=batch_size)
 
         features = einops.rearrange(features, "b n f -> b f n")
-        print("features shape before enc and rearrange:", features.shape)
+        #print("features shape before enc and rearrange:", features.shape)
 
         if self.concat_enc_neighbours:
             features = concat_group_by(features, self.graph.edge_index[1,:].squeeze())
@@ -347,7 +347,7 @@ class SatelliteEncoder(torch.nn.Module):
         features = einops.rearrange(features, "b f n -> (b n) f")
         out = self.node_encoder(features)
 
-        print("out shape after node encoder:", out.shape)
+        #print("out shape after node encoder:", out.shape)
 
         if self.better_meshnodes:
             self.improved_mesh_nodes = self.improved_mesh_nodes.to(features.device)
@@ -360,19 +360,19 @@ class SatelliteEncoder(torch.nn.Module):
             mesh_edge_attrs = self.mesh_edge_encoder(self.mesh_graph.edge_attr)
         
         # print mesh_graph edge index and edge attr shapes
-        print("mesh_graph edge_index shape:", self.mesh_graph.edge_index.shape)
-        print("mesh_graph edge_attr shape:", self.mesh_graph.edge_attr.shape)
+        # print("mesh_graph edge_index shape:", self.mesh_graph.edge_index.shape)
+        # print("mesh_graph edge_attr shape:", self.mesh_graph.edge_attr.shape)
 
         # same inputs every time... could include info from bottom nodules
         mesh_edge_attrs = einops.repeat(mesh_edge_attrs, "e f -> (repeat e) f", repeat=batch_size)
         mesh_edge_idx = torch.cat([self.mesh_graph.edge_index+ i * torch.max(self.mesh_graph.edge_index) + i for i in range(batch_size) ], dim=1)
-        print("mesh_edge_idx shape:", mesh_edge_idx.shape)
-        print("mesh_edge_attrs shape:", mesh_edge_attrs.shape)
-        print("out shape:", out.shape)
+        #print("mesh_edge_idx shape:", mesh_edge_idx.shape)
+        #print("mesh_edge_attrs shape:", mesh_edge_attrs.shape)
+        #print("out shape:", out.shape)
         # print out[:5, :5], mesh_edge_idx[:, :5], mesh_edge_attrs[:5, :5]
-        print("out[:5, :5]", out[:5, :5])
-        print("mesh_edge_idx[:, :5]", mesh_edge_idx[:, :5])
-        print("mesh_edge_attrs[:5, :5]", mesh_edge_attrs[:5, :5])
+        #print("out[:5, :5]", out[:5, :5])
+        #print("mesh_edge_idx[:, :5]", mesh_edge_idx[:, :5])
+        #print("mesh_edge_attrs[:5, :5]", mesh_edge_attrs[:5, :5])
         return (
             out,
             mesh_edge_idx,
@@ -406,7 +406,7 @@ class SatelliteEncoder(torch.nn.Module):
                     # this can only happen if using a reduced domain (whole_world = False), at the edges of this domain
                     continue
             if self.release_edges:
-                print("here!")
+                print("here in release edges")
                 if h3_index != self.release_h3 and (self.release_h3 not in h_points):
                     # add edge to centre, only if edge does not already exist
                     edge_targets.append(self.base_h3_map[self.release_h3])
@@ -417,8 +417,8 @@ class SatelliteEncoder(torch.nn.Module):
         edge_attrs = torch.tensor(edge_attrs, dtype=torch.float)
         # Use heterogeneous graph as input and output dims are not same for the encoder
         # Because uniform grid now, don't need edge attributes as they are all the same
-        print(edge_index[:,:5])
-        print(edge_attrs[:5, :5])
+        #print(edge_index[:,:5])
+        #print(edge_attrs[:5, :5])
         return Data(edge_index=edge_index, edge_attr=edge_attrs)
 
 
@@ -700,12 +700,12 @@ class SatelliteDynamicEncoder(torch.nn.Module):
                     edge_targets.append(self.base_h3_map[self.release_h3])
                     edge_sources.append(self.base_h3_map[h3_index])
 
-        print("mesh edge index shape:", (len(edge_sources),))
-        print("mesh edge attr shape:", (len(edge_attrs), len(edge_attrs[0]) if edge_attrs else 0))
+        #print("mesh edge index shape:", (len(edge_sources),))
+        #print("mesh edge attr shape:", (len(edge_attrs), len(edge_attrs[0]) if edge_attrs else 0))
         edge_index = torch.tensor([edge_sources, edge_targets], dtype=torch.long)
         edge_attrs = torch.tensor(edge_attrs, dtype=torch.float)
-        print(edge_index[:,:5])
-        print(edge_attrs[:5, :5])
+        #print(edge_index[:,:5])
+        #print(edge_attrs[:5, :5])
 
         return (edge_index,
                 edge_attrs)
@@ -730,7 +730,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
 
         features = einops.rearrange(features, "b n f -> b f n")
         ### print shape of features
-        print("features shape after initial enc and rearrange:", features.shape)
+        #print("features shape after initial enc and rearrange:", features.shape)
 
         if self.concat_enc_neighbours:
             features = concat_group_by(features, self.enc_edge_index[1, :].squeeze())
@@ -738,7 +738,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
             features = torch.multiply(features, torch.flatten(self.enc_edge_weights))
             features = scatter_mean(src=features, index=self.enc_edge_index[1, :])
         # features: (batch, n_features, n_mesh_nodes)
-        print("features shape after scatter:", features.shape)
+        #print("features shape after scatter:", features.shape)
         # extract wind at edge endpoints before rearranging to flat (b*n, f)
         if self.dynamic_edges:
             src_wind = features[:, self.wind_indices][:, :, self.mesh_edge_index[0, :]]
@@ -755,25 +755,25 @@ class SatelliteDynamicEncoder(torch.nn.Module):
                 self.improved_mesh_nodes, "e f -> (repeat e) f", repeat=batch_size)
             out = torch.cat([out, better_nodes], dim=1)
 
-        print("out shape after node encoder and better meshnodes:", out.shape)
+        #print("out shape after node encoder and better meshnodes:", out.shape)
 
         # encode mesh edges
         if self.dynamic_edges:
             static_rep = einops.repeat(
                 self.mesh_edge_attr_static, "e f -> (rep e) f", rep=batch_size)
             # (B*E, base_dim + n_wind)
-            print("concatenating static and dynamic edge attributes")
+            #print("concatenating static and dynamic edge attributes")
             concat_edge_attrs = torch.cat([static_rep, edge_wind], dim=-1)
-            print("concat_edge_attrs shape:", concat_edge_attrs.shape)
-            print("concat_edge_attrs:", concat_edge_attrs[:5])
+            #print("concat_edge_attrs shape:", concat_edge_attrs.shape)
+            #print("concat_edge_attrs:", concat_edge_attrs[:5])
             mesh_edge_attrs = self.mesh_edge_encoder(concat_edge_attrs)
         else:
             mesh_edge_attrs = self.mesh_edge_encoder(self.mesh_edge_attr_static)
             mesh_edge_attrs = einops.repeat(
                 mesh_edge_attrs, "e f -> (rep e) f", rep=batch_size)
         # print shape of mesh_edge_attr_static
-        print("mesh_edge_attr_static shape:", self.mesh_edge_attr_static.shape)
-        print("mesh_edge_attrs shape after encoding and repeat:", mesh_edge_attrs.shape)
+        #print("mesh_edge_attr_static shape:", self.mesh_edge_attr_static.shape)
+        #print("mesh_edge_attrs shape after encoding and repeat:", mesh_edge_attrs.shape)
 
         # batched edge index — vectorised over batch dimension
         offset = torch.arange(batch_size, device=self.mesh_edge_index.device) * self.num_h3
@@ -781,9 +781,9 @@ class SatelliteDynamicEncoder(torch.nn.Module):
                          + offset.view(-1, 1, 1))   # (B, 2, E)
         mesh_edge_idx = mesh_edge_idx.permute(1, 0, 2).reshape(2, -1)  # (2, B*E)
 
-        print("mesh_edge_idx shape:", mesh_edge_idx.shape)
-        print("out[:5, :5]", out[:5, :5])
-        print("mesh_edge_idx[:, :5]", mesh_edge_idx[:, :5])
-        print("mesh_edge_attrs[:5, :5]", mesh_edge_attrs[:5, :5])
+        # print("mesh_edge_idx shape:", mesh_edge_idx.shape)
+        # print("out[:5, :5]", out[:5, :5])
+        # print("mesh_edge_idx[:, :5]", mesh_edge_idx[:, :5])
+        # print("mesh_edge_attrs[:5, :5]", mesh_edge_attrs[:5, :5])
 
         return out, mesh_edge_idx, mesh_edge_attrs

@@ -7,8 +7,8 @@ import torch
 import einops
 import h3
 import numpy as np
-from torch_geometric.data import Data
-from torch_geometric.utils import to_dense_batch
+#from torch_geometric.data import Data
+#from torch_geometric.utils import to_dense_batch
 from torch_scatter import scatter_mean
 
 from .graph_net_block import MLP

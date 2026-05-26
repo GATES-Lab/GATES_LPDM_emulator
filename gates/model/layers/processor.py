@@ -10,7 +10,7 @@ author: Elena Fillola @elenafillo
 """
 
 import torch
-import einops 
+#import einops 
 
 from .graph_net_block import GraphSatelliteProcessor
 
