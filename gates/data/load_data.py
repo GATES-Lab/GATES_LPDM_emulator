@@ -18,7 +18,6 @@ import warnings
 from pathlib import Path
 import time
 
-import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy
 
@@ -449,7 +448,7 @@ class LoadBaseSatelliteData:
 
         chunk_args = {"chunks": {"time": met_chunksize, "lat":-1, "lon":-1, "model_level_number":-1}}
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            met_file = xr.open_mfdataset(
+            with xr.open_mfdataset(
                 met_files,
                 concat_dim="time",
                 combine="nested",
@@ -463,7 +462,9 @@ class LoadBaseSatelliteData:
                 compat="override",
                 engine="h5netcdf",
                 preprocess=preprocess_met_data,
-            )
+            ) as f:
+                met_file = f
+                
             if len(met_levels)>0:
                 try:
                     met_file = met_file.sel(model_level_number=met_levels)
@@ -800,7 +801,7 @@ class LoadBaseSatelliteData:
             self.countries = country_ds
 
 
-    def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, return_fig=False, plot_marker=False, dpi=100):
+    def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, return_fig=False, plot_marker=False, dpi=100, figsize=(6,6)):
         """
         plot a footprint for a particular timestamp or index
 
@@ -809,6 +810,7 @@ class LoadBaseSatelliteData:
             - timestamp: timestamp of the footprint to plot, as a string in format "YYYY-MM-DDTHH:MM:SS" (eg "2016-01-01T12:00:00"). If idx is also passed, timestamp will be used instead of idx
             - return_fig: if True, returns the fig and ax objects instead of showing the plot. 
         """
+        import matplotlib.pyplot as plt
 
         if timestamp is not None:
             fp_to_plot = self.fp_data_full.sel(time=np.datetime64(timestamp)).copy()
@@ -823,7 +825,7 @@ class LoadBaseSatelliteData:
 
         extent = (fp_to_plot.lon.values[0], fp_to_plot.lon.values[-1], fp_to_plot.lat.values[0], fp_to_plot.lat.values[-1])
 
-        fig, ax = plt.subplots(1,1,subplot_kw={'projection': ccrs.PlateCarree()}, figsize=(8,6), dpi=dpi)
+        fig, ax = plt.subplots(1,1,subplot_kw={'projection': ccrs.PlateCarree()}, figsize=figsize, dpi=dpi)
         ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
         ax.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
         ax.add_feature(cartopy.feature.LAND)
@@ -847,7 +849,7 @@ class LoadBaseSatelliteData:
             ax.scatter(fp_to_plot.release_lon.values, fp_to_plot.release_lat.values, marker="x", color="white",s=25, lw=1,transform=cartopy.crs.PlateCarree(), zorder=10)
 
         if add_cbar:
-            cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
+            cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both", shrink=0.55).set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
 
         if return_fig:
             return fig, ax
@@ -1093,6 +1095,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             - idx: int index of the footprint to plot. If timestamp is also passed, timestamp will be used instead of idx
             - timestamp: timestamp of the footprint to plot, as a string in format "YYYY-MM-DDTHH:MM:SS" (eg "2016-01-01T12:00:00"). If idx is also passed, timestamp will be used instead of idx
         """
+        import matplotlib.pyplot as plt
 
         if timestamp is not None:
             fp_to_plot = self.fp_xr.sel(time=np.datetime64(timestamp)).copy()
@@ -1157,6 +1160,8 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         """
         Plot the mean of the cropped and aligned footprints. Levels and vmin_vmax adjust the colour scale. If add_cbar is True, adds a colorbar
         """
+        import matplotlib.pyplot as plt
+
         f = self.fp_xr.fp.mean(dim="time").values
         #f[f<5e-5] = 0
         vmin, vmax = vmin_vmax
@@ -1211,7 +1216,7 @@ def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
 
 
 
-def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None):
+def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, search_others=False):
     """
     Load emissions for the given domain and year. Returns a lazy xarray DataArray (time, lat, lon) with all months in the file. Loads the file in flux_path if provided, otherwise looks up the file based on the config, domain and species. 
     Inputs:
@@ -1263,7 +1268,16 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None):
     path = Path(cfg.flux_datadir) / resolved_domain_name / f"{species}_{resolved_domain_name}_{year}{flux_suffix}.nc"
     # make the sorted list a list of strings
     if not path.is_file():
-        raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_*.nc"))}")
+        if search_others:
+            other_files = sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_{year}_*.nc"))
+            if len(other_files) ==1:
+                print(f"Using another file for this domain and species: \n{other_files[0]}")
+                path = other_files[0]
+            else:
+                raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f'{species}_{resolved_domain_name}_{year}_*.nc'))}")
+        else:
+        
+            raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_{year}_*.nc"))}")
     else:
         print(f"Loading flux data from {path}")
     return xr.open_dataset(path).flux
