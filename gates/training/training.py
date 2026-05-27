@@ -1,4 +1,4 @@
-from pyexpat import model
+#from pyexpat import model
 
 from model.forecast import GraphSatelliteForecaster, GraphSatelliteForecasterConvClassifier,GraphSatelliteForecasterClassifier
 
@@ -276,143 +276,7 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
 
     return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
 
-def concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams):
-    """
-    Concatenate auxiliary CAMS features onto scaled inputs along the variable_name dimension,
-    broadcasting the auxiliary values across all lat/lon grid cells.
 
-    Args:
-        scaled_inputs (xr.DataArray): Shape (fp_time, lat, lon, variable_name).
-        auxiliary_cams (xr.DataArray): Shape (time, aux) with aux coordinate names.
-
-    Returns:
-        xr.DataArray: Concatenated inputs of shape (fp_time, lat, lon, variable_name)
-            with aux features appended along variable_name.
-    """
-    aux_names = list(auxiliary_cams.aux.values)
-    lat_size = scaled_inputs.sizes["lat"]
-    lon_size = scaled_inputs.sizes["lon"]
-    n_aux = len(aux_names)
-
-    # Rename 'time' to 'fp_time' to match scaled_inputs
-    aux_fp_time = auxiliary_cams.rename({"time": "fp_time"})
-
-    # Expand (fp_time, aux) -> (fp_time, lat, lon, aux) by broadcasting
-    # Use expand_dims then broadcast_to via xarray
-    aux_expanded = aux_fp_time.expand_dims(
-        dim={"lat": scaled_inputs.lat, "lon": scaled_inputs.lon},
-    )
-    # Reorder to match scaled_inputs dim order
-    aux_expanded = aux_expanded.transpose("fp_time", "lat", "lon", "aux")
-
-    # Build a MultiIndex compatible with the variable_name MultiIndex on scaled_inputs
-    aux_multiindex = pd.MultiIndex.from_arrays(
-        [aux_names,
-         [0] * n_aux,   # levels — no pressure level for auxiliary
-         [0] * n_aux],  # time_delta — no time shift for auxiliary
-        names=["variable", "levels", "time_delta"]
-    )
-
-    # Rename aux dim to variable_name and assign the MultiIndex coordinate
-    aux_expanded = aux_expanded.rename({"aux": "variable_name"})
-    aux_expanded = aux_expanded.assign_coords(
-        variable_name=aux_multiindex
-    )
-
-    return xr.concat([scaled_inputs, aux_expanded], dim="variable_name")
-
-def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inputs, test_outputs,
-                                train_auxiliary_cams=None, test_auxiliary_cams=None):
-    # Scale inputs using training statistics
-    
-    input_dataset = setup_input_dataset(parameters, train_inputs)
-    train_scaled_inputs = input_dataset.transform(train_inputs)
-    test_scaled_inputs = input_dataset.transform(test_inputs)
-
-    '''
-    # Force compute after scaling — scaler may return dask-backed xarray
-    print("Computing scaled inputs into memory...")
-    train_scaled_inputs = train_scaled_inputs.compute() if hasattr(train_scaled_inputs, 'compute') else train_scaled_inputs
-    test_scaled_inputs = test_scaled_inputs.compute() if hasattr(test_scaled_inputs, 'compute') else test_scaled_inputs
-    '''
-    # Append pre-normalised auxiliary CAMS features to inputs if use_baselines is True
-    use_baselines = parameters.get("use_baselines", True)
-
-    if use_baselines and train_auxiliary_cams is not None and test_auxiliary_cams is not None:
-        print("Concatenating inputs and auxiliary cams")
-        train_scaled_inputs = concat_auxiliary_to_inputs(train_scaled_inputs, train_auxiliary_cams)
-        test_scaled_inputs = concat_auxiliary_to_inputs(test_scaled_inputs, test_auxiliary_cams)
-
-        '''
-        # xr.concat can reintroduce dask backing — force compute again
-        print("Computing concatenated inputs into memory...")
-        train_scaled_inputs = train_scaled_inputs.compute() if hasattr(train_scaled_inputs, 'compute') else train_scaled_inputs
-        test_scaled_inputs = test_scaled_inputs.compute() if hasattr(test_scaled_inputs, 'compute') else test_scaled_inputs
-        '''
-    
-    '''
-    # Also ensure outputs are computed if they are xarray-backed
-    train_outputs = train_outputs.compute() if hasattr(train_outputs, 'compute') else train_outputs
-    test_outputs = test_outputs.compute() if hasattr(test_outputs, 'compute') else test_outputs
-    '''
-    dataloader_info = parameters.get("dataloader", {})
-    batch_size = dataloader_info.get("batch_size", 5)
-    test_batch_size = dataloader_info.get("test_batch_size", 5)
-    dataloader_params = dataloader_info.get("dataloader_params", {})
-
-    if "prefetch_factor" in dataloader_params and dataloader_params["prefetch_factor"] == 0:
-        dataloader_params["prefetch_factor"] = None
-    
-    # Trim to batch size
-    train_scaled_inputs, train_outputs = gates_datasets.trim_to_batch_size(
-        train_scaled_inputs, train_outputs, batch_size
-    )
-    test_scaled_inputs, test_outputs = gates_datasets.trim_to_batch_size(
-        test_scaled_inputs, test_outputs, test_batch_size
-    )
-
-    # Verify nothing is dask-backed before building dataloaders
-    import dask.array as da
-    for name, arr in [("train_scaled_inputs", train_scaled_inputs),
-                      ("test_scaled_inputs", test_scaled_inputs),
-                      ("train_outputs", train_outputs),
-                      ("test_outputs", test_outputs)]:
-        if hasattr(arr, 'data') and isinstance(arr.data, da.Array):
-            print(f"WARNING: {name} is still dask-backed, forcing compute...")
-            arr = arr.compute()
-
-    train_loader, boundary_labels_train = gates_datasets.make_boundary_dataloader(
-        train_scaled_inputs, train_outputs,
-        batch_size=batch_size,
-        randomize=True,
-        dataloader_params=dataloader_params,
-        flatten=True
-    )
-
-    test_dataloader_params = {
-        "num_workers": 0,
-        "persistent_workers": False,
-        "prefetch_factor": None
-    }
-    print("SPECIAL TEST PARAMS", test_dataloader_params)
-
-    test_loader, boundary_labels_test = gates_datasets.make_boundary_dataloader(
-        test_scaled_inputs, test_outputs,
-        batch_size=test_batch_size,
-        randomize=False,
-        dataloader_params=test_dataloader_params,
-        flatten=True
-    )
-
-    if boundary_labels_train != boundary_labels_test:
-        raise ValueError(
-            "The labels for the training and test boundary datasets do not match. "
-            "Check that train and test outputs have the same structure and number of columns."
-        )
-
-    scalers = {"inputs_scaler": input_dataset.scaler}
-
-    return train_loader, test_loader, boundary_labels_train, scalers
 
 def initialise_losses():
     """
@@ -434,16 +298,6 @@ def initialise_losses():
     }
     return losses
 
-def initialise_boundary_losses():
-    """
-    Return a dictionary to store losses and metrics during training and evaluation. 
-    """
-    losses = {
-        "train": [],
-        "test": [],
-
-    }
-    return losses
 
 def calculate_losses(losses, test_outputs_xr):
     """
@@ -542,77 +396,6 @@ def setup_GATES_model(parameters, training_ctx, paths_ctx):
 
 
     return model, model_ctx
-
-
-def setup_boundary_model(parameters, training_ctx, paths_ctx):
-    lr = parameters["learning_rate"]
-    
-
-    if parameters["network_decoder"] == "conv":
-        print("Using conv network")
-        model = GraphSatelliteForecasterConvClassifier(
-            training_ctx.grid,
-            whole_world=False,
-            feature_dim=training_ctx.n_variables,
-            aux_dim=training_ctx.aux_dim,
-            num_classes=parameters['num_classes'],
-            input_height=training_ctx.size,
-            input_width=training_ctx.size,
-            **parameters["model_parameters"],
-        )
-    else:
-        print("Using normal network")
-        model = GraphSatelliteForecasterClassifier(
-            training_ctx.grid,
-            whole_world=False,
-            feature_dim=training_ctx.n_variables,
-            aux_dim=training_ctx.aux_dim,
-            num_classes=parameters['num_classes'],
-            **parameters["model_parameters"],
-        )
-
-    criterion_params = parameters["loss_functions"].get("criterion_params", {})
-    criterion_test_params = parameters["loss_functions"].get("criterion_test_params", {})
-
-    loss_fn = eval(parameters["loss_functions"]["criterion"])
-    loss_fn_test = eval(parameters["loss_functions"]["criterion_test"])
-
-    
-    # Simple loss like MSELoss with no spatial weighting
-    criterion = loss_fn(**criterion_params)
-    criterion_test = loss_fn_test(**criterion_test_params)
-
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
-
-    early_stopping = EarlyStopping(
-        patience=parameters["epochs"]["patience"],
-        verbose=parameters.get("verbose", True),
-        path=paths_ctx.model_path / f"{paths_ctx.model_name}_best.pt",
-        use_wandb=parameters["use_wandb"],
-        model_name=paths_ctx.model_name
-    )
-
-    if torch.cuda.is_available():
-        model.cuda()
-
-    model_ctx = ModelContext(
-        model_name=parameters["model_name"],
-        use_wandb=parameters["use_wandb"],
-        device=training_ctx.device,
-        optimizer=optimizer,
-        criterion=criterion,
-        criterion_test=criterion_test,
-        lr=lr,
-        early_stopping=early_stopping,
-        epochs_num=parameters["epochs"]["training"],
-        epochs_visualise=parameters["epochs"].get("visualize", 5),
-        epochs_save=parameters["epochs"]["model_save"],
-        epochs_patience=parameters["epochs"]["patience"]
-    )
-
-    return model, model_ctx
-
-    
     
 
 import os
