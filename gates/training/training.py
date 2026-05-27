@@ -176,8 +176,8 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
 
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
     inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
-    return data, inputs
-    #return fp_xr, inputs
+
+    return fp_xr, inputs
 
 
 def _get_scaler(scaler_name, scaler_module=None):
