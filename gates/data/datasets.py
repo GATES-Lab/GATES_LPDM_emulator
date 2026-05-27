@@ -937,25 +937,26 @@ def make_boundary_batcher(outputs, batch_size=5):
 
     # Extract labels from the coordinate values if they are strings,
     # otherwise generate default names
-    coord_vals = outputs[output_dim].values
-    if coord_vals.dtype == object or np.issubdtype(coord_vals.dtype, np.str_):
-        output_labels = list(coord_vals)
-    else:
-        output_labels = [f"output_{i}" for i in range(outputs.sizes[output_dim])]
+    # coord_vals = outputs[output_dim].values
+    # if coord_vals.dtype == object or np.issubdtype(coord_vals.dtype, np.str_):
+    #     output_labels = list(coord_vals)
+    # else:
+    #     output_labels = [f"output_{i}" for i in range(outputs.sizes[output_dim])]
 
     if outputs.dtype != "float32":
         outputs = outputs.astype("float32", copy=False)
 
     outputs = outputs.chunk(time=batch_size)
+    outputs = outputs.transpose("time", output_dim)
 
     y_bgen = xb.BatchGenerator(
         outputs,
-        input_dims={output_dim: outputs.sizes[output_dim]},
-        batch_dims={"time": batch_size},
+        #input_dims={output_dim: outputs.sizes[output_dim]},
+        input_dims={"time": batch_size},
         preload_batch=True,
     )
 
-    return y_bgen, output_labels
+    return y_bgen #, output_labels
 
 def make_fps_batcher(fps, batch_size=10, flatten=False):
     """
@@ -1177,7 +1178,8 @@ def make_boundary_dataloader(inputs, outputs, batch_size=10, randomize=False,
         outputs = outputs.sel(time=permuted_time)
 
     X_bgen = make_inputs_batcher(inputs, batch_size=batch_size, flatten=flatten)
-    y_bgen, output_labels = make_boundary_batcher(outputs, batch_size=batch_size)
+
+    y_bgen = make_boundary_batcher(outputs, batch_size=batch_size)
 
     dataset = xbatcher.loaders.torch.MapDataset(X_bgen, y_bgen)
 
@@ -1203,7 +1205,7 @@ def make_boundary_dataloader(inputs, outputs, batch_size=10, randomize=False,
         **dataloader_params
     )
 
-    return dataloader, output_labels
+    return dataloader
 
 
 
