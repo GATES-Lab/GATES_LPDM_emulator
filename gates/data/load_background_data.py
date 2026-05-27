@@ -10,7 +10,7 @@ def load_cams_data(domain, year=2016, month="*", species="ch4", cfg=None):
 
     Args:
         domain (str): The domain for which to load the data (e.g., "SOUTHAMERICA").
-        year (int): The year for which to load the data (default: 2016).
+        year (int or list): The year(s) for which to load the data (default: 2016).
         month (str or int): The month for which to load the data. Can be an integer (1-12) or a string (e.g., "01", "*") (default: "*", which means all months).
         species (str): The species to load (default: "ch4").
         cfg: The configuration object containing the data directory paths. If None, the function will call get_config() to load the configuration.
@@ -22,21 +22,30 @@ def load_cams_data(domain, year=2016, month="*", species="ch4", cfg=None):
     
     bc_datadir = cfg.bc_datadir
 
+    # if year is an int or str, make it a list and concat all 
+    if isinstance(year, (int, str)):
+        year = [year]
+
     # if month is an int, format as a str
     if isinstance(month, int):
         month = f"{month:02d}"
 
-    file_pattern = f"{bc_datadir}/{domain}/{species}_{domain}_{year}{month}*.nc"
-    found_files = sorted(glob(file_pattern))
-    if len(found_files) == 0:
-        raise FileNotFoundError(f"No files found at {file_pattern}")
-    
-    
-    if any("climatology" in file for file in found_files):
-        print(f"WARNING: Climatology files found at {file_pattern}. These will be used instead of the regular files.")
+    bc_files = []
+    for y in year:
+        file_pattern = f"{bc_datadir}/{domain}/{species}_{domain}_{y}{month}*.nc"
+        found_files = sorted(glob(file_pattern))
+        if len(found_files) == 0:
+            raise FileNotFoundError(f"No files found at {file_pattern}")
+        
 
-    bc_data = xr.open_mfdataset(found_files, combine='nested',concat_dim="time", engine="h5netcdf")
-    bc_data = bc_data.sortby("time")
+        if any("climatology" in file for file in found_files):
+            print(f"WARNING: Climatology files found at {file_pattern}. These will be used instead of the regular files.")
+
+        bc_data = xr.open_mfdataset(found_files, combine='nested',concat_dim="time", engine="h5netcdf")
+        bc_data = bc_data.sortby("time")
+        bc_files.append(bc_data)
+    
+    bc_data = xr.concat(bc_files, dim="time")
 
     # append to the attrs the file path and whether it's a climatology file or not
     bc_data.attrs["file_path"] = file_pattern
@@ -95,12 +104,3 @@ def calculate_bg(fp, bc_data):
 
     return bg
 
-def calculate_detrending_factor(bc_file, boundary="south", height_index=1):
-    """
-    Calculate a detrending factor for the boundary condition correction by taking the mean value of the specified boundary direction (e.g., "south") at the specified height index across all time points in the bc_file. This factor can be used to detrend the boundary condition correction by dividing the correction values by this factor, which helps to remove any systematic bias in the boundary condition data.
-    """
-    var_name = f"vmr_{boundary[0]}"
-    mean_dim = "lat" if boundary in ["east", "west"] else "lon"
-    detrending_factor = bc_file[var_name].isel(height=height_index).mean(dim=mean_dim)
-
-    return detrending_factor
