@@ -146,7 +146,8 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
                 inputs = inputs.load()
                 data.fp_xr = data.fp_xr.load()
                 background = background.load()
-                aux_data = aux_data.load()
+                if aux_data is not None:
+                    aux_data = aux_data.load()
 
             all_inputs.append(inputs)
             all_fp_xr.append(data.fp_xr)
