@@ -499,12 +499,16 @@ def load_and_normalise_boundary_data(data, months, years, output_format, height_
 def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device, epoch):
     model.train()
     running_loss = 0.0
-    start_time = time.time()
     n_batches = 0
+    data_time = 0.0
+    compute_time = 0.0
 
+    t_start = time.time()
     for i, batch in enumerate(loader):
-        ins, labels = batch[0].to(device), batch[1].to(device)
+        t_data = time.time()
+        data_time += t_data - t_start  # time spent loading batch
 
+        ins, labels = batch[0].to(device), batch[1].to(device)
         optimizer.zero_grad()
         outputs = model(ins)
         loss = criterion(outputs, labels)
@@ -516,10 +520,16 @@ def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device,
             running_loss += display_loss.item()
 
         n_batches += 1
+        compute_time += time.time() - t_data  # time spent on forward/backward
+
+        t_start = time.time()
 
         if i % 10 == 0:
-            print(f"[{epoch}, {i:5d}] Loss: {running_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s")
+            print(f"[{epoch}, {i:5d}] Loss: {running_loss/(i+1):.3f} "
+                  f"| Data time: {data_time:.1f}s | Compute time: {compute_time:.1f}s")
 
+    print(f"Epoch {epoch} — total data loading: {data_time:.1f}s, "
+          f"total compute: {compute_time:.1f}s")
     return running_loss / max(n_batches, 1)
 
 
@@ -668,7 +678,10 @@ def train_and_save_model(parameters, model_save_dir):
 
     train_load_data_params = copy.deepcopy(parameters["train_load_data"])
     test_load_data_params = copy.deepcopy(parameters["train_load_data"])
+    '''
+    # Nawid - removing for debugging purposes
     test_load_data_params.update(parameters["test_load_data"])
+    '''
     input_variables = parameters["variables"]
 
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
@@ -687,17 +700,21 @@ def train_and_save_model(parameters, model_save_dir):
         )
         train_fp_data = data.fp_xr
     else:
-        data, train_inputs = gates_training.load_GATES_data_v2(
+        data, train_inputs = gates_training.load_GATES_data_v2_boundary(
             train_load_data_params, input_variables=input_variables,
             datapath_args=datapath_args, verbose=verbose,
             load_into_memory=parameters.get("load_into_memory", False)
         )
         train_fp_data = data.fp_xr
 
+        test_data = copy.copy(data)
+        test_inputs = copy.copy(train_inputs)
+        test_fp_data = copy.copy(train_fp_data)
     
     write_to_file(f"Successfully loaded training data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
-
+    
+    '''
     if not load_monthly:
         test_data, test_inputs = gates_training.load_GATES_data(
             test_load_data_params, input_variables=input_variables,
@@ -711,7 +728,8 @@ def train_and_save_model(parameters, model_save_dir):
             load_into_memory=parameters.get("load_into_memory", False)
         )
         test_fp_data = test_data.fp_xr
-
+    '''
+    
     write_to_file(f"Successfully loaded test data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
 
@@ -738,6 +756,7 @@ def train_and_save_model(parameters, model_save_dir):
     test_year = parse_years(test_load_data_params['year'])
     
     domain = parameters.get("domain", "SOUTHAMERICA")
+    import ipdb; ipdb.set_trace()
     outputs, baseline_list, auxiliary_cams, _, norm_vals = load_and_normalise_boundary_data(
         data, all_months, train_year, name_output_format, height_indices, domain=domain
     )

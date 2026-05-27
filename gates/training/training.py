@@ -39,6 +39,7 @@ import gates.evaluation.loss_functions as gates_losses
 from .training_helperfuns import save_wandb_artifact, EarlyStopping
 
 from .training_dataclasses import ModelContext
+import dask.array as da
 
 def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbose=True):
     """
@@ -179,6 +180,108 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     return data, inputs
     #return fp_xr, inputs
 
+def load_GATES_data_v2_boundary(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=True):
+    """
+    Loads footprints and inputs for each year-month pair specified in data_parameters,
+    returning them as concatenated xarrays rather than a LoadSquareSatelliteData object.
+
+    data_parameters may contain:
+        year  : int | str           — single year
+        years : list[int | str]     — multiple years (alternative to year)
+        month : int | str | None    — single month; omit or None for all 12
+        months: list[int | str]     — explicit list of months (alternative to month)
+        load_into_memory : bool     — if True, materialise each month into memory before
+                                      concatenating (avoids large dask graphs at the cost
+                                      of sequential I/O); default False
+
+    All other keys are forwarded to LoadSquareSatelliteData.
+
+    Returns:
+        data  : LoadSquareSatelliteData-like object with concatenated fp_data_full and fp_xr
+        inputs : xr.DataArray — concatenated met inputs (fp_time, lat, lon, variable_name)
+    """
+    if "met_args" in data_parameters and "met_args" in datapath_args:
+        merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
+        data_parameters["met_args"] = merged_met_args
+        datapath_args.pop("met_args")
+
+    years, months = _resolve_years_months(data_parameters)
+
+    base_params = {
+        k: v for k, v in data_parameters.items()
+        if k not in ("year", "years", "month", "months", "load_into_memory")
+    }
+
+    all_inputs = []
+    all_fp_xr = []
+    all_fp_data_full = []
+    loading_times = {}
+    last_data = None
+
+    for year in years:
+        for month in months:
+            month_start = time.perf_counter()
+            month_key = f"{year}-{month}"
+            if verbose:
+                print(f"Loading year={year}, month={month}")
+            month_params = {**base_params, "year": year, "month": month}
+            try:
+                data = LoadSquareSatelliteData(**month_params, **datapath_args, verbose=verbose)
+            except Exception as e:
+                print(f"Error loading data for {year}-{month}: {e}")
+                elapsed_mins = (time.perf_counter() - month_start) / 60
+                loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+                print(f"{month_key} : {loading_times[month_key]}")
+                continue
+
+            inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
+
+            if load_into_memory:
+                print(f"Loading data into memory for {year}-{month} before concatenation...")
+                inputs = inputs.load()
+                data.fp_xr = data.fp_xr.load()
+                # Also load particle locations into memory if they exist
+                if hasattr(data, 'fp_data_full') and data.fp_data_full is not None:
+                    for var in ["particle_locations_n", "particle_locations_s",
+                                "particle_locations_e", "particle_locations_w"]:
+                        if var in data.fp_data_full:
+                            data.fp_data_full[var].load()
+
+            all_inputs.append(inputs)
+            all_fp_xr.append(data.fp_xr)
+
+            # Collect fp_data_full for particle location concatenation
+            if hasattr(data, 'fp_data_full') and data.fp_data_full is not None:
+                all_fp_data_full.append(data.fp_data_full)
+
+            last_data = data
+
+            elapsed_mins = (time.perf_counter() - month_start) / 60
+            loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+            print(f"{month_key} : {loading_times[month_key]}")
+
+    print("")
+    print("")
+    print("----- Loading times for each month -----")
+    print("\n".join(f"{k} : {v}" for k, v in loading_times.items()))
+    print("")
+
+    fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
+    inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
+
+    # Concatenate fp_data_full across all months so particle locations
+    # cover the full time range, not just the last month
+    if len(all_fp_data_full) > 1:
+        print("Concatenating fp_data_full across all months...")
+        fp_data_full_concat = xr.concat(all_fp_data_full, dim="time").sortby("time")
+        last_data.fp_data_full = fp_data_full_concat
+        print(f"  Concatenated fp_data_full: {dict(fp_data_full_concat.sizes)}")
+    elif len(all_fp_data_full) == 1:
+        last_data.fp_data_full = all_fp_data_full[0]
+
+    last_data.fp_xr = fp_xr
+
+    return last_data, inputs
 
 def _get_scaler(scaler_name, scaler_module=None):
     """
@@ -280,6 +383,7 @@ def concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams):
     """
     Concatenate auxiliary CAMS features onto scaled inputs along the variable_name dimension,
     broadcasting the auxiliary values across all lat/lon grid cells.
+    Keeps everything lazy — no compute() is called, data is only loaded when batches are fetched.
 
     Args:
         scaled_inputs (xr.DataArray): Shape (fp_time, lat, lon, variable_name).
@@ -287,74 +391,81 @@ def concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams):
 
     Returns:
         xr.DataArray: Concatenated inputs of shape (fp_time, lat, lon, variable_name)
-            with aux features appended along variable_name.
+            with aux features appended along variable_name. Remains lazy/dask-backed.
     """
+    
+    print('USING THE CONTATENTATION TO AUXILLARY')
     aux_names = list(auxiliary_cams.aux.values)
+    n_aux = len(aux_names)
+    n_time = scaled_inputs.sizes["fp_time"]
     lat_size = scaled_inputs.sizes["lat"]
     lon_size = scaled_inputs.sizes["lon"]
-    n_aux = len(aux_names)
 
     # Rename 'time' to 'fp_time' to match scaled_inputs
     aux_fp_time = auxiliary_cams.rename({"time": "fp_time"})
 
-    # Expand (fp_time, aux) -> (fp_time, lat, lon, aux) by broadcasting
-    # Use expand_dims then broadcast_to via xarray
-    aux_expanded = aux_fp_time.expand_dims(
-        dim={"lat": scaled_inputs.lat, "lon": scaled_inputs.lon},
-    )
-    # Reorder to match scaled_inputs dim order
-    aux_expanded = aux_expanded.transpose("fp_time", "lat", "lon", "aux")
+    # Get the underlying data as dask array — stays lazy
+    if hasattr(aux_fp_time.data, 'compute'):
+        aux_data = aux_fp_time.data  # already dask
+    else:
+        # Convert numpy to dask so everything stays lazy
+        aux_data = da.from_array(aux_fp_time.values, chunks=(n_time, n_aux))
 
-    # Build a MultiIndex compatible with the variable_name MultiIndex on scaled_inputs
+    # Broadcast (fp_time, n_aux) -> (fp_time, lat, lon, n_aux) lazily using dask
+    # reshape to (fp_time, 1, 1, n_aux) then broadcast
+    aux_data_4d = aux_data[:, None, None, :]  # (fp_time, 1, 1, n_aux)
+    aux_data_broadcast = da.broadcast_to(
+        aux_data_4d,
+        (n_time, lat_size, lon_size, n_aux)
+    )
+
+    # Build MultiIndex compatible with the variable_name MultiIndex on scaled_inputs
     aux_multiindex = pd.MultiIndex.from_arrays(
         [aux_names,
-         [0] * n_aux,   # levels — no pressure level for auxiliary
-         [0] * n_aux],  # time_delta — no time shift for auxiliary
+         [0] * n_aux,
+         [0] * n_aux],
         names=["variable", "levels", "time_delta"]
     )
 
-    # Rename aux dim to variable_name and assign the MultiIndex coordinate
-    aux_expanded = aux_expanded.rename({"aux": "variable_name"})
-    aux_expanded = aux_expanded.assign_coords(
-        variable_name=aux_multiindex
+    # Build the auxiliary DataArray with dask backing — no compute triggered
+    aux_expanded = xr.DataArray(
+        aux_data_broadcast,
+        dims=["fp_time", "lat", "lon", "variable_name"],
+        coords={
+            "fp_time": scaled_inputs.fp_time,
+            "lat":     scaled_inputs.lat,
+            "lon":     scaled_inputs.lon,
+            "variable_name": aux_multiindex,
+        }
     )
 
+    # Concatenate along variable_name — stays lazy since both arrays are dask-backed
     return xr.concat([scaled_inputs, aux_expanded], dim="variable_name")
 
 def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inputs, test_outputs,
                                 train_auxiliary_cams=None, test_auxiliary_cams=None):
+
+    # Nawid - removing just for debugging purposes, since the input transform step does usually take a while   
     # Scale inputs using training statistics
-    
     input_dataset = setup_input_dataset(parameters, train_inputs)
     train_scaled_inputs = input_dataset.transform(train_inputs)
     test_scaled_inputs = input_dataset.transform(test_inputs)
+    
 
-    '''
-    # Force compute after scaling — scaler may return dask-backed xarray
-    print("Computing scaled inputs into memory...")
-    train_scaled_inputs = train_scaled_inputs.compute() if hasattr(train_scaled_inputs, 'compute') else train_scaled_inputs
-    test_scaled_inputs = test_scaled_inputs.compute() if hasattr(test_scaled_inputs, 'compute') else test_scaled_inputs
-    '''
-    # Append pre-normalised auxiliary CAMS features to inputs if use_baselines is True
+    # Append pre-normalised auxiliary CAMS features lazily —
+    # no compute() called here, data loads batch by batch via preload_batch=True
     use_baselines = parameters.get("use_baselines", True)
 
     if use_baselines and train_auxiliary_cams is not None and test_auxiliary_cams is not None:
-        print("Concatenating inputs and auxiliary cams")
+        print('USING BASELINES AND CONCENATING ')
+        print("Concatenating inputs and auxiliary cams (lazy)")
         train_scaled_inputs = concat_auxiliary_to_inputs(train_scaled_inputs, train_auxiliary_cams)
         test_scaled_inputs = concat_auxiliary_to_inputs(test_scaled_inputs, test_auxiliary_cams)
-
-        '''
-        # xr.concat can reintroduce dask backing — force compute again
-        print("Computing concatenated inputs into memory...")
-        train_scaled_inputs = train_scaled_inputs.compute() if hasattr(train_scaled_inputs, 'compute') else train_scaled_inputs
-        test_scaled_inputs = test_scaled_inputs.compute() if hasattr(test_scaled_inputs, 'compute') else test_scaled_inputs
-        '''
-    
-    '''
-    # Also ensure outputs are computed if they are xarray-backed
+    print('IS THE CONTENATION DONE')
+    # Outputs are small so compute them into memory
     train_outputs = train_outputs.compute() if hasattr(train_outputs, 'compute') else train_outputs
     test_outputs = test_outputs.compute() if hasattr(test_outputs, 'compute') else test_outputs
-    '''
+
     dataloader_info = parameters.get("dataloader", {})
     batch_size = dataloader_info.get("batch_size", 5)
     test_batch_size = dataloader_info.get("test_batch_size", 5)
@@ -362,7 +473,7 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
 
     if "prefetch_factor" in dataloader_params and dataloader_params["prefetch_factor"] == 0:
         dataloader_params["prefetch_factor"] = None
-    
+
     # Trim to batch size
     train_scaled_inputs, train_outputs = gates_datasets.trim_to_batch_size(
         train_scaled_inputs, train_outputs, batch_size
@@ -370,16 +481,6 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
     test_scaled_inputs, test_outputs = gates_datasets.trim_to_batch_size(
         test_scaled_inputs, test_outputs, test_batch_size
     )
-
-    # Verify nothing is dask-backed before building dataloaders
-    import dask.array as da
-    for name, arr in [("train_scaled_inputs", train_scaled_inputs),
-                      ("test_scaled_inputs", test_scaled_inputs),
-                      ("train_outputs", train_outputs),
-                      ("test_outputs", test_outputs)]:
-        if hasattr(arr, 'data') and isinstance(arr.data, da.Array):
-            print(f"WARNING: {name} is still dask-backed, forcing compute...")
-            arr = arr.compute()
 
     train_loader, boundary_labels_train = gates_datasets.make_boundary_dataloader(
         train_scaled_inputs, train_outputs,
@@ -389,18 +490,20 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
         flatten=True
     )
 
+    '''
     test_dataloader_params = {
         "num_workers": 0,
         "persistent_workers": False,
         "prefetch_factor": None
     }
     print("SPECIAL TEST PARAMS", test_dataloader_params)
+    '''
 
     test_loader, boundary_labels_test = gates_datasets.make_boundary_dataloader(
         test_scaled_inputs, test_outputs,
         batch_size=test_batch_size,
         randomize=False,
-        dataloader_params=test_dataloader_params,
+        dataloader_params=dataloader_params,
         flatten=True
     )
 

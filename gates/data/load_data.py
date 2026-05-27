@@ -580,7 +580,7 @@ class LoadBaseSatelliteData:
                 UserWarning
             )
 
-    def _load_footprints(self, fp_datadir, load_fps_in_mem=True):
+    def _load_footprints(self, fp_datadir, load_fps_in_mem=True, boundary=False):
         """
         Load footprint from fp_datadir and applies subsampling according to the freq and sampling_mode parameters. 
         
@@ -588,20 +588,33 @@ class LoadBaseSatelliteData:
         """
         if self.verbose: print("Loading footprint data from " + str(fp_datadir))
 
-        self.fp_data_full = load_fps(
-            fp_datadir,
-            verbose=self.verbose,
-            parallel_loading=self.parallel_loading,
-            drop_variables_except=[
-                "fp",
-                "release_lat",
-                "release_lon",
-                "particle_locations_n",
-                "particle_locations_s",
-                "particle_locations_e",
-                "particle_locations_w",
-            ]
-        )
+        if boundary:
+            self.fp_data_full = load_fps(
+                fp_datadir,
+                verbose=self.verbose,
+                parallel_loading=self.parallel_loading,
+                drop_variables_except=[
+                    "fp",
+                    "release_lat",
+                    "release_lon",
+                    "particle_locations_n",
+                    "particle_locations_s",
+                    "particle_locations_e",
+                    "particle_locations_w",
+                ]
+            )
+        else:
+            self.fp_data_full = load_fps(
+                fp_datadir,
+                verbose=self.verbose,
+                parallel_loading=self.parallel_loading,
+                drop_variables_except=[
+                    "fp",
+                    "release_lat",
+                    "release_lon",
+                ]
+            )
+
 
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
 
@@ -909,7 +922,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True, boundary = False):
 
         print(dask.__version__)
 
@@ -975,7 +988,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         
         #### load footprint (fp) data, subsample, crop
         if verbose: print("---- LOADING FOOTPRINTS") 
-        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem)
+        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem, boundary = boundary)
         self._process_footprints(lazy_load)
 
         self.met_processed = False
