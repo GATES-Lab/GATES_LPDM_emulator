@@ -23,17 +23,17 @@ import matplotlib.patches as mpatches
 from sklearn.metrics import mean_squared_error, r2_score
 from torch.utils.data import DataLoader
 
-from model.layers.encoder import *
-from model.layers.decoder import *
-from model.layers.processor import *
-from model.layers.graph_net_block import *
-from model.data.dataloader_graphnet import BoundaryDataset
-from model.data.load_data import *
-from model.forecast import GraphSatelliteForecasterClassifier, GraphSatelliteForecasterConvClassifier
-from model.loss_functions import *
+# from model.layers.encoder import *
+# from model.layers.decoder import *
+# from model.layers.processor import *
+# from model.layers.graph_net_block import *
+# from model.data.dataloader_graphnet import BoundaryDataset
+# from model.data.load_data import *
+# from model.forecast import GraphSatelliteForecasterClassifier, GraphSatelliteForecasterConvClassifier
+# from model.loss_functions import *
 
 #from general_train_nawid import write_to_file, load_file, set_reproducibility, log_object_as_artifact, EarlyStopping
-from general_train_nawid import  load_file,  EarlyStopping
+#from general_train_nawid import  load_file,  EarlyStopping
 
 import sys
 
@@ -49,8 +49,8 @@ import copy
 import wandb
 
 
-sys.path.insert(0, "/user/work/yl18410/new_graphnet")
-sys.path.insert(1, "/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator")
+sys.path.insert(0, "/user/work/ef17148/new_graphnet")
+sys.path.insert(1, "/user/work/ef17148/new_graphnet/graphnet_LPDM_emulator")
 from model.layers.encoder import *
 from model.layers.decoder import *
 from model.layers.processor import *
@@ -59,7 +59,7 @@ from model.layers.graph_net_block import *
 #from model.data.load_data import *
 from model.loss_functions import *
 
-
+from gates.training.training_background import format_aux_data, normalize_boundary_data
 
 import time
 from datetime import datetime
@@ -70,65 +70,18 @@ import random
 from pathlib import Path
 
 import gates.training.training as gates_training
+import gates.training.training_background as gates_training_background
 import gates
 from gates.data.load_data import get_grid
 from gates.training.training_dataclasses import PathContext, TrainingContext, BoundaryTrainingContext
 
 from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility
 
-# ---------------------------------------------------------------
-# Normalisation
-# ---------------------------------------------------------------
-
-def normalize_boundary_data(outputs, outputs_norm_vals=None):
-    """
-    Normalise an array or xarray DataArray using provided or computed mean and std.
-
-    Args:
-        outputs (np.ndarray or xr.DataArray): Array to normalise.
-        outputs_norm_vals (tuple, optional): (mean, std) to reuse from training.
-            If None, mean and std are computed from outputs.
-
-    Returns:
-        tuple:
-            - np.ndarray or xr.DataArray: Normalised array, same type as input.
-            - tuple: (mean, std) used for normalisation.
-    """
-    if outputs_norm_vals is None:
-        if isinstance(outputs, xr.DataArray):
-            outputs_mean = float(outputs.mean())
-            outputs_std = float(outputs.std())
-        else:
-            outputs_mean = np.mean(outputs)
-            outputs_std = np.std(outputs)
-        outputs_norm_vals = (outputs_mean, outputs_std)
-
-    outputs_mean, outputs_std = outputs_norm_vals
-    normalized_outputs = (outputs - outputs_mean) / outputs_std
-
-    return normalized_outputs, outputs_norm_vals
+from gates.data.load_background_data import load_cams_data
 
 
-def denormalize(array, mean, std):
-    """
-    Reverse normalisation.
 
-    Args:
-        array (np.ndarray): Normalised array.
-        mean (float or np.ndarray): Mean used during normalisation.
-        std (float or np.ndarray): Std used during normalisation.
-
-    Returns:
-        np.ndarray: Denormalised array.
-    """
-    return (array * std) + mean
-
-
-# ---------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------
-
-def parse_years(year_input):
+def parse_years(year_input): ## NOTE this is now obsolete
     """
     Parse a year or list of years into a flat list of integer years.
 
@@ -174,12 +127,11 @@ def parse_years(year_input):
 
     raise ValueError(f"Invalid year format: {year_input}")
 
-
 # ---------------------------------------------------------------
 # CAMS boundary condition computation
 # ---------------------------------------------------------------
 def baseline_mol_correction_xr(desired_data, months, years, output_format, 
-                                height_indices=None, domain="SOUTHAMERICA"):
+                                height_indices=None, domain="SOUTHAMERICA"): ## NOTE this is now obsolete
     """
     Compute CAMS-based boundary condition outputs and auxiliary features,
     keeping everything as xarray operations.
@@ -332,7 +284,7 @@ def baseline_mol_correction_xr(desired_data, months, years, output_format,
     return baseline_list, outputs, auxiliary_cams, collated_corrections
 
 
-def baseline_mol_correction(desired_data, months, years, output_format, height_indices=None):
+def baseline_mol_correction(desired_data, months, years, output_format, height_indices=None): ## Is this made obsolete by the above function? should be deleted
     """
     Compute CAMS-based boundary condition outputs and auxiliary features.
 
@@ -673,57 +625,67 @@ def train_and_save_model(parameters, model_save_dir):
 
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
 
-    print("Loading met and fp data for model", model_name)
-    write_to_file("Load training and testing met and fp data", paths_ctx.updates_path)
+    print("Loading met, fp AND BACKGROUND data for model", model_name)
+    write_to_file("Load training and testing met, fp and background data", paths_ctx.updates_path)
 
     client, cluster = gates_training.make_cluster()
+    
+    load_monthly = True # moving towards always using monthly loading for memory efficiency
+    #load_monthly = parameters.get("load_data_monthly", False)
 
-    load_monthly = parameters.get("load_data_monthly", False)
+    background_setup = parameters.get("background_setup", {})
+    
+    default_bg_params = {
+        "detrend": True,
+        "use_auxiliary_bc": True,
+        "auxilary_bc_levels":[4, 5, 6, 7]}
 
-    if not load_monthly:
-        data, train_inputs = gates_training.load_GATES_data(
-            train_load_data_params, input_variables=input_variables,
-            datapath_args=datapath_args, verbose=verbose
-        )
-        train_fp_data = data.fp_xr
-    else:
-        data, train_inputs = gates_training.load_GATES_data_v2(
+    # update
+    background_params = default_bg_params.copy()
+    background_params.update(background_setup)
+
+    num_classes = parameters["model_parameters"].get("num_classes", 1)
+    if num_classes not in [1, 4]:
+        print("Warning: num_classes is set to a value other than 1 or 4. Defaulting to 1 (summed output).")
+
+    if num_classes == 1:
+        if background_params["detrend"]:
+            print("extracting background mole fraction, summed across the four boundaries, and detrended")
+        else:
+            print("extracting background mole fraction, summed across the four boundaries, without detrending")
+    elif num_classes == 4:
+        print("extracting background mole fraction for each boundary separately, without detrending")
+
+
+    train_fp_data, train_inputs, train_bgs, train_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
             train_load_data_params, input_variables=input_variables,
             datapath_args=datapath_args, verbose=verbose,
-            load_into_memory=parameters.get("load_into_memory", False)
+            load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"], use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"]
         )
-        train_fp_data = data.fp_xr
+
+    
 
     
     write_to_file(f"Successfully loaded training data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
 
-    if not load_monthly:
-        test_data, test_inputs = gates_training.load_GATES_data(
-            test_load_data_params, input_variables=input_variables,
-            datapath_args=datapath_args, verbose=verbose
-        )
-        test_fp_data = test_data.fp_xr
-    else:
-        test_data, test_inputs = gates_training.load_GATES_data_v2(
+
+    test_fp_data, test_inputs, test_bgs, test_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
             test_load_data_params, input_variables=input_variables,
             datapath_args=datapath_args, verbose=verbose,
-            load_into_memory=parameters.get("load_into_memory", False)
+            load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"], use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"]
         )
-        test_fp_data = test_data.fp_xr
 
+    if num_classes == 1:
+        train_bgs = train_bgs[["summed"]].to_dataarray()
+        test_bgs = test_bgs[["summed"]].to_dataarray()
+    elif num_classes == 4:
+        train_bgs = train_bgs[["north", "south", "east", "west"]].to_dataarray()
+        test_bgs = test_bgs[["north", "south", "east", "west"]].to_dataarray()
+    
     write_to_file(f"Successfully loaded test data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
 
-    num_features = train_inputs.shape[-1]
-    parameters["num_features"] = num_features
-
-    if use_wandb:
-        wandb.summary.update({
-            "num_training_samples": len(train_fp_data.time),
-            "num_testing_samples": len(test_fp_data.time),
-            "num_features": num_features,
-        })
 
     write_to_file("scaling data and setting up dataloaders", paths_ctx.updates_path)
     if cluster is not None:
@@ -731,38 +693,68 @@ def train_and_save_model(parameters, model_save_dir):
         client.close()
 
     # Compute boundary condition outputs and normalise
-    height_indices = [4, 5, 6, 7] if parameters.get('auxiliary') == 'multiple' else [4]
-    all_months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
 
-    train_year = parse_years(train_load_data_params['year'])
-    test_year = parse_years(test_load_data_params['year'])
+
+
+    # height_indices = [4, 5, 6, 7] if parameters.get('auxiliary') == 'multiple' else [4]
+    # all_months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+
+    # train_year = parse_years(train_load_data_params['year'])
+    # test_year = parse_years(test_load_data_params['year'])
     
-    domain = parameters.get("domain", "SOUTHAMERICA")
-    outputs, baseline_list, auxiliary_cams, _, norm_vals = load_and_normalise_boundary_data(
-        data, all_months, train_year, name_output_format, height_indices, domain=domain
-    )
+    #domain = parameters.get("domain", "SOUTHAMERICA")
+    # outputs, baseline_list, auxiliary_cams, _, norm_vals = load_and_normalise_boundary_data(
+    #     data, all_months, train_year, name_output_format, height_indices, domain=domain
+    # )
 
-    test_outputs, test_baseline_list, test_auxiliary_cams, _, _ = load_and_normalise_boundary_data(
-        test_data, all_months, test_year, name_output_format, height_indices,
-        norm_vals=norm_vals, domain=domain
-    )
+    # test_outputs, test_baseline_list, test_auxiliary_cams, _, _ = load_and_normalise_boundary_data(
+    #     test_data, all_months, test_year, name_output_format, height_indices,
+    #     norm_vals=norm_vals, domain=domain
+    # )
+    
 
     '''
     outputs_mean_values, outputs_std_values = norm_vals['outputs']
     baseline_mean_values, baseline_std_values = norm_vals['baselines']
     auxiliary_mean_values, auxiliary_std_values = norm_vals['auxiliary']
     '''
+    use_auxiliary_bc = parameters.get("use_auxiliary_bc", True)
+    if use_auxiliary_bc:
+        train_aux_cams_data = format_aux_data(train_aux_cams_data, time_coord=train_fp_data.time)
+        test_aux_cams_data = format_aux_data(test_aux_cams_data, time_coord=test_fp_data.time)
+    
+    norm_train_bgs, norm_train_aux_data, norm_vals = normalize_boundary_data(train_bgs, aux_data=train_aux_cams_data)
+    norm_test_bgs, norm_test_aux_data, norm_vals = normalize_boundary_data(test_bgs, aux_data=test_aux_cams_data, norm_vals=norm_vals)
+
+
     save_object(norm_vals, "norm_vals", paths_ctx.training_outputs_path, model_name,
             file_type="json", description=f"Normalisation values for boundary condition outputs in model {model_name}",
             use_wandb=use_wandb)
 
-    use_baselines = parameters.get("use_baselines", True)
-    aux_dim = auxiliary_cams.sizes["aux"] if use_baselines and auxiliary_cams is not None else 0
-    parameters["aux_dim"] = aux_dim
-    parameters['feature_dim'] = num_features
-    train_loader, test_loader, boundary_labels, scalers = gates_training.setup_boundary_dataloaders(
-        parameters, train_inputs, outputs, test_inputs, test_outputs,
-        auxiliary_cams, test_auxiliary_cams
+    
+    #aux_dim = auxiliary_cams.sizes["aux"] if use_baselines and auxiliary_cams is not None else 0
+    #parameters["aux_dim"] = aux_dim
+
+    num_features = train_inputs.shape[-1]
+    feature_dim = num_features
+    if use_auxiliary_bc:
+        num_features = num_features+ train_aux_cams_data.aux.shape[0]
+        aux_dim = train_aux_cams_data.aux.shape[0]
+    else:
+        aux_dim = 0
+    parameters["num_features"] = num_features
+
+    
+    if use_wandb:
+        wandb.summary.update({
+            "num_training_samples": len(train_fp_data.time),
+            "num_testing_samples": len(test_fp_data.time),
+            "num_features": num_features,
+        })
+    
+    train_loader, test_loader, scalers = gates_training_background.setup_boundary_dataloaders(
+        parameters, train_inputs, norm_train_bgs, test_inputs, norm_test_bgs,
+        norm_train_aux_data, norm_test_aux_data
     )
 
     save_object(scalers, "scalers", paths_ctx.training_outputs_path, model_name,
@@ -783,19 +775,19 @@ def train_and_save_model(parameters, model_save_dir):
 
     training_ctx = BoundaryTrainingContext(
         parameters, device, use_wandb, image_dates, image_plots, grid,
-        boundary_labels, scalers, train_inputs.variable_name.size,
+        None, scalers, feature_dim,
         len(train_fp_data.lat.values), aux_dim
     )
 
     print("Successfully set up dataloaders!")
     write_to_file("setting up model", paths_ctx.updates_path)
 
-    model, model_ctx = gates_training.setup_boundary_model(parameters, training_ctx, paths_ctx)
+    model, model_ctx = gates_training_background.setup_boundary_model(parameters, training_ctx, paths_ctx)
 
     if use_wandb:
         wandb.watch(model, log="all", log_freq=100)
 
-    losses = gates_training.initialise_boundary_losses()
+    losses = gates_training_background.initialise_boundary_losses()
 
     if torch.cuda.is_available():
         model.cuda()
