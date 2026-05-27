@@ -718,7 +718,7 @@ def train_and_save_model(parameters, model_save_dir):
     baseline_mean_values, baseline_std_values = norm_vals['baselines']
     auxiliary_mean_values, auxiliary_std_values = norm_vals['auxiliary']
     '''
-    use_auxiliary_bc = parameters.get("use_auxiliary_bc", True)
+    use_auxiliary_bc = background_params["use_auxiliary_bc"]
     if use_auxiliary_bc:
         train_aux_cams_data = format_aux_data(train_aux_cams_data, time_coord=train_fp_data.time)
         test_aux_cams_data = format_aux_data(test_aux_cams_data, time_coord=test_fp_data.time)
