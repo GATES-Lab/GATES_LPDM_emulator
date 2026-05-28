@@ -951,8 +951,8 @@ def make_boundary_batcher(outputs, batch_size=5):
 
     y_bgen = xb.BatchGenerator(
         outputs,
-        #input_dims={output_dim: outputs.sizes[output_dim]},
-        input_dims={"time": batch_size},
+        input_dims={output_dim: outputs.sizes[output_dim]},
+        batch_dims={"time": batch_size},
         preload_batch=True,
     )
 
