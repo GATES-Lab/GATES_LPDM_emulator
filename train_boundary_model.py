@@ -743,7 +743,7 @@ def train_and_save_model(parameters, model_save_dir):
     else:
         aux_dim = 0
     parameters["num_features"] = num_features
-
+    print("using num_features =", num_features, "out of which aux_dim =", aux_dim)
     
     if use_wandb:
         wandb.summary.update({
