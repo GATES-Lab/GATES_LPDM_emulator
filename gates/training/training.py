@@ -41,6 +41,7 @@ from .training_helperfuns import save_wandb_artifact, EarlyStopping
 from .training_dataclasses import ModelContext
 import dask.array as da
 
+
 def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbose=True):
     """
     Loads training and test datasets for the GATES model using the LoadSquareSatelliteData class.
@@ -381,20 +382,11 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
 
 def concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams):
     """
-    Concatenate auxiliary CAMS features onto scaled inputs along the variable_name dimension,
-    broadcasting the auxiliary values across all lat/lon grid cells.
-    Keeps everything lazy — no compute() is called, data is only loaded when batches are fetched.
-
-    Args:
-        scaled_inputs (xr.DataArray): Shape (fp_time, lat, lon, variable_name).
-        auxiliary_cams (xr.DataArray): Shape (time, aux) with aux coordinate names.
-
-    Returns:
-        xr.DataArray: Concatenated inputs of shape (fp_time, lat, lon, variable_name)
-            with aux features appended along variable_name. Remains lazy/dask-backed.
+    Concatenate auxiliary CAMS features onto scaled inputs along the variable_name dimension.
+    Uses numpy broadcasting if auxiliary_cams is in memory, dask if lazy.
     """
     
-    print('USING THE CONTATENTATION TO AUXILLARY')
+
     aux_names = list(auxiliary_cams.aux.values)
     n_aux = len(aux_names)
     n_time = scaled_inputs.sizes["fp_time"]
@@ -404,22 +396,30 @@ def concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams):
     # Rename 'time' to 'fp_time' to match scaled_inputs
     aux_fp_time = auxiliary_cams.rename({"time": "fp_time"})
 
-    # Get the underlying data as dask array — stays lazy
-    if hasattr(aux_fp_time.data, 'compute'):
-        aux_data = aux_fp_time.data  # already dask
+    # Check if auxiliary_cams is in memory or dask-backed
+    # and use the appropriate broadcasting method
+    if isinstance(aux_fp_time.data, da.Array):
+        # Lazy path — use dask broadcasting
+        aux_data = aux_fp_time.data  # (fp_time, n_aux)
+        aux_data_4d = aux_data[:, None, None, :]
+        aux_data_broadcast = da.broadcast_to(
+            aux_data_4d,
+            (n_time, lat_size, lon_size, n_aux)
+        )
+        print("  aux concatenation: using dask (lazy)")
     else:
-        # Convert numpy to dask so everything stays lazy
-        aux_data = da.from_array(aux_fp_time.values, chunks=(n_time, n_aux))
+        # In-memory path — use numpy broadcasting, stays in memory
+        aux_data = aux_fp_time.values  # (fp_time, n_aux) numpy array
+        aux_data_4d = aux_data[:, None, None, :]
+        aux_data_broadcast = np.broadcast_to(
+            aux_data_4d,
+            (n_time, lat_size, lon_size, n_aux)
+        )
+        # np.broadcast_to returns a read-only view — make a copy so xarray can own it
+        aux_data_broadcast = np.array(aux_data_broadcast)
+        print("  aux concatenation: using numpy (in memory)")
 
-    # Broadcast (fp_time, n_aux) -> (fp_time, lat, lon, n_aux) lazily using dask
-    # reshape to (fp_time, 1, 1, n_aux) then broadcast
-    aux_data_4d = aux_data[:, None, None, :]  # (fp_time, 1, 1, n_aux)
-    aux_data_broadcast = da.broadcast_to(
-        aux_data_4d,
-        (n_time, lat_size, lon_size, n_aux)
-    )
-
-    # Build MultiIndex compatible with the variable_name MultiIndex on scaled_inputs
+    # Build MultiIndex compatible with variable_name MultiIndex on scaled_inputs
     aux_multiindex = pd.MultiIndex.from_arrays(
         [aux_names,
          [0] * n_aux,
@@ -427,7 +427,7 @@ def concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams):
         names=["variable", "levels", "time_delta"]
     )
 
-    # Build the auxiliary DataArray with dask backing — no compute triggered
+    # Build the auxiliary DataArray
     aux_expanded = xr.DataArray(
         aux_data_broadcast,
         dims=["fp_time", "lat", "lon", "variable_name"],
@@ -439,7 +439,7 @@ def concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams):
         }
     )
 
-    # Concatenate along variable_name — stays lazy since both arrays are dask-backed
+    # Concatenate — result matches the backing of scaled_inputs
     return xr.concat([scaled_inputs, aux_expanded], dim="variable_name")
 
 def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inputs, test_outputs,

@@ -480,6 +480,14 @@ def load_and_normalise_boundary_data(data, months, years, output_format, height_
         outputs, outputs_norm = normalize_boundary_data(outputs, norm_vals['outputs'])
         baseline_list, baselines_norm = normalize_boundary_data(baseline_list, norm_vals['baselines'])
         auxiliary_cams, auxiliary_norm = normalize_boundary_data(auxiliary_cams, norm_vals['auxiliary'])
+    
+    # Nawid - loading into memory since it is not computaitonal expsenive
+    # Load into memory immediately — auxiliary_cams is tiny (N, 16) and
+    # keeping it lazy adds dask complexity with no memory benefit
+    outputs = outputs.compute() if hasattr(outputs, 'compute') else outputs
+    baseline_list = baseline_list.compute() if hasattr(baseline_list, 'compute') else baseline_list
+    auxiliary_cams = auxiliary_cams.compute() if hasattr(auxiliary_cams, 'compute') else auxiliary_cams
+    corrections = corrections.compute() if hasattr(corrections, 'compute') else corrections
 
     norm_vals_out = {
         'outputs': outputs_norm,
@@ -678,10 +686,10 @@ def train_and_save_model(parameters, model_save_dir):
 
     train_load_data_params = copy.deepcopy(parameters["train_load_data"])
     test_load_data_params = copy.deepcopy(parameters["train_load_data"])
-    '''
+    
     # Nawid - removing for debugging purposes
     test_load_data_params.update(parameters["test_load_data"])
-    '''
+    
     input_variables = parameters["variables"]
 
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
@@ -706,15 +714,15 @@ def train_and_save_model(parameters, model_save_dir):
             load_into_memory=parameters.get("load_into_memory", False)
         )
         train_fp_data = data.fp_xr
-
+        '''
         test_data = copy.copy(data)
         test_inputs = copy.copy(train_inputs)
         test_fp_data = copy.copy(train_fp_data)
-    
+        '''
     write_to_file(f"Successfully loaded training data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
     
-    '''
+    
     if not load_monthly:
         test_data, test_inputs = gates_training.load_GATES_data(
             test_load_data_params, input_variables=input_variables,
@@ -722,13 +730,13 @@ def train_and_save_model(parameters, model_save_dir):
         )
         test_fp_data = test_data.fp_xr
     else:
-        test_data, test_inputs = gates_training.load_GATES_data_v2(
+        test_data, test_inputs = gates_training.load_GATES_data_v2_boundary(
             test_load_data_params, input_variables=input_variables,
             datapath_args=datapath_args, verbose=verbose,
             load_into_memory=parameters.get("load_into_memory", False)
         )
         test_fp_data = test_data.fp_xr
-    '''
+    
     
     write_to_file(f"Successfully loaded test data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
@@ -756,7 +764,6 @@ def train_and_save_model(parameters, model_save_dir):
     test_year = parse_years(test_load_data_params['year'])
     
     domain = parameters.get("domain", "SOUTHAMERICA")
-    import ipdb; ipdb.set_trace()
     outputs, baseline_list, auxiliary_cams, _, norm_vals = load_and_normalise_boundary_data(
         data, all_months, train_year, name_output_format, height_indices, domain=domain
     )

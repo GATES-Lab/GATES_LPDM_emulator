@@ -7,7 +7,7 @@
     "domain": "NORTHAFRICA",
     "train_load_data" : {
         "year": "2015",
-        "months": ["01","02"],
+        "months": ["01","02", "03","04", "05","06", "07","08", "09","10", "11","12"],
         "freq": 20,
         "region": "SAHARA",
         "size": 10,
@@ -20,7 +20,7 @@
 
     "test_load_data" : {
         "year": "2016",
-        "months": ["01"],
+        "months": ["01","02", "03","04", "05","06", "07","08", "09","10", "11","12"],
         "freq": 60
     },
 
@@ -79,7 +79,7 @@
 
     "normalization": "all",
     "network_decoder": "conv",
-    "use_baselines": false,
+    "use_baselines": true,
     "output_format": "corrected",
     "auxiliary": "multiple",
     "learning_rate": 0.00005,

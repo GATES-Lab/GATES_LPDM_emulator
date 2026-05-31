@@ -22,4 +22,4 @@ module load cuda/12.4.1
 module load cudnn/8.9.7.29-12
 
 echo "train"
-python train_boundary_model.py parameter_train_small_boundary.json
+python train_boundary_model.py parameter_train_boundary.json

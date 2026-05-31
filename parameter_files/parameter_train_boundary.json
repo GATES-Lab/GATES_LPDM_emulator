@@ -1,12 +1,13 @@
 {
     "model_name" : "test_working_terminal",
     "verbose": true,
-    "parallel_loading": false,
-    "load_into_memory": false,
-    "load_data_monthly": false,
+    "parallel_loading": true,
+    "load_into_memory": true,
+    "load_data_monthly": true,
     "domain": "NORTHAFRICA",
     "train_load_data" : {
         "year": "2015",
+        "months": ["01","02", "03","04", "05","06", "07","08", "09","10", "11","12"],
         "freq": 20,
         "region": "SAHARA",
         "size": 50,
@@ -19,6 +20,7 @@
 
     "test_load_data" : {
         "year": "2016",
+        "months": ["01","02", "03","04", "05","06", "07","08", "09","10", "11","12"],
         "freq": 100
     },
 
