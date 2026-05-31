@@ -12,4 +12,5 @@ __pycache__/
 graph_weather/
 model_runs/
 *.npz
-
+CLAUDE.md
+principles.md
