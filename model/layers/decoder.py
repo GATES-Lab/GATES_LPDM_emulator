@@ -535,18 +535,27 @@ class SatelliteDecoderConvClassifier(torch.nn.Module):
         )          # no normalising here?
             
 
+        # Conv block input channels MUST match the processor feature dim (input_dim),
+        # since forward() reshapes processor_features into [B, input_dim, H, W].
+        conv_hidden_channels = 32
+        conv_out_channels = 8
         self.conv_block = torch.nn.Sequential(
-            torch.nn.Conv2d(64, 32, kernel_size=3, stride=2, padding=1),  # /2
+            torch.nn.Conv2d(input_dim, conv_hidden_channels, kernel_size=3, stride=2, padding=1),  # /2
             torch.nn.ReLU(),
-            torch.nn.Conv2d(32, 8, kernel_size=3, stride=2, padding=1),            # /4
+            torch.nn.Conv2d(conv_hidden_channels, conv_out_channels, kernel_size=3, stride=2, padding=1),  # /4
             torch.nn.ReLU(),
         )
 
-        # Compute resulting H and W after conv layers
-        conv_reduction = 2 ** 2  # 4 conv layers with stride=2 → /16
+        # Two stride-2 conv layers → spatial size reduced by 2**2 = 4
+        num_stride2_convs = 2
+        conv_reduction = 2 ** num_stride2_convs
+        assert input_height >= 1 and input_width >= 1, (
+            f"input_height and input_width must be >= 1, got "
+            f"input_height={input_height}, input_width={input_width}"
+        )
         out_H = math.ceil(input_height / conv_reduction)
         out_W = math.ceil(input_width / conv_reduction)
-        flattened_size = 8 * out_H * out_W
+        flattened_size = conv_out_channels * out_H * out_W
 
         self.input_height = input_height
         self.input_width = input_width

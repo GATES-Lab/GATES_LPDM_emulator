@@ -3,7 +3,7 @@
 #SBATCH --mem=300GB
 #SBATCH --gres=gpu:1
 #SBATCH --job-name=train
-#SBTACH --output=train
+#SBATCH --output=train
 #SBATCH --time=24:00:00
 #SBATCH --account=SEMT030444
 #SBATCH --exclude=bp1-gpu030,bp1-gpu035
