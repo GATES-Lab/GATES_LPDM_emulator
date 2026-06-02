@@ -1,0 +1,99 @@
+{
+    "model_name" : "boundary_conds_test",
+    "model_type": "BackgroundEmulator",
+    "verbose": true,
+    "parallel_loading": true,
+    "load_into_memory": true,
+    "train_load_data" : {
+        "years":["2014"],
+        "months":["01","02","03","04", "05","06","07","08","09","10","11","12"],
+        "freq":3,
+        "region":"BRAZIL",
+        "size":50,
+        "met_args":{"met_levels":[3, 9], 
+    "met_variables":{"x_wind":[3,9,15,21,30,42,51], "wind_speed":[3,30,51], "wind_angle":[3,30,51], "y_wind":[3,9,15,21,30,42,51], "upward_air_velocity":[3,9,15,21,30,42,51], "air_temperature":[3,9,15,21,30,42,51], "air_pressure":[3,9,15,21,30,42,51], "atmosphere_boundary_layer_thickness":[], "surface_air_pressure":[]},
+    "crop_met": false
+    },
+
+    "test_load_data" : {
+        "years":["2017"],
+        "months":["01","02","03","04", "05","06","07","08","09","10","11","12"],
+        "freq":18
+    },
+
+    "background_setup": {
+        "detrend": true,
+        "use_auxiliary_bc": true,
+        "auxilary_bc_levels":[4, 5, 6, 7]
+    },
+    
+
+    "variables" : {
+        "met_variables":["x_wind", "y_wind"],
+        "met_levels":[3, 9],
+        "static_variables":["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "x_coords", "y_coords", "topog","normalised_time_of_year","normalised_day_of_year"],
+        "time_deltas":[6,12],
+        "add_wind_direction":true,
+        "load_into_memory": true
+    },
+
+    "input_scaler" : {
+        "scaler":"DefaultInputsScaler",
+        "fit_on_subsample":0.7,
+        "scaler_params":{}
+    },
+
+
+    "dataloader":{
+        "batch_size": 5,
+        "test_batch_size": 5,
+        "nans_to_zeros": true,
+
+        "_ignore_dataloader_params": {
+                "prefetch_factor": 3,
+                "num_workers": 2,
+                "pin_memory": true,
+                "persistent_workers": true,
+                "multiprocessing_context": "forkserver",
+            "shuffle": true}
+    },
+
+    "model_parameters":{
+        "decoder":"conv",
+        "num_classes":1,
+        "num_blocks":4, 
+        "node_dim":64, 
+        "edge_dim":64, 
+        "hidden_layers_processor_node":2, 
+        "hidden_layers_processor_edge":2,  
+        "hidden_layers_decoder":1, 
+        "hidden_dim_processor_node":16, 
+        "hidden_dim_processor_edge":16, 
+        "hidden_dim_decoder":16, 
+        "resolution":4, 
+        "output_dim":8, 
+        "residuals":false, 
+        "attention":false
+    },
+
+    "learning_rate":5e-5,
+    "use_wandb":false,
+    "wandb": {
+        "project": "BoundaryCondition-Training",
+        "entity": "gates-lab",
+        "tags": ["SAHARA", "gpu", "bc", "PixelWeightedMSELoss"]
+    },
+
+    "epochs" : {
+        "training": 100,
+        "visualize": 10,
+        "patience": 100,
+        "model_save": 50
+    },    
+
+    "loss_functions": {
+        "criterion": "torch.nn.MSELoss",
+        "criterion_test": "torch.nn.MSELoss"
+    }
+      
+}

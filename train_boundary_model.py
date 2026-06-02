@@ -83,9 +83,23 @@ from gates.data.load_background_data import load_cams_data
 # Training loop
 # ---------------------------------------------------------------
 
-def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device, epoch):
+def _denormalize(tensor, output_norm):
+    """Map normalised boundary values back to physical units using (mean, std)."""
+    mean, std = output_norm
+    return tensor * std + mean
+
+
+def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device, epoch, output_norm=None):
+    """Run one training epoch.
+
+    Returns the average normalised criterion_test loss and, when ``output_norm``
+    (the (mean, std) used to normalise the boundary outputs) is provided, the
+    average loss computed in denormalised (physical) units. The denormalised loss
+    is ``None`` when ``output_norm`` is not given.
+    """
     model.train()
     running_loss = 0.0
+    running_loss_denorm = 0.0
     start_time = time.time()
     n_batches = 0
 
@@ -101,19 +115,37 @@ def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device,
         with torch.no_grad():
             display_loss = criterion_test(outputs, labels)
             running_loss += display_loss.item()
+            if output_norm is not None:
+                denorm_loss = criterion_test(
+                    _denormalize(outputs, output_norm), _denormalize(labels, output_norm)
+                )
+                running_loss_denorm += denorm_loss.item()
 
         n_batches += 1
 
         if i % 10 == 0:
-            print(f"[{epoch}, {i:5d}] Loss: {running_loss/(i+1):.3f} Time: {time.time()-start_time:.1f}s")
+            msg = f"[{epoch}, {i:5d}] Loss: {running_loss/(i+1):.3f}"
+            if output_norm is not None:
+                msg += f" Loss(denorm): {running_loss_denorm/(i+1):.3e}"
+            print(f"{msg} Time: {time.time()-start_time:.1f}s")
 
-    return running_loss / max(n_batches, 1)
+    avg_loss = running_loss / max(n_batches, 1)
+    avg_loss_denorm = running_loss_denorm / max(n_batches, 1) if output_norm is not None else None
+    return avg_loss, avg_loss_denorm
 
 
 @torch.no_grad()
-def validate_and_predict(model, loader, criterion_test, device):
+def validate_and_predict(model, loader, criterion_test, device, output_norm=None):
+    """Validate the model.
+
+    Returns ``(avg_loss, avg_loss_denorm, preds)`` where ``avg_loss`` is the mean
+    normalised criterion_test loss, ``avg_loss_denorm`` is the same loss in
+    denormalised (physical) units (``None`` if ``output_norm`` is not provided),
+    and ``preds`` are the (normalised) predictions stacked across batches.
+    """
     model.eval()
     test_error = 0.0
+    test_error_denorm = 0.0
     preds_list = []
     n_batches = 0
 
@@ -122,14 +154,20 @@ def validate_and_predict(model, loader, criterion_test, device):
         outputs = model(ins)
 
         test_error += criterion_test(outputs, labels).item()
+        if output_norm is not None:
+            test_error_denorm += criterion_test(
+                _denormalize(outputs, output_norm), _denormalize(labels, output_norm)
+            ).item()
         pred_np = outputs.cpu().numpy().reshape(outputs.shape[0], -1)
         preds_list.append(pred_np)
         n_batches += 1
 
-    return test_error / max(n_batches, 1), np.vstack(preds_list)
+    avg_error = test_error / max(n_batches, 1)
+    avg_error_denorm = test_error_denorm / max(n_batches, 1) if output_norm is not None else None
+    return avg_error, avg_error_denorm, np.vstack(preds_list)
 
 
-def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx, paths_ctx, losses):
+def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx, paths_ctx, losses, output_norm=None):
     """
     Executes the full training loop with early stopping and checkpointing,
     using context dataclasses for configuration.
@@ -145,33 +183,48 @@ def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx,
         paths_ctx (PathContext): Path context including model_path, model_name,
             and updates_path.
         losses (dict): Accumulator dict with 'train' and 'test' lists.
+        output_norm (tuple, optional): The (mean, std) used to normalise the boundary
+            outputs. When provided, train/test losses are also computed and logged in
+            denormalised (physical) units under the 'train_denorm'/'test_denorm' keys.
 
     Returns:
         None
     """
+    # Track denormalised (physical-unit) losses alongside the normalised ones.
+    if output_norm is not None:
+        losses.setdefault("train_denorm", [])
+        losses.setdefault("test_denorm", [])
+
     updates_path = paths_ctx.model_path / f"{paths_ctx.model_name}_updates.txt"
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx
         print(f"\n--- Start Epoch: {epoch} ---")
-        
-        avg_train_loss = train_one_epoch(
+
+        avg_train_loss, avg_train_loss_denorm = train_one_epoch(
             model, train_loader, model_ctx.optimizer,
             model_ctx.criterion, model_ctx.criterion_test,
-            model_ctx.device, epoch
+            model_ctx.device, epoch, output_norm=output_norm
         )
-        avg_test_loss, _ = validate_and_predict(
-            model, test_loader, model_ctx.criterion_test, model_ctx.device
+        avg_test_loss, avg_test_loss_denorm, _ = validate_and_predict(
+            model, test_loader, model_ctx.criterion_test, model_ctx.device, output_norm=output_norm
         )
 
         losses["train"].append(avg_train_loss)
         losses["test"].append(avg_test_loss)
+        if output_norm is not None:
+            losses["train_denorm"].append(avg_train_loss_denorm)
+            losses["test_denorm"].append(avg_test_loss_denorm)
 
         if training_ctx.use_wandb:
-            wandb.log({
+            log_dict = {
                 "epoch": epoch + 1,
                 "train/loss": avg_train_loss,
                 "test/loss": avg_test_loss,
-            }, step=epoch)
+            }
+            if output_norm is not None:
+                log_dict["train/loss_denorm"] = avg_train_loss_denorm
+                log_dict["test/loss_denorm"] = avg_test_loss_denorm
+            wandb.log(log_dict, step=epoch)
 
         model_ctx.early_stopping(avg_test_loss, model)
 
@@ -179,10 +232,13 @@ def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx,
             print("Early stopping triggered. Ending training.")
             break
 
-        write_to_file(
-            f"Epoch {epoch}, Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}",
-            updates_path
-        )
+        update_msg = f"Epoch {epoch}, Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}"
+        if output_norm is not None:
+            update_msg += (
+                f", Loss (denorm): {avg_train_loss_denorm:.4e}, "
+                f"Test Loss (denorm): {avg_test_loss_denorm:.4e}"
+            )
+        write_to_file(update_msg, updates_path)
 
         if epoch % model_ctx.epochs_save == 0:
             checkpoint_path = paths_ctx.model_path / f"{paths_ctx.model_name}_{epoch}.pt"
@@ -408,7 +464,8 @@ def train_and_save_model(parameters, model_save_dir):
         model_ctx=model_ctx,
         training_ctx=training_ctx,
         paths_ctx=paths_ctx,
-        losses=losses
+        losses=losses,
+        output_norm=norm_vals["outputs"]
     )
 
     if use_wandb:
