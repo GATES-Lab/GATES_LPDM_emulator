@@ -27,10 +27,8 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import torch
 import xarray as xr
-import pandas as pd
 
 sys.path.insert(0, "/user/work/yl18410/new_graphnet")
 sys.path.insert(1, "/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator")
@@ -38,18 +36,19 @@ sys.path.insert(1, "/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator")
 import gates
 import gates.config
 import gates.data.datasets as gates_datasets
-from gates.training.training import load_GATES_data, load_GATES_data_v2, make_cluster
+from gates.training.training import load_GATES_data, make_cluster
 from gates.training.training_helperfuns import load_parameter_file
 from gates.training.training_dataclasses import PathContext
+# Reuse the exact same data/CAMS/background functions used during training, so
+# inference computes boundary conditions and auxiliary CAMS features identically.
+from gates.training.training_background import (
+    load_GATES_data_with_bg,
+    format_aux_data,
+    normalize_boundary_data,
+    concat_auxiliary_to_inputs,
+)
 
 from model.forecast import GraphSatelliteForecasterConvClassifier, GraphSatelliteForecasterClassifier
-
-# Import boundary condition utilities from training script
-from train_boundary_model import (
-    baseline_mol_correction_xr,
-    normalize_boundary_data,
-    parse_years,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +171,11 @@ class BoundaryPredictor:
         training_params,
         domain,
         aux_dim,
-        height_indices,
+        num_classes,
+        detrend,
+        use_auxiliary_bc,
+        aux_indeces,
+        load_into_memory,
         output_format,
         dry_run=False,
     ):
@@ -193,7 +196,11 @@ class BoundaryPredictor:
         self.training_params = training_params
         self.domain = domain
         self.aux_dim = aux_dim
-        self.height_indices = height_indices
+        self.num_classes = num_classes
+        self.detrend = detrend
+        self.use_auxiliary_bc = use_auxiliary_bc
+        self.aux_indeces = aux_indeces
+        self.load_into_memory = load_into_memory
         self.output_format = output_format
         self.dry_run = dry_run
 
@@ -229,32 +236,44 @@ class BoundaryPredictor:
         data_params.pop("year", None)
         data_params.pop("months", None)
 
-        # Domain for CAMS files
+        # Domain for CAMS files (load_GATES_data_with_bg also derives it internally)
         region = data_params.get("region", "SAHARA")
         domain = cfg.domains[region]["domain_name"]
 
-        # Height indices and output format from training params
-        height_indices = [4, 5, 6, 7] if training_params.get("auxiliary") == "multiple" else [4]
-        #height_indices = [4]
+        # Background / CAMS settings — mirror train_boundary_model's defaults exactly
+        # so inference builds backgrounds and auxiliary CAMS the same way as training.
+        background_setup = training_params.get("background_setup", {})
+        background_params = {
+            "detrend": True,
+            "use_auxiliary_bc": True,
+            "auxilary_bc_levels": [4, 5, 6, 7],
+        }
+        background_params.update(background_setup)
+        detrend = background_params["detrend"]
+        use_auxiliary_bc = background_params["use_auxiliary_bc"]
+        aux_indeces = background_params["auxilary_bc_levels"]
 
+        load_into_memory = training_params.get("load_into_memory", False)
         output_format = training_params.get("output_format", "corrected")
 
-        # aux_dim — number of auxiliary CAMS features, handled separately by the model
-        # Do NOT add to feature_dim — the model receives them as a separate aux input
-        # aux_dim — number of auxiliary CAMS features, handled separately by the model
-        
-        aux_dim = training_params.get("aux_dim", 0)
+        # num_classes drives both the boundary-output selection and the model head;
+        # read it exactly as setup_boundary_model does.
+        num_classes = training_params["model_parameters"].get("num_classes", 1)
 
-        # feature_dim is just the met variable count
-        feature_dim = training_params.get("num_features", None)
-        '''
-        aux_dim = 16
-        feature_dim = 10
-        '''
-        if feature_dim is not None:
-            print(f"Using feature_dim={feature_dim} from training settings (aux_dim={aux_dim} handled separately by model)")
+        # Auxiliary CAMS feature count: 4 boundaries x len(height levels), matching
+        # get_auxiliary_bc_data + format_aux_data. The model receives these as a
+        # separate aux input, so encoder input width = feature_dim + aux_dim.
+        aux_dim = 4 * len(aux_indeces) if use_auxiliary_bc else 0
+
+        # num_features (saved) is the TOTAL input width (met + aux); the model's
+        # feature_dim is the met-only count, so subtract aux_dim.
+        total_features = training_params.get("num_features", None)
+        if total_features is not None:
+            feature_dim = total_features - aux_dim
+            print(f"feature_dim={feature_dim} (met-only) from num_features={total_features}, aux_dim={aux_dim}")
         else:
             print("num_features not found in training settings, probing data to determine feature_dim...")
+            feature_dim = None
             for probe_month in [f"{m:02d}" for m in range(1, 13)]:
                 try:
                     probe_params = {
@@ -268,7 +287,7 @@ class BoundaryPredictor:
                     )
                     if probe_inputs is not None and probe_inputs.sizes.get("fp_time", 0) > 0:
                         feature_dim = probe_inputs.sizes["variable_name"]
-                        print(f"  feature_dim = {feature_dim} (from month {probe_month})")
+                        print(f"  feature_dim = {feature_dim} (met-only, from month {probe_month})")
                         break
                 except Exception:
                     continue
@@ -279,46 +298,31 @@ class BoundaryPredictor:
                     "Ensure num_features is saved in training_settings.json."
                 )
 
-        # Verify against actual checkpoint weights BEFORE building the model
-        # so the model is constructed with the correct architecture
-        checkpoint_path = model_dir / f"{model_name}_best.pt"
-        if checkpoint_path.exists():
-            state = torch.load(checkpoint_path, map_location="cpu")
-            state_dict = state.get("model_state_dict", state)
-            '''
-            for key, tensor in state_dict.items():
-                if "node_encoder" in key and "weight" in key and len(tensor.shape) == 2:
-                    checkpoint_feature_dim = tensor.shape[1]
-                    if checkpoint_feature_dim != feature_dim:
-                        print(
-                            f"Warning: feature_dim from training settings ({feature_dim}) "
-                            f"does not match checkpoint ({checkpoint_feature_dim}). "
-                            f"Using checkpoint value."
-                        )
-                        feature_dim = checkpoint_feature_dim
-                    break
-            '''
-        # Build model using verified feature_dim
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Device: {device}")
 
-        num_classes = training_params.get("num_classes", 1)
         size = data_params.get("size", 10)
-        
-        if training_params.get("network_decoder") == "conv":
+
+        # Build model the same way setup_boundary_model does: decoder and num_classes
+        # are passed explicitly, not via **model_parameters (so pop them off a copy).
+        model_params = copy.deepcopy(training_params["model_parameters"])
+        decoder = model_params.pop("decoder", training_params.get("network_decoder", "conv"))
+        model_params.pop("num_classes", None)
+
+        if decoder == "conv":
             print("Using conv network")
             model = GraphSatelliteForecasterConvClassifier(
                 grid, whole_world=False, feature_dim=feature_dim,
                 aux_dim=aux_dim, num_classes=num_classes,
                 input_height=size, input_width=size,
-                **training_params["model_parameters"]
+                **model_params
             )
         else:
             print("Using classifier network")
             model = GraphSatelliteForecasterClassifier(
                 grid, whole_world=False, feature_dim=feature_dim,
                 aux_dim=aux_dim, num_classes=num_classes,
-                **training_params["model_parameters"]
+                **model_params
             )
 
         model = model.to(device)
@@ -346,7 +350,11 @@ class BoundaryPredictor:
             training_params=training_params,
             domain=domain,
             aux_dim=aux_dim,
-            height_indices=height_indices,
+            num_classes=num_classes,
+            detrend=detrend,
+            use_auxiliary_bc=use_auxiliary_bc,
+            aux_indeces=aux_indeces,
+            load_into_memory=load_into_memory,
             output_format=output_format,
             dry_run=args.dry_run,
         )
@@ -356,7 +364,13 @@ class BoundaryPredictor:
     # ------------------------------------------------------------------
 
     def predict_month(self, test_year: int, month_str: str, verbose: bool = True) -> bool:
-        """Load one month of data, run inference, save predictions as NetCDF."""
+        """Load one month of data, run inference, save predictions as NetCDF.
+
+        Uses the same data/CAMS/background pipeline as training
+        (load_GATES_data_with_bg → boundary selection → format_aux_data →
+        normalize_boundary_data → concat_auxiliary_to_inputs), so the inputs and
+        ground-truth boundary conditions are built identically to train time.
+        """
         monthly_params = {
             **self.data_params,
             "year": str(test_year),
@@ -364,9 +378,18 @@ class BoundaryPredictor:
             "freq": 60 if self.dry_run else 1,
         }
 
+        # Load footprints, met inputs, background (bgs) and auxiliary CAMS exactly
+        # as training does — same function, same detrend/aux options.
         try:
-            data, inputs = load_GATES_data(
-                monthly_params, self.input_variables, self.datapath_args, verbose=verbose
+            fp_xr, inputs, bgs, aux_data = load_GATES_data_with_bg(
+                monthly_params,
+                input_variables=self.input_variables,
+                datapath_args=self.datapath_args,
+                verbose=verbose,
+                load_into_memory=self.load_into_memory,
+                detrend=self.detrend,
+                use_aux_bc=self.use_auxiliary_bc,
+                aux_indeces=self.aux_indeces,
             )
         except Exception as exc:
             print(f"  Skipping {month_str}: data load failed — {exc}")
@@ -377,43 +400,40 @@ class BoundaryPredictor:
             return False
 
         print(f"  Loaded {inputs.sizes['fp_time']} timesteps")
-        inputs = inputs.compute()
 
-        # Compute true boundary condition outputs
-        print("  Computing boundary conditions...")
-        months_list = [month_str]
-        years_list = [test_year]
+        # Select boundary outputs by num_classes, identical to train_and_save_model.
+        if self.num_classes == 4:
+            bgs = bgs[["north", "south", "east", "west"]].to_dataarray()
+        else:
+            bgs = bgs[["summed"]].to_dataarray()
 
-        try:
-            _, true_outputs, auxiliary_cams, _, _ = self._load_boundary_data(
-                data, months_list, years_list
-            )
-        except Exception as exc:
-            print(f"  Warning: could not compute boundary conditions — {exc}")
-            true_outputs = None
-            auxiliary_cams = None
+        # Format auxiliary CAMS, then normalise both outputs and aux using the
+        # training normalisation values (norm_vals) so scaling matches train time.
+        if self.use_auxiliary_bc:
+            aux_data = format_aux_data(aux_data, time_coord=fp_xr.time)
 
-        # Scale inputs
+        norm_bgs, norm_aux, _ = normalize_boundary_data(
+            bgs,
+            aux_data=aux_data if self.use_auxiliary_bc else None,
+            norm_vals=self.norm_vals,
+        )
+
+        # Scale met inputs with the fitted scaler saved at train time.
         scaled_inputs = self.scalers["inputs_scaler"].transform(inputs)
-        scaled_inputs = scaled_inputs.compute() if hasattr(scaled_inputs, "compute") else scaled_inputs
 
-        # Append auxiliary CAMS to inputs if needed
-        if self.aux_dim > 0 and auxiliary_cams is not None:
-            from gates.training.training import concat_auxiliary_to_inputs
-            scaled_inputs = concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams)
-            scaled_inputs = scaled_inputs.compute() if hasattr(scaled_inputs, "compute") else scaled_inputs
+        # Append the normalised auxiliary CAMS features (same as training).
+        if self.use_auxiliary_bc:
+            norm_aux.load()
+            scaled_inputs = concat_auxiliary_to_inputs(scaled_inputs, norm_aux)
 
-        # Trim and build dataloader
-        n = scaled_inputs.sizes["fp_time"]
-        remainder = n % self.test_batch_size
-        if remainder != 0:
-            scaled_inputs = scaled_inputs.isel(fp_time=slice(None, n - remainder))
-            if true_outputs is not None:
-                true_outputs = true_outputs.isel(time=slice(None, n - remainder))
+        # Trim both inputs and outputs to a whole number of batches.
+        scaled_inputs, norm_bgs = gates_datasets.trim_to_batch_size(
+            scaled_inputs, norm_bgs, self.test_batch_size
+        )
 
-        loader, _ = gates_datasets.make_boundary_dataloader(
+        loader = gates_datasets.make_boundary_dataloader(
             scaled_inputs,
-            true_outputs if true_outputs is not None else self._make_dummy_outputs(scaled_inputs),
+            norm_bgs,
             batch_size=self.test_batch_size,
             randomize=False,
             dataloader_params={
@@ -426,20 +446,25 @@ class BoundaryPredictor:
 
         print("  Running inference...")
         preds_norm = run_inference(self.model, loader, self.device)  # (n, num_classes)
+        n_pred = preds_norm.shape[0]
 
-        # Denormalise predictions
+        # Ground-truth (normalised) boundary conditions, aligned (time, num_classes).
+        norm_bgs = norm_bgs.transpose("time", ...)
+        true_norm = norm_bgs.values[:n_pred]
+        times = norm_bgs["time"].values[:n_pred]
+
+        # Denormalise predictions and truth using the training output statistics.
         if self.norm_vals is not None:
             outputs_mean, outputs_std = self.norm_vals["outputs"]
             preds_denorm = (preds_norm * outputs_std) + outputs_mean
         else:
             preds_denorm = preds_norm
 
-        # Build output dataset
-        times = data.fp_xr.time.values[:preds_norm.shape[0]]
         ds = xr.Dataset(
             {
                 "bc_pred_normalised": (["time", "num_classes"], preds_norm),
                 "bc_pred": (["time", "num_classes"], preds_denorm),
+                "bc_true_normalised": (["time", "num_classes"], true_norm),
             },
             coords={"time": times},
             attrs={
@@ -449,16 +474,13 @@ class BoundaryPredictor:
                 "test_year": str(test_year),
                 "month": month_str,
                 "output_format": self.output_format,
+                "num_classes": self.num_classes,
+                "detrend": str(self.detrend),
+                "use_auxiliary_bc": str(self.use_auxiliary_bc),
             },
         )
-
-        # Add true outputs if available
-        if true_outputs is not None:
-            true_vals = true_outputs.values[:preds_norm.shape[0]]
-            ds["bc_true_normalised"] = (["time", "num_classes"], true_vals)
-            if self.norm_vals is not None:
-                outputs_mean, outputs_std = self.norm_vals["outputs"]
-                ds["bc_true"] = (["time", "num_classes"], (true_vals * outputs_std) + outputs_mean)
+        if self.norm_vals is not None:
+            ds["bc_true"] = (["time", "num_classes"], (true_norm * outputs_std) + outputs_mean)
 
         out_dir = self.save_path / self.model_save_name / self.prediction_folder_name
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -466,29 +488,6 @@ class BoundaryPredictor:
         ds.to_netcdf(out_path)
         print(f"  Saved → {out_path}")
         return True
-
-    def _load_boundary_data(self, data, months, years):
-        """Load and normalise boundary condition outputs using training norm_vals."""
-        baseline_list, outputs, auxiliary_cams, corrections = baseline_mol_correction_xr(
-            data, months, years,
-            output_format=self.output_format,
-            height_indices=self.height_indices,
-            domain=self.domain,
-        )
-        outputs_norm, _ = normalize_boundary_data(outputs, self.norm_vals.get("outputs") if self.norm_vals else None)
-        auxiliary_norm, _ = normalize_boundary_data(auxiliary_cams, self.norm_vals.get("auxiliary") if self.norm_vals else None)
-        return baseline_list, outputs_norm, auxiliary_norm, corrections, None
-
-    def _make_dummy_outputs(self, scaled_inputs):
-        """Make a dummy outputs xarray when true outputs are unavailable."""
-        n = scaled_inputs.sizes["fp_time"]
-        times = scaled_inputs.fp_time.values
-        return xr.DataArray(
-            np.zeros((n, 1), dtype=np.float32),
-            dims=["time", "num_classes"],
-            coords={"time": times, "num_classes": [0]},
-            name="boundary_outputs"
-        )
 
     def predict_year(self, test_year: int, months: list = None, verbose: bool = True):
         """Run predictions for every month of test_year."""

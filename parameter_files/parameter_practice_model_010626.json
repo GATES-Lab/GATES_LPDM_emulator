@@ -1,0 +1,99 @@
+{
+    "model_name" : "practice_model_010626",
+    "verbose": true,
+    "parallel_loading": false,
+    "load_into_memory": true,
+    "load_data_monthly": true,
+    "domain": "NORTHAFRICA",
+    "train_load_data" : {
+        "year":["2015"],
+        "months":["06"],
+        "freq":60,
+        "region":"SAHARA",
+        "size":10,
+        "met_args":{"met_levels":[3],
+        "met_variables":["x_wind", "y_wind", "atmosphere_boundary_layer_thickness"]}
+    },
+
+    "test_load_data" : {
+        "year":["2016"],
+        "months":["06"]
+    },
+
+    "variables" : {
+        "met_variables":["x_wind", "y_wind", "atmosphere_boundary_layer_thickness"],
+        "met_levels":[3],
+        "static_variables":["lat_coords", "lon_coords", "topog", "xy_distance_centre"],
+        "time_deltas":[3]
+    },
+
+    "input_scaler" : {
+        "scaler":"DefaultInputsScaler",
+        "fit_on_subsample":0.25,
+        "scaler_params":{}
+    },
+
+    "fp_scaler": {
+        "scaler":"LogAndShiftFpScaler",
+        "scaler_params":{}
+    },
+
+    "dataloader":{
+        "batch_size": 2,
+        "test_batch_size": 2,
+        "nans_to_zeros": true,
+        "dataloader_params": {
+            "prefetch_factor": 0,
+            "num_workers": 0}
+    },
+
+    "_ignore_dataloader_params": {
+            "prefetch_factor": 3,
+            "num_workers": 4,
+            "persistent_workers": true,
+            "multiprocessing_context": "forkserver"},
+
+    "model_parameters":{
+        "num_blocks":1,
+        "node_dim":64,
+        "edge_dim":64,
+        "hidden_layers_processor_node":2,
+        "hidden_layers_processor_edge":2,
+        "hidden_layers_decoder":1,
+        "hidden_dim_processor_node":16,
+        "hidden_dim_processor_edge":16,
+        "hidden_dim_decoder":16,
+        "resolution":4,
+        "output_dim":1,
+        "residuals":false,
+        "attention":false
+    },
+
+    "normalization":"all",
+    "network_decoder":"conv",
+    "use_baselines":true,
+    "output_format":"corrected",
+    "auxiliary":"multiple",
+    "learning_rate": 0.00005,
+    "num_classes":1,
+
+    "use_wandb":false,
+    "wandb": {
+        "project": "BoundaryCondition-Prediction",
+        "entity": "gates-lab"
+    },
+
+    "epochs" : {
+        "training": 8,
+        "visualize": 5,
+        "patience": 3,
+        "model_save": 50
+    },
+
+    "loss_functions" : {
+        "criterion": "torch.nn.MSELoss",
+        "criterion_params": {},
+        "criterion_test": "torch.nn.MSELoss",
+        "criterion_test_params": {}
+    }
+}
