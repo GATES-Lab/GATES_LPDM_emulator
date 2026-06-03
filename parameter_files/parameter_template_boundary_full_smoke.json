@@ -1,24 +1,25 @@
 {
-    "model_name" : "boundary_conds_test",
+    "model_name" : "boundary_full_smoketest",
     "model_type": "BackgroundEmulator",
     "verbose": true,
-    "parallel_loading": true,
+    "parallel_loading": false,
     "load_into_memory": true,
+    "load_data_monthly": true,
     "train_load_data" : {
         "years":["2014"],
-        "months":["01","02","03","04", "05","06","07","08","09","10","11","12"],
-        "freq":3,
+        "months":["06"],
+        "freq":30,
         "region":"BRAZIL",
         "size":50,
-        "met_args":{"met_levels":[3, 9], 
+        "met_args":{"met_levels":[3, 9],
     "met_variables":["x_wind", "y_wind", "upward_air_velocity", "air_temperature", "air_pressure", "atmosphere_boundary_layer_thickness", "surface_air_pressure"]},
     "crop_met": false
     },
 
     "test_load_data" : {
         "years":["2017"],
-        "months":["01","02","03","04", "05","06","07","08","09","10","11","12"],
-        "freq":18
+        "months":["06"],
+        "freq":30
     },
 
     "background_setup": {
@@ -26,7 +27,7 @@
         "use_auxiliary_bc": true,
         "auxilary_bc_levels":[4, 5, 6, 7]
     },
-    
+
 
     "variables" : {
         "met_variables":["x_wind", "y_wind"],
@@ -61,39 +62,39 @@
     "model_parameters":{
         "decoder":"conv",
         "num_classes":1,
-        "num_blocks":4, 
-        "node_dim":64, 
-        "edge_dim":64, 
-        "hidden_layers_processor_node":2, 
-        "hidden_layers_processor_edge":2,  
-        "hidden_layers_decoder":1, 
-        "hidden_dim_processor_node":16, 
-        "hidden_dim_processor_edge":16, 
-        "hidden_dim_decoder":16, 
-        "resolution":4, 
-        "output_dim":8, 
-        "residuals":false, 
+        "num_blocks":4,
+        "node_dim":64,
+        "edge_dim":64,
+        "hidden_layers_processor_node":2,
+        "hidden_layers_processor_edge":2,
+        "hidden_layers_decoder":1,
+        "hidden_dim_processor_node":16,
+        "hidden_dim_processor_edge":16,
+        "hidden_dim_decoder":16,
+        "resolution":4,
+        "output_dim":8,
+        "residuals":false,
         "attention":false
     },
 
     "learning_rate":5e-5,
-    "use_wandb":true,
+    "use_wandb":false,
     "wandb": {
         "project": "BoundaryCondition-Training",
         "entity": "gates-lab",
-        "tags": ["Brazil", "gpu", "bc"]
+        "tags": ["Brazil", "gpu", "bc", "smoketest"]
     },
 
     "epochs" : {
-        "training": 100,
+        "training": 2,
         "visualize": 10,
         "patience": 100,
         "model_save": 50
-    },    
+    },
 
     "loss_functions": {
         "criterion": "torch.nn.MSELoss",
         "criterion_test": "torch.nn.MSELoss"
     }
-      
+
 }
