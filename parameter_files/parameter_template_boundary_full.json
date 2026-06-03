@@ -5,12 +5,12 @@
     "parallel_loading": true,
     "load_into_memory": true,
     "train_load_data" : {
-        "years":["2014"],
+        "years":"201[4-5]",
         "months":["01","02","03","04", "05","06","07","08","09","10","11","12"],
-        "freq":3,
+        "freq":6,
         "region":"BRAZIL",
         "size":50,
-        "met_args":{"met_levels":[3, 9], 
+        "met_args":{"met_levels":[3, 9, 15,21,30, 42, 51], 
     "met_variables":["x_wind", "y_wind", "upward_air_velocity", "air_temperature", "air_pressure", "atmosphere_boundary_layer_thickness", "surface_air_pressure"]},
     "crop_met": false
     },

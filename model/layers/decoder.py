@@ -352,6 +352,13 @@ class SatelliteDecoderConvClassifier(torch.nn.Module):
     ):
         """
         Decoder from latent graph to lat/lon graph
+        This pulls each mesh node's processed embedding into the lat/lon nodes it feeds, does an inverse‑distance‑weighted 
+        average (scatter_mean over the weighted contributions), and reshapes the N_latlon = H·W nodes into an image of F = node_dim channels over the size × size grid. 
+        So after this step the latent graph has been turned back into a spatial feature map.
+        This is followed by the a CNN block and a linear head.
+        Two stride‑2 convs downsample the spatial map by 4× and compress channels (node_dim→32→8), 
+        then a flatten + Linear produce the final [B, num_classes] output. num_classes is 1 
+        (summed background) or 4 (per‑boundary N/S/E/W)
 
         Args:
             lat_lons: List of (lat,lon) points
@@ -377,6 +384,11 @@ class SatelliteDecoderConvClassifier(torch.nn.Module):
             - 
         NEEDS UPDATING!
 
+        Inverse‑distance‑weighted scatter_mean as the conv decoder → [B, F, N_latlon]. 
+        Each lat/lon node gets a weighted average of its 3 mesh neighbours.
+        A node decpder is applied at every lat/lon node and maps input_dim to output dim.
+        Flatten all N_latlon node vectors into one long vector per sample → [B, N_latlon·output_dim].
+l       inear_class = Linear(num_latlons·output_dim → num_classes) — a single fully‑connected layer over the whole flattened grid produces the num_classes output
         """
 
         super().__init__()
