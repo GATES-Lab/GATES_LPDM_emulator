@@ -108,13 +108,19 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=True, wind_tuples=None
     if dynamic_wind:
         if wind_tuples is None:
             wind_tuples = [("x_wind", 3, 0), ("y_wind", 3, 0)]
-    wind_indices = [i for i, name in enumerate(input_names)
-                                            if name in wind_tuples]   
-    
-    dynamic_edge_params = {
-        "dynamic_edges":True,
-            #"dynamic_wind": dynamic_wind,
-            "wind_indices": wind_indices if dynamic_wind else None}
+        elif type(wind_tuples[0]) == list:
+            wind_tuples = [tuple(t) for t in wind_tuples]
+            
+
+        wind_indices = [i for i, name in enumerate(input_names)
+                                                if name in wind_tuples]   
+        
+        dynamic_edge_params = {
+            "dynamic_edges":True,
+                #"dynamic_wind": dynamic_wind,
+                "wind_indices": wind_indices if dynamic_wind else None}
+    else:
+        dynamic_edge_params = {"dynamic_edges": False}
 
     return dynamic_edge_params
 
@@ -156,9 +162,13 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     all_fp_xr = []
     loading_times = {}
 
-    month_counter = 0
-    total_expected_months = len(list(zip(years, months)))
+    month_counter = 1
     total_time=0
+    total_samples = 0
+
+    if use_wandb:
+        wandb.define_metric("loading/loaded_month")
+        wandb.define_metric("loading/*", step_metric="loading/loaded_month")
     
     for year in years:
         for month in months:
@@ -169,38 +179,53 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
             month_params = {**base_params, "year": year, "month": month}
             try:
                 data = LoadSquareSatelliteData(**month_params, **datapath_args, verbose=verbose)
+
+                inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
+                if load_into_memory:
+                    print(f"Loading data into memory for {year}-{month} before concatenation...")
+                    inputs = inputs.load()
+                    inputs.close()
+                    print("and footprints...")
+                    data.fp_xr = data.fp_xr.load()
+                    data.fp_xr.close()
+                all_inputs.append(inputs)
+                all_fp_xr.append(data.fp_xr)
+
+                # Close the source file handles so they don't accumulate across months.
+                if hasattr(data, "met_file") and data.met_file is not None:
+                    data.met_file.close()
+                if hasattr(data, "fp_data_full") and data.fp_data_full is not None:
+                    data.fp_data_full.close()
+                
+                loaded_samples = len(data.fp_xr.fp.time)
+                
+
             except Exception as e:
                 print(f"Error loading data for {year}-{month}: {e}")
 
-                elapsed_mins = (time.perf_counter() - month_start) / 60
-                loading_times[month_key] = f"{elapsed_mins:.2f}mins"
-                print(f"{month_key} : {loading_times[month_key]}")
+                # elapsed_mins = (time.perf_counter() - month_start) / 60
+                # loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+                # print(f"{month_key} : {loading_times[month_key]}")
 
-            inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
-            if load_into_memory:
-                print(f"Loading data into memory for {year}-{month} before concatenation...")
-                inputs = inputs.load()
-                inputs.close()
-                print("and footprints...")
-                data.fp_xr = data.fp_xr.load()
-                data.fp_xr.close()
-            all_inputs.append(inputs)
-            all_fp_xr.append(data.fp_xr)
+                loaded_samples = 0
 
             elapsed_mins = (time.perf_counter() - month_start) / 60
             loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+
             print(f"{month_key} : {loading_times[month_key]}")
+
+            total_samples += loaded_samples
             # sum of all loading times
             total_time += elapsed_mins
             if use_wandb:
                 wandb.log({
-                    "loading/months_loaded": month_counter + 1,
+                    "loading/loaded_month": month_counter,
                     "loading/train_time": elapsed_mins,
                     "loading/total_time": total_time,
-                    "loading/total_months": total_expected_months,
-                    "loading/samples_loaded": len(all_fp_xr.fp.time),
-                }, step=None)
-            continue          
+                    "loading/samples_loaded": loaded_samples,
+                    "loading/total_samples": total_samples,
+                })
+            month_counter += 1 
 
     print("")
     print("")
@@ -307,7 +332,7 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
     if fp_labels != fp_labels_test:
         raise ValueError("The labels for the training and test datasets do not match - something went wrong. Please check the data loading and scaling steps to ensure consistency between train and test sets.")  
 
-    scalers = {"inputs_scaler": input_dataset.scaler, "fp_scaler": fp_dataset.scaler}
+    scalers = {"inputs_scaler": input_dataset.scaler, "input_names": list(train_scaled_inputs.variable_name.values), "fp_scaler": fp_dataset.scaler}
 
     return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
 

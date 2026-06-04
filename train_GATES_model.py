@@ -256,7 +256,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "LossFn/train": avg_train_transformed_loss,
                 **list_of_metrics,}
             
-            wandb.log(logging_dict, step=epoch)
+            wandb.log(logging_dict)
 
             # wandb.log({
             #     "epoch": epoch + 1,
@@ -284,7 +284,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             img_save_path = save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
         if epoch % (3*model_ctx.epochs_visualise) == 0:
             if model_ctx.use_wandb:
-                wandb.log({f"fps_epoch_{epoch}": wandb.Image(img_save_path)}, step=epoch)
+                wandb.log({"epoch": epoch, "training_plots": wandb.Image(img_save_path)})
 
 
 
@@ -345,6 +345,7 @@ def train_and_save_model(parameters, model_save_dir):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_name = f"{parameters['model_name']}_{timestamp}"
     model_path = Path(model_save_dir) / model_name
+    parameters["start_time"] = timestamp
     print(f"Initialising model run for model_name: {model_name}")
 
     # the paths are all stored in this dataclass (e.g. paths_ctx.model_path)
@@ -488,10 +489,10 @@ def train_and_save_model(parameters, model_save_dir):
         print("here")
         # if its a dict
         if isinstance(parameters["dynamic_edges"], dict):
-            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=train_inputs.variable_name.values, **parameters["dynamic_edges"])
+            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"], **parameters["dynamic_edges"])
 
         elif parameters.get("dynamic_edges") is True:
-            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=train_inputs.variable_name.values)
+            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"])
         
     else:
         dynamic_edges_params = {"dynamic_edges":False}
@@ -514,6 +515,19 @@ def train_and_save_model(parameters, model_save_dir):
         wandb.watch(model, log="all", log_freq=100)
 
     losses = gates_training.initialise_losses()
+
+    if use_wandb:
+        wandb.define_metric("epoch")
+        wandb.define_metric("MSE/*", step_metric="epoch")
+        wandb.define_metric("train/*", step_metric="epoch")
+        wandb.define_metric("test/*", step_metric="epoch")
+        wandb.define_metric("LossFn/*", step_metric="epoch")
+        wandb.define_metric("metrics_*", step_metric="epoch")
+        wandb.define_metric("training_plots", step_metric="epoch")
+
+        if "metrics_fluxes_static" in losses.keys():  ## wandb.define_metric("metrics_fluxes_static/*/*", step_metric="epoch")
+            for flux_mode in losses["metrics_fluxes_static"].keys():
+                wandb.define_metric(f"metrics_fluxes_static/{flux_mode}/*", step_metric="epoch")
 
     print("successfully set up the model!!! starting training loop")
     
