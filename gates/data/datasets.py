@@ -471,6 +471,7 @@ class InputsDataset:
         if scaler is None:
             self.scaler = DefaultInputsScaler(**scaler_params, verbose=self.verbose, compute=self.compute)
         else:
+            scaler = eval(scaler) if isinstance(scaler, str) else scaler
             self.scaler = scaler(**scaler_params)
 
     def fit(self):
@@ -528,8 +529,9 @@ class DefaultInputsScaler:
             if var[0] not in varnames:
                 varnames.append(var[0])
         #varnames = np.unique(varnames)
-        self.fitted_variable_names = list(variable_names)
-        print(varnames)
+        self.full_variable_names = list(variable_names)
+        self.fitted_variable_names = varnames
+        #print(varnames)
 
         for varname in varnames: #np.unique(varnames):
             var_data = inputs.sel(variable=varname)
@@ -542,6 +544,8 @@ class DefaultInputsScaler:
                 for vc in variable_names:
                     if vc[0] == varname and len(vc)==3:
                         self.scalers[vc] = scaler
+
+                        #print(f"saved minmax scaler for variable {vc}")
                 
             else:
                 if self.verbose: print(f"fitting standardise scaler for var {varname}")
@@ -557,19 +561,24 @@ class DefaultInputsScaler:
                     for vc in variable_names:
                         if vc[0] == varname and vc[1] == level and len(vc)==3:
                             self.scalers[vc] = scaler
+                        
+                            #print(f"saved standardise scaler for variable {vc}")
+            
+
 
         
     def transform(self, inputs: xr.DataArray) -> xr.DataArray:
         variable_names = inputs.variable_name.values
-        for varname in variable_names:
-            if varname not in self.fitted_variable_names:
-                raise ValueError(f"Variable name {varname} in inputs is not in the variable names that were fitted on: {self.fitted_variable_names}. Please fit the scaler on data that contains all the variable names in the inputs.")
+
+        for var in variable_names:
+            if var not in self.full_variable_names:
+                raise ValueError(f"Variable name {varname} in inputs is not in the variable names that were fitted on: {self.full_variable_names}. Please make sure that the inputs you are trying to transform have the same variable names as the inputs you fitted the scaler on.")
 
         transformed = inputs.copy()
         
         transformed_variables = []
 
-        for varname in np.unique(variable_names):
+        for varname in variable_names:
             #print(f"Transforming {varname}")
             var_data = inputs.sel(variable_name=varname)
             
@@ -1549,5 +1558,21 @@ def get_square_satellite_inputs_v2(
             "All requested variables/levels were unavailable after filtering. "
             "Please check met_variables/met_levels/static_variables against dataset contents."
         )
+    
+    len_inputs_before = len(concatenated_inputs.fp_time)
+
+    if len(concatenated_inputs.fp_time) < len_inputs_before:
+        warnings.warn(
+            f"Dropped {len_inputs_before - len(concatenated_inputs.fp_time)} duplicate fp_time entries after concatenating inputs. "
+            "The duplicates have been dropped, but you may want to investigate the underlying met timestamp issues for those fp_time entries."
+        )
+        len_fp_before = len(data.fp_xr.time)
+        data.fp_xr = data.fp_xr.sel(time=concatenated_inputs.fp_time.values)
+        print(f"Filtered fp_xr to keep only {len(data.fp_xr.time)} unique time steps (from the original number of samples {len_fp_before})")
+
+
+
+
+
 
     return concatenated_inputs, data
