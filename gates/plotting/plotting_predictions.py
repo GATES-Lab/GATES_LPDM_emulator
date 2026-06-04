@@ -1,9 +1,11 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import cartopy
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 
+def _import_plotting_libs():
+    global plt, cartopy, ccrs, cfeature
+    import matplotlib.pyplot as plt
+    import cartopy
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
 
 
 ### plotting
@@ -25,6 +27,7 @@ def plot_footprint_ax(ax_true, ax_pred, prediction_ds, plotting_labels=["fp_orig
     - return_minmax: If True, return the vmin and vmax used for the plots. Defaults to False.
     - log: If True, plot the log10 of the footprint values. Defaults to True. If plotting footprints in the transformed space, it should be False, and the color scale limits should be set accordingly (e.g. vmin=0, vmax=3 for normalized footprints).
     """
+    _import_plotting_libs()
 
     np.seterr(divide='ignore')
 
@@ -114,6 +117,8 @@ def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeserie
     - fig_title : Optional string for the overall figure title.
     - plot_timeseries: If True, include a row of timeseries plots showing the footprint [ still in implkementation]
     """
+    _import_plotting_libs()
+    
     plot_prior=False
 
     # altnerative fig creating for more flexibility
