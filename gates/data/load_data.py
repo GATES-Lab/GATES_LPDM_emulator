@@ -448,7 +448,7 @@ class LoadBaseSatelliteData:
 
         chunk_args = {"chunks": {"time": met_chunksize, "lat":-1, "lon":-1, "model_level_number":-1}}
         with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            with xr.open_mfdataset(
+            met_file = xr.open_mfdataset(
                 met_files,
                 concat_dim="time",
                 combine="nested",
@@ -462,8 +462,7 @@ class LoadBaseSatelliteData:
                 compat="override",
                 engine="h5netcdf",
                 preprocess=preprocess_met_data,
-            ) as f:
-                met_file = f
+            )
                 
             if len(met_levels)>0:
                 try:
