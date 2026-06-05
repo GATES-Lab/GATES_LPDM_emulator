@@ -29,8 +29,8 @@
     
 
     "variables" : {
-        "met_variables":["x_wind", "y_wind"],
-        "met_levels":[3, 9],
+        "met_variables":["x_wind", "y_wind", "upward_air_velocity", "air_temperature", "air_pressure", "atmosphere_boundary_layer_thickness", "surface_air_pressure"],
+        "met_levels":[3, 9, 15,21,30, 42, 51], 
         "static_variables":["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "x_coords", "y_coords", "topog","normalised_time_of_year","normalised_day_of_year"],
         "time_deltas":[6,12],
         "add_wind_direction":true,

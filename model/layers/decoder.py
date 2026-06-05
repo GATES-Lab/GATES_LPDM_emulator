@@ -55,6 +55,12 @@ class SatelliteDecoderClassifier(torch.nn.Module):
                 one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
             use_checkpointing: Whether to use gradient checkpointing or not
 
+        Decoder from latent graph to lat/lon graph
+        This pulls each mesh node's processed embedding into the lat/lon nodes it feeds, does an inverse‑distance‑weighted 
+        average (scatter_mean over the weighted contributions).
+        Following this an MLP applied to every lat/lon node independently, mapping its aggregated feature → output_dim.
+        Flatten all N_latlon node vectors into one long vector per sample → [B, N_latlon·output_dim].
+        linear_class = Linear(num_latlons·output_dim → num_classes) — a single fully‑connected layer over the whole flattened grid produces the num_classes outputs.
 
          modifications to og code:
             - adapted to work in the whole world or only for the area defined by the lat lon coords 
