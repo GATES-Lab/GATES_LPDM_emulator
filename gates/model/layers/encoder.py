@@ -77,9 +77,6 @@ class SatelliteEncoder(torch.nn.Module):
         mlp_norm_type="LayerNorm",
         use_checkpointing: bool = False,
         dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False, release_coords="default", release_edges=False, concat_enc_neighbours=False, initial_enc=False,
-        dynamic_edges: bool = False,
-        wind_indices=None,
-        latlon_edges: bool = False,
     ):
         """
         Encode the lat/lon data inot the isohedron graph
@@ -427,8 +424,9 @@ class SatelliteEncoder(torch.nn.Module):
 class SatelliteDynamicEncoder(torch.nn.Module):
     """Encoder with optional dynamic wind and/or absolute lat/lon features on mesh edges.
 
-    Replaces SatelliteEncoder when dynamic_edges=True or latlon_edges=True.
-    All core behaviour is identical to SatelliteEncoder when both flags are False.
+    Update to SatelliteEncoder, with mesh edge encondings that are extracted from the data.  wind_mesh_edges=True adds the wind variables determined by wind_indices as the mean of the two endpoint mesh-node feature vectors. latlon_mesh_edges=True adds the delta_lat and delta_lon between the two endpoint mesh-node feature vectors. Note that as this is calculated from the data, if the lat/lon has been normalised, the dlat and dlon will be calculated in the normalised space.
+    dynamic_earthdistance=True replaces the static haversine distance with a dynamic one calculated from the lat/lon features. When dynamic_earthdistance=True, the lat/lon features are removed (by replacing them with random noise)
+    All core behaviour is identical to SatelliteEncoder when both flags (latlon_mesh_edges and wind_indices) are False.
 
     Improvements over SatelliteEncoder:
     - Graph tensors are registered as buffers — no .to(device) calls in forward().
@@ -436,19 +434,34 @@ class SatelliteDynamicEncoder(torch.nn.Module):
     - Dead self.h3_nodes parameter is not included.
 
     Args:
-        dynamic_edges: Append per-sample wind features to mesh edge attributes.
-            Wind at each edge is the mean of the two endpoint mesh-node feature
-            vectors at the selected wind_indices. Cannot be combined with
-            concat_enc_neighbours or initial_enc.
-        wind_indices: Pre-computed list of integer column indices into the input
-            feature tensor identifying the wind variables to use. Required when
-            dynamic_edges=True. Compute before model construction, e.g.:
-                wind_tuples = [("x_wind", 0, 3), ("y_wind", 0, 3)]
-                wind_indices = [i for i, name in enumerate(input_names)
-                                if name in wind_tuples]
-        latlon_edges: Append midpoint lat/lon to static edge geometry, extending
-            edge attributes from [distance, dlat, dlon] (dim 3) to
-            [distance, dlat, dlon, mid_lat, mid_lon] (dim 5).
+        lat_lons: List of (lat,lon) points
+        whole_world = Use base graph for the whole world or only nodes that contain lat/lons
+        resolution: H3 resolution level
+        input_dim: Input node dimension
+        output_dim: Output node dimension
+        output_edge_dim: Edge dimension
+        hidden_dim_processor_node: Hidden dimension of the node processors
+        hidden_dim_processor_edge: Hidden dimension of the edge processors
+        hidden_layers_processor_node: Number of hidden layers in the node processors
+        hidden_layers_processor_edge: Number of hidden layers in the edge processors
+        mlp_norm_type: Type of norm for the MLPs
+            one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+        use_checkpointing: Whether to use gradient checkpointing to use less memory
+        dropout: Dropout probability. 0 means no dropout.
+        higher_res: (do not use, needs testing)
+        idx_latlon: List of (lat_idx, lon_idx) integer tuples for each node, indicating the x and y index of the node in the original lat-lon grid. Required if higher_res > 0 or better_meshnodes=True.
+        better_meshnodes: (do not use, needs testing)
+        attention: Whether to use attention in the processor. If True, an attention mask is created so that nodes only attend to their connected neighbours. (needs testing)
+        release_edges: bool, if true connect all nodes in abstract layer to corresponding release node. (needs testing)
+        release_coords: latlon coordinates of the release point, required if release_edges=True. If "default", uses the centre point of the latlon grid. (needs testing)
+        concat_enc_neighbours: Whether to concatenate (instead of mean) the features of the grid nodes connected to each mesh node before encoding. Cannot be combined with dynamic_edges. (needs testing)
+        initial_enc: Whether to apply an initial encoding MLP to the input features before any aggregation. Cannot be combined with dynamic_edges. (needs testing)
+        wind_mesh_edges (bool): Whether to add wind features to the mesh edges. 
+        wind_indices (list of ints): Indices of the input feature tensor corresponding to the wind variables to use for the mesh edge features. The mesh attribute is calculated as the mean of the wind features at the two endpoint mesh nodes. Required if wind_mesh_edges=True. Cannot be combined with concat_enc_neighbours or initial_enc.
+        latlon_mesh_edges (bool): Whether to add lat/lon features to the mesh edges. The mesh edge attributes are extended with the delta_lat and delta_lon between the two endpoint mesh nodes, calculated from the input features at the latlon_indices. 
+        latlon_indices (list of 2 ints): Indices of the input feature tensor corresponding to the latitude and longitude variables to use for calculating the lat/lon features for the mesh edges. Required if latlon_mesh_edges=True. 
+        dynamic_earthdistance (bool): Whether to replace the static haversine distance edge attribute with a dynamic one calculated from the lat/lon features. When True, the lat/lon features are removed from the input (replaced with random noise) and the mesh edge attributes are extended with a dynamic earth distance calculated from the lat/lon features at the latlon_indices. Requires latlon_mesh_edges=True.
+
     """
 
     def __init__(
@@ -474,13 +487,18 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         release_edges: bool = False,
         concat_enc_neighbours: bool = False,
         initial_enc: bool = False,
-        dynamic_edges: bool = False,
+        wind_mesh_edges: bool = False,
         wind_indices=None,
-        latlon_edges: bool = False,
+        latlon_mesh_edges: bool = False,
+        latlon_indices=None,
+        dynamic_earthdistance:bool=False
     ):
+    
         super().__init__()
 
         print("in satellite dynamic encoder!")
+
+        dynamic_edges = wind_mesh_edges or latlon_mesh_edges
 
         if dynamic_edges and initial_enc:
             raise ValueError(
@@ -492,19 +510,30 @@ class SatelliteDynamicEncoder(torch.nn.Module):
                 "dynamic_edges and concat_enc_neighbours cannot both be True: "
                 "the scatter is replaced by concat_group_by and wind_indices would be invalid."
             )
-        if dynamic_edges and wind_indices is None:
-            raise ValueError("wind_indices must be provided when dynamic_edges=True.")
+        if wind_mesh_edges and wind_indices is None:
+            raise ValueError("wind_indices must be provided when wind_mesh_edges=True.")
+        if latlon_mesh_edges and latlon_indices is None:
+            raise ValueError("latlon_indices must be provided when latlon_mesh_edges=True.")
+        if latlon_mesh_edges and len(latlon_indices) != 2:
+            raise ValueError(f"latlon_indices must have exactly 2 entries [lat_idx, lon_idx], got {len(latlon_indices)}.")
 
         self.use_checkpointing = use_checkpointing
         self.output_dim = output_dim
         self.num_latlons = len(lat_lons)
         self.concat_enc_neighbours = concat_enc_neighbours
         self.initial_enc = initial_enc
-        self.dynamic_edges = dynamic_edges
-        self.latlon_edges = latlon_edges
+        self.wind_mesh_edges = wind_mesh_edges
+        self.latlon_mesh_edges = latlon_mesh_edges
+        if dynamic_earthdistance and not latlon_mesh_edges:
+            print("Warning: dynamic_earthdistance=True has no effect when latlon_mesh_edges=False.")
+            self.dynamic_earthdistance = False
+        else:
+            self.dynamic_earthdistance = dynamic_earthdistance
 
-        if dynamic_edges:
+        if wind_mesh_edges:
             self.register_buffer('wind_indices', torch.tensor(wind_indices, dtype=torch.long))
+        if latlon_mesh_edges:
+            self.register_buffer('latlon_indices', torch.tensor(latlon_indices, dtype=torch.long))
 
         # --- release point ---
         self.release_edges = release_edges
@@ -643,10 +672,24 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         )
 
         # --- mesh edge encoder MLP ---
-        # input dim: 3 (distance, dlat, dlon) + 2 if latlon_edges + n_wind if dynamic_edges
-        base_edge_dim = 5 if latlon_edges else 3
-        n_wind = len(wind_indices) if dynamic_edges else 0
+        base_edge_dim = 3 # distance, dlat and dlon from fixed grid
+        if latlon_mesh_edges:
+            if self.dynamic_earthdistance:
+                base_edge_dim = 3  # replace with dynamic haversine distance, dlat and dlon from data
+            else:
+                base_edge_dim = 2  # replace with dlat and dlon from data
+
+        if self.dynamic_earthdistance:
+            from gates.data import haversine
+            # calculate mean distance between mesh centres from library h3
+            # using formula to derive the apothem (distance from the center to the flat midpoint of any side) from the side length, and multiplying by 2 to get the distance between centers of adjacent hexagons
+            mean_edge_length = h3.edge_length(resolution, unit='km')*(np.sqrt(3)/2)*2
+            self.register_buffer('mean_edge_length', torch.tensor(mean_edge_length, dtype=torch.float32))
+
+        n_wind = len(wind_indices) if wind_mesh_edges else 0 # append as many features as there are wind variables selected
         print("mesh edge encoder inputs:", base_edge_dim + n_wind)
+        print(f"base edge dim: {base_edge_dim }, with {latlon_mesh_edges=}, {self.dynamic_earthdistance=} and {wind_mesh_edges=} with {n_wind} wind features")
+
         self.mesh_edge_encoder = MLP(
             base_edge_dim + n_wind, output_edge_dim, hidden_dim_processor_edge,
             hidden_layers_processor_edge, mlp_norm_type,
@@ -659,7 +702,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         Returns:
             edge_index: (2, E) long tensor
             edge_attr:  (E, 3) float tensor [distance, dlat, dlon]
-                        or (E, 5) if latlon_edges [distance, dlat, dlon, mid_lat, mid_lon]
+            
         """
         edge_sources, edge_targets, edge_attrs = [], [], []
         for h3_index in self.base_h3_grid:
@@ -675,12 +718,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
 
                     dlat = loc_point[0] - loc_neighbour[0]
                     dlon = loc_point[1] - loc_neighbour[1]
-                    if self.latlon_edges:
-                        mid_lat = (loc_point[0] + loc_neighbour[0]) / 2
-                        mid_lon = (loc_point[1] + loc_neighbour[1]) / 2
-                        edge_attrs.append([distance, dlat, dlon, mid_lat, mid_lon])
-                    else:
-                        edge_attrs.append([distance, dlat, dlon])
+                    edge_attrs.append([distance, dlat, dlon])
                 except KeyError:
                     # h_cell is outside the reduced domain (edge of mesh)
                     #print(f"h_cell {h_cell} not in base_h3_map, skipping edge from {h3_index} to {h_cell}")
@@ -691,12 +729,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
                     dist_to_release = h3.point_dist(loc_point, release_loc, unit="km")
                     dlat = loc_point[0] - release_loc[0]
                     dlon = loc_point[1] - release_loc[1]
-                    if self.latlon_edges:
-                        mid_lat = (loc_point[0] + release_loc[0]) / 2
-                        mid_lon = (loc_point[1] + release_loc[1]) / 2
-                        edge_attrs.append([dist_to_release, dlat, dlon, mid_lat, mid_lon])
-                    else:
-                        edge_attrs.append([dist_to_release, dlat, dlon])
+                    edge_attrs.append([dist_to_release, dlat, dlon])
                     edge_targets.append(self.base_h3_map[self.release_h3])
                     edge_sources.append(self.base_h3_map[h3_index])
 
@@ -739,13 +772,46 @@ class SatelliteDynamicEncoder(torch.nn.Module):
             features = scatter_mean(src=features, index=self.enc_edge_index[1, :])
         # features: (batch, n_features, n_mesh_nodes)
         #print("features shape after scatter:", features.shape)
-        # extract wind at edge endpoints before rearranging to flat (b*n, f)
-        if self.dynamic_edges:
+        # extract dynamic edge features before rearranging to flat (b*n, f)
+        # features is still (B, n_features, n_mesh_nodes) here
+        if self.wind_mesh_edges:
             src_wind = features[:, self.wind_indices][:, :, self.mesh_edge_index[0, :]]
             dst_wind = features[:, self.wind_indices][:, :, self.mesh_edge_index[1, :]]
             # mean wind across the two endpoint mesh nodes: (B, n_wind, E)
             edge_wind = (src_wind + dst_wind) / 2
             edge_wind = einops.rearrange(edge_wind, "b f e -> (b e) f")  # (B*E, n_wind)
+
+        if self.latlon_mesh_edges:
+            src_latlon = features[:, self.latlon_indices][:, :, self.mesh_edge_index[0, :]]  # (B, 2, E)
+            dst_latlon = features[:, self.latlon_indices][:, :, self.mesh_edge_index[1, :]]  # (B, 2, E)
+            edge_latlon = src_latlon - dst_latlon                                            # (B, 2, E): [dlat, dlon]
+
+            if self.dynamic_earthdistance:
+                # calculate haversine distance for each edge using the lat/lon of the endpoints
+                from gates.data.load_data import haversine
+                src_lat = features[:, self.latlon_indices[0], :][:, None, self.mesh_edge_index[0, :]]  # (B, 1, E)
+                src_lon = features[:, self.latlon_indices[1], :][:, None, self.mesh_edge_index[0, :]]  # (B, 1, E)
+                dst_lat = features[:, self.latlon_indices[0], :][:, None, self.mesh_edge_index[1, :]]  # (B, 1, E)
+                dst_lon = features[:, self.latlon_indices[1], :][:, None, self.mesh_edge_index[1, :]]  # (B, 1, E)
+
+                edge_distance = haversine(src_lat.squeeze(1), src_lon.squeeze(1),
+                                           dst_lat.squeeze(1), dst_lon.squeeze(1), degrees=True)  # (B, E)
+                # normalize by mean edge length to keep in similar range as dlat/dlon
+                #print(src_lat[:,:,:3], src_lon[:,:,:3], dst_lat[:,:,:3], dst_lon[:,:,:3])
+                #print(src_lat.shape, src_lat.squeeze(1).shape)
+                #print(edge_distance.shape)
+                #print(edge_distance[:, :20])
+                edge_distance = edge_distance / self.mean_edge_length
+                #print(edge_distance[:, :20])
+                edge_latlon = torch.cat([edge_distance.unsqueeze(1), edge_latlon], dim=1)  # (B, 3, E)
+
+                ## by default, replacing the lat and lon features with random, small noise to be ignored
+                #print("features before replacing lat/lon with noise (showing first 2 lat/lon features):")
+                #print(features[:, self.latlon_indices, :2])
+                features[:, self.latlon_indices, :] = torch.randn_like(features[:, self.latlon_indices, :]) * 1e-2
+                #print(features[:, self.latlon_indices, :2])
+
+            edge_latlon = einops.rearrange(edge_latlon, "b f e -> (b e) f")                 # (B*E, 2) or (B*E, 3) if dynamic_earthdistance
 
         features = einops.rearrange(features, "b f n -> (b n) f")
         out = self.node_encoder(features)
@@ -755,26 +821,31 @@ class SatelliteDynamicEncoder(torch.nn.Module):
                 self.improved_mesh_nodes, "e f -> (repeat e) f", repeat=batch_size)
             out = torch.cat([out, better_nodes], dim=1)
 
-        #print("out shape after node encoder and better meshnodes:", out.shape)
-
         # encode mesh edges
-        if self.dynamic_edges:
-            static_rep = einops.repeat(
-                self.mesh_edge_attr_static, "e f -> (rep e) f", rep=batch_size)
-            # (B*E, base_dim + n_wind)
-            #print("concatenating static and dynamic edge attributes")
-            concat_edge_attrs = torch.cat([static_rep, edge_wind], dim=-1)
-            #print("concat_edge_attrs shape:", concat_edge_attrs.shape)
-            #print("concat_edge_attrs:", concat_edge_attrs[:5])
-            mesh_edge_attrs = self.mesh_edge_encoder(concat_edge_attrs)
+        if self.latlon_mesh_edges or self.wind_mesh_edges:
+            if self.latlon_mesh_edges:
+                mesh_edge_feature_components = [edge_latlon]  # (B*E, 2) per-sample dlat/dlon, ignores static
+            else:
+                mesh_edge_feature_components = [einops.repeat(
+                    self.mesh_edge_attr_static, "e f -> (rep e) f", rep=batch_size)]  # (B*E, 3)
+            if self.wind_mesh_edges:
+                mesh_edge_feature_components.append(edge_wind)  # (B*E, n_wind)
+            
+            edges = torch.cat(mesh_edge_feature_components, dim=-1)
+            #print(f"edges: {edges.shape}")
+            #print(edges)
+            mesh_edge_attrs = self.mesh_edge_encoder(torch.cat(mesh_edge_feature_components, dim=-1))
         else:
+            #print(f"edges: {self.mesh_edge_attr_static.shape}")
+            #print(self.mesh_edge_attr_static)
             mesh_edge_attrs = self.mesh_edge_encoder(self.mesh_edge_attr_static)
+        
             mesh_edge_attrs = einops.repeat(
                 mesh_edge_attrs, "e f -> (rep e) f", rep=batch_size)
-        # print shape of mesh_edge_attr_static
-        #print("mesh_edge_attr_static shape:", self.mesh_edge_attr_static.shape)
-        #print("mesh_edge_attrs shape after encoding and repeat:", mesh_edge_attrs.shape)
 
+        #print("after encoding:"
+        #      )
+        #print(mesh_edge_attrs)
         # batched edge index — vectorised over batch dimension
         offset = torch.arange(batch_size, device=self.mesh_edge_index.device) * self.num_h3
         mesh_edge_idx = (self.mesh_edge_index.unsqueeze(0)

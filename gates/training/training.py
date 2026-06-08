@@ -104,23 +104,64 @@ def _resolve_years_months(data_parameters):
 
     return years, months
 
-def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=True, wind_tuples=None, input_names=None):
+def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=None, latlon_tuples=None, input_names=None, dynamic_earthdistance=False):
+    """
+    Prepare the input dictionary to pass to the GraphSatelliteForecaster relating to the mesh edges attributes. 
+    Args:
+    - dynamic_wind (bool): Whether to include dynamic wind-based edges in the graph. If True, the function will look for wind feature tuples in input_names based on wind_tuples.
+    - dynamic_latlon (bool): Whether to include dynamic lat/lon-based edges in the graph. If True, the function will look for lat/lon feature tuples in input_names based on latlon_tuples.
+    - wind_tuples (list of tuples): Optional list of tuples specifying the names and positions of wind features in input_names. Each tuple should be (feature_name, feature_dim, time_lag). If None, defaults to [("x_wind", 3, 0), ("y_wind", 3, 0)].
+    - latlon_tuples (list of tuples): Optional list of tuples specifying the names and positions of lat/lon features in input_names. Each tuple should be (feature_name, feature_dim, time_lag). If None, defaults to [("lat_coords", 0, 0), ("lon_coords", 0, 0)].
+    - input_names (list of str): List of feature names corresponding to the input variables, used to identify the indices of wind and lat/lon features based on the provided tuples.
+    - dynamic_earthdistance (bool): Whether to compute dynamic earth distance edges based on lat/lon coordinates. Requires dynamic_latlon to be True (if dynamic_latlon is False, dynamic_earthdistance will be set to False and a warning will be printed)
+
+    Returns:
+    - dynamic_edge_params (dict): A dictionary containing the parameters to be passed to the GraphSatelliteForecaster for configuring dynamic edges. Example:
+        {
+            "wind_mesh_edges": True,
+            "wind_indices": [3, 4],
+            "latlon_mesh_edges": True,
+            "latlon_indices": [0, 1],
+            "dynamic_earthdistance": True
+        }
+    """
+    
+    dynamic_edge_params = {}
+
     if dynamic_wind:
         if wind_tuples is None:
             wind_tuples = [("x_wind", 3, 0), ("y_wind", 3, 0)]
         elif type(wind_tuples[0]) == list:
             wind_tuples = [tuple(t) for t in wind_tuples]
-            
-
-        wind_indices = [i for i, name in enumerate(input_names)
-                                                if name in wind_tuples]   
-        
-        dynamic_edge_params = {
-            "dynamic_edges":True,
-                #"dynamic_wind": dynamic_wind,
-                "wind_indices": wind_indices if dynamic_wind else None}
+        wind_indices = [i for i, name in enumerate(input_names) if name in wind_tuples]
+        dynamic_edge_params["wind_mesh_edges"] = True
+        dynamic_edge_params["wind_indices"] = wind_indices
     else:
-        dynamic_edge_params = {"dynamic_edges": False}
+        dynamic_edge_params["wind_mesh_edges"] = False
+
+    if dynamic_earthdistance and not dynamic_latlon:
+        print("Warning: dynamic_earthdistance is True but dynamic_latlon is False - earth distance edges will not be computed because lat/lon coordinates are required for this. Setting dynamic_earthdistance to False.")
+        dynamic_earthdistance = False
+        dynamic_edge_params["dynamic_earthdistance"] = False
+
+    if dynamic_latlon:
+        if latlon_tuples is None:
+            latlon_tuples = [("lat_coords", 0, 0), ("lon_coords", 0, 0)]
+        elif type(latlon_tuples[0]) == list:
+            latlon_tuples = [tuple(t) for t in latlon_tuples]
+        latlon_indices = [i for i, name in enumerate(input_names) if name in latlon_tuples]
+        if len(latlon_indices) != 2:
+            raise ValueError(
+                f"Expected exactly 2 latlon feature indices, found {len(latlon_indices)} "
+                f"for tuples {latlon_tuples}. Check that lat/lon are included in input_names."
+            )
+        dynamic_edge_params["latlon_mesh_edges"] = True
+        dynamic_edge_params["latlon_indices"] = latlon_indices
+    else:
+        dynamic_edge_params["latlon_mesh_edges"] = False
+
+    if dynamic_earthdistance:
+        dynamic_edge_params["dynamic_earthdistance"] = True
 
     return dynamic_edge_params
 
@@ -233,7 +274,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     print("\n".join(f"{k} : {v}" for k, v in loading_times.items()))
     print("")
 
-
+    
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
     inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
 
@@ -293,7 +334,7 @@ def setup_fp_dataset(parameters, train_fps):
 
 def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, test_fps):
 
-
+    print(parameters["input_scaler"])
     input_dataset = setup_input_dataset(parameters, train_inputs)
 
     train_scaled_inputs = input_dataset.transform(train_inputs)

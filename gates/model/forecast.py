@@ -49,9 +49,11 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         higher_mesh_res=0,
         idx_latlon=None,
         concat_decoder_neighbours=False, concat_decoder_neighbours_2=False, better_meshnodes=False, scatter="mean",disaggregated=False, batchsize=5, attention=False, release_coords="default", release_edges=False, decoder_append_latlon=False, concat_enc_neighbours=False,initial_enc=False,
-        dynamic_edges=False,
+        wind_mesh_edges=False,
         wind_indices=None,
-        latlon_edges=False,
+        latlon_mesh_edges=False,
+        latlon_indices=None,
+        dynamic_earthdistance=False
     ):
         """
         GATES uses a GNN in an encode-process-decode architecture to output footprint values
@@ -99,9 +101,11 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_layers_processor_edge=hidden_layers_processor_edge,
             mlp_norm_type=norm_type,
             use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours,initial_enc=initial_enc,
-            dynamic_edges=dynamic_edges,
+            wind_mesh_edges=wind_mesh_edges,
             wind_indices=wind_indices,
-            latlon_edges=latlon_edges,
+            latlon_mesh_edges=latlon_mesh_edges,
+            latlon_indices=latlon_indices,
+            dynamic_earthdistance=dynamic_earthdistance
         )
         if not encode_edges:
             edge_dim=2

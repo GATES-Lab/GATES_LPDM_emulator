@@ -495,7 +495,7 @@ def train_and_save_model(parameters, model_save_dir):
             dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"])
         
     else:
-        dynamic_edges_params = {"dynamic_edges":False}
+        dynamic_edges_params = {}
             
 
     training_ctx = TrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values), dynamic_edges_params) # get size from train params
@@ -525,9 +525,10 @@ def train_and_save_model(parameters, model_save_dir):
         wandb.define_metric("metrics_*", step_metric="epoch")
         wandb.define_metric("training_plots", step_metric="epoch")
 
-        if "metrics_fluxes_static" in losses.keys():  ## wandb.define_metric("metrics_fluxes_static/*/*", step_metric="epoch")
-            for flux_mode in losses["metrics_fluxes_static"].keys():
-                wandb.define_metric(f"metrics_fluxes_static/{flux_mode}/*", step_metric="epoch")
+        if "metrics_fluxes_static" in losses:
+            for flux_mode, flux_metrics in losses["metrics_fluxes_static"].items():
+                for metric_name in flux_metrics:
+                    wandb.define_metric(f"metrics_fluxes_static/{flux_mode}/{metric_name}", step_metric="epoch")
 
     print("successfully set up the model!!! starting training loop")
     
