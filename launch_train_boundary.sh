@@ -17,7 +17,7 @@
 echo "activate env"
 # activate your own environment here
 source ~/initConda.sh
-conda activate /user/work/yl18410/graphnet_bp_220324_backup
+conda activate gates_env
 
 
 echo "loading modules"
