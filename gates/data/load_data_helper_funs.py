@@ -6,16 +6,52 @@ import dask
 import sys
 import os
 
-def haversine(lat1, lon1, lat2, lon2, radius=6371.0):
+import numpy as np
+
+def haversine(lat1, lon1, lat2, lon2, radius=6371.0, degrees=False):
     """
-    All inputs are in radians. Returns distance in kilometers.
-    Supports broadcasting.
+    Compute great-circle distance using the haversine formula.
+
+    Parameters
+    ----------
+    lat1, lon1, lat2, lon2 : array-like or scalar
+        Coordinates of the two points.
+        Interpreted as degrees if degrees=True, otherwise radians.
+    radius : float, default=6371.0
+        Sphere radius (Earth radius in km by default).
+    degrees : bool, default=False
+        If True, inputs are assumed to be in degrees and are converted
+        to radians internally.
+
+    Returns
+    -------
+    distance : array-like or scalar
+        Great-circle distance in the same units as `radius`.
+
+    Supports NumPy arrays, xarray DataArrays, and PyTorch tensors (including CUDA).
     """
+    import torch
+    _is_tensor = isinstance(lat1, torch.Tensor) or isinstance(lon1, torch.Tensor)
+
+    if _is_tensor:
+        math = torch
+        deg2rad = lambda x: x * (torch.pi / 180.0)
+    else:
+        math = np
+        deg2rad = np.deg2rad
+
+    if degrees:
+        lat1, lon1, lat2, lon2 = deg2rad(lat1), deg2rad(lon1), deg2rad(lat2), deg2rad(lon2)
+
     dlat = lat2 - lat1
     dlon = lon2 - lon1
 
-    a = np.sin(dlat / 2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0)**2
-    c = 2 * np.arcsin(np.sqrt(a))
+    a = (
+        math.sin(dlat / 2.0) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2.0) ** 2
+    )
+    c = 2 * math.asin(math.sqrt(a)) if _is_tensor else 2 * np.arcsin(np.sqrt(a))
+
     return radius * c
 
 
@@ -70,19 +106,23 @@ def _static_var_landcover_disaggregated(topog_ds, coordinate_ds):
     return coordinate_ds
 
 def _static_var_sin_lat_coords(coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"sin_lat_coords":np.sin(coordinate_ds.lat_coords)})
+    deg_to_rad = np.pi/180
+    coordinate_ds = coordinate_ds.assign({"sin_lat_coords":np.sin(coordinate_ds.lat_coords * deg_to_rad)})
     return coordinate_ds
 
 def _static_var_sin_lon_coords(coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"sin_lon_coords":np.sin(coordinate_ds.lon_coords)})
+    deg_to_rad = np.pi/180
+    coordinate_ds = coordinate_ds.assign({"sin_lon_coords":np.sin(coordinate_ds.lon_coords * deg_to_rad)})
     return coordinate_ds
 
 def _static_var_cos_lat_coords(coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"cos_lat_coords":np.cos(coordinate_ds.lat_coords)})
+    deg_to_rad = np.pi/180
+    coordinate_ds = coordinate_ds.assign({"cos_lat_coords":np.cos(coordinate_ds.lat_coords * deg_to_rad)})
     return coordinate_ds
 
 def _static_var_cos_lon_coords(coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"cos_lon_coords":np.cos(coordinate_ds.lon_coords)})
+    deg_to_rad = np.pi/180
+    coordinate_ds = coordinate_ds.assign({"cos_lon_coords":np.cos(coordinate_ds.lon_coords * deg_to_rad)})
     return coordinate_ds
 
 def _static_var_x_coords(coordinate_ds):
