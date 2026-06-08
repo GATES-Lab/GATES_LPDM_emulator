@@ -1161,10 +1161,7 @@ def make_boundary_dataloader(inputs, outputs, batch_size=10, randomize=False,
         flatten (bool): Whether to flatten lat/lon in the inputs.
 
     Returns:
-        tuple:
-            - DataLoader: yields (inputs_batch, outputs_batch) tensors.
-            - list: output label names.
-    """
+        torch.utils.data.DataLoader: yields (inputs_batch, outputs_batch) tensors.
     if inputs.sizes["fp_time"] != outputs.sizes["time"]:
         raise ValueError(
             f"inputs and outputs have mismatched time dimensions: "
