@@ -5,7 +5,7 @@
     "parallel_loading": true,
     "load_into_memory": true,
     "train_load_data" : {
-        "years":"201[4-5]",
+        "years":["2014", "2015", "2016"],
         "months":["01","02","03","04", "05","06","07","08","09","10","11","12"],
         "freq":3,
         "region":"BRAZIL",
