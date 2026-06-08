@@ -135,7 +135,8 @@ Configures normalisation of meteorological and static input features.
 | `fit_on_subsample` | (recommended) Fraction of the training data used to fit the scaler. Fraction is selected at random. Speeds up scaler fitting on large datasets. |
 | `scaler_params` | Additional keyword arguments passed to the scaler constructor. |
 
-**TODO**: add info on scalers
+Within `DefaultInputsScaler`, the variables that are standardised vs min-max vs no transform can be specified by passing `scaler_params:{"ignore_variables": ["lat_coords", "lon_coords"], "minmax_variables":["land_cover", "topog", "xy_distance_centre, ..."]}`. Currently, the default is that static variables are transformed through minmax, and met variables standardised.
+
 
 ---
 
@@ -204,13 +205,16 @@ The dataloader params above are set up for cluster runs with multiple workers. W
 Controls the features that get addded to the mesh graph edges. 
 
 ```json
-"dynamic_edges": {"dynamic_wind": true, "wind_tuples": [["x_wind", 3, 0],["y_wind", 3, 0]]}
+"dynamic_edges": {"dynamic_wind": true, "wind_tuples": [["x_wind", 3, 0],["y_wind", 3, 0]], "dynamic_latlon":true, "dynamic_earthdistance":true}
 ```
 
 | Field | Description |
 |-------|-------------|
 | `dynamic_wind` | bool, whether to incorporate wind features to the edges |
-| `wind_tuples` | list of lists, with the name of each feature to be included as features to the edges. Each feature has name in format `(variable_name, level, time_delta)`. By default, the x- and y- wind at level three are appended if `dynamic_wind=True` |
+| `wind_tuples` | list of lists, with the name of each wind-related feature to be added as features to the edges. Each feature has name in format `(variable_name, level, time_delta)`. By default, the x- and y- wind at level three are appended if `dynamic_wind=True` |
+| `dynamic_latlon` | bool, whether to replace the static mesh edge attributes with delta-lat and delta-lon features calculated from the data. Control the name of the lat/lon coords with `latlon_tuples`|
+| `dynamic_earthdistance` | bool, only valid `dynamic_latlon=True`. Whether to append the distance between two mesh nodes as attribute. |
+
 ---
 
 
@@ -346,4 +350,3 @@ For a specific loss function:
 - [HOW_TO_DATA.md](HOW_TO_DATA.md) — data pipeline reference
 - [HOW_TO_WandB.md](HOW_TO_WandB.md) — Weights & Biases logging
 - [HOW_TO_evaluation.md](HOW_TO_evaluation.md) — evaluation workflow
-- [CLAUDE.md](../CLAUDE.md) — architecture and codebase overview
