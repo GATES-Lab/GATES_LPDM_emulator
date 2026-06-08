@@ -400,6 +400,23 @@ class XarrayScaler:
     def fit_transform(self, da: xr.DataArray) -> xr.DataArray:
         return self.fit(da).transform(da)
     
+
+class GhostScaler:
+    """
+    A placeholder scaler that does not apply any transformation, but has the same interface as the other scalers. Useful for testing and ablation when you want to use the same code but without scaling the inputs.
+    """
+    def __init__(self):
+        self.scaler_type = "ghost"
+        self.scaler_name = "GhostScaler"
+    
+    def fit(self, da: xr.DataArray):
+        return self
+
+    def transform(self, da: xr.DataArray) -> xr.DataArray:
+        return da
+    
+
+
 class XarrayMinMaxScaler:
     """
     A simple scaler for xarray DataArrays that applies minmax transformation. 
@@ -514,8 +531,17 @@ class DefaultInputsScaler:
     Variables listed in ``minmax_variables`` are scaled with min-max scaling. The fitted scalers are stored by full variable tuple, and `transform` returns a new DataArray
     named ``stacked_transformed_inputs`` with the same dims and ``variable_name`` labels as the inputs.
     """
-    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords", "xy_distance_centre", "earth_distance_centre", "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords"], verbose=True, compute=True):
+    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords", "xy_distance_centre", "earth_distance_centre", "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords"], ignore_variables=[], verbose=True, compute=True):
+
+        self.ignore_variables = ignore_variables
+
+        # remove any variables from minmax that are in ignore_variables, and warn about it
+        if len(set(minmax_variables).intersection(set(ignore_variables))) > 0:
+            ignored_minmax_vars = set(minmax_variables).intersection(set(ignore_variables))
+            minmax_variables = [v for v in minmax_variables if v not in ignored_minmax_vars]
+
         self.minmax_variables = minmax_variables
+        
         self.scalers = {}
         self.scaler_name = "DefaultInputsScaler"
         self.verbose = verbose
@@ -535,7 +561,15 @@ class DefaultInputsScaler:
 
         for varname in varnames: #np.unique(varnames):
             var_data = inputs.sel(variable=varname)
-            if varname in self.minmax_variables:
+            if varname in self.ignore_variables:
+                if self.verbose: print(f"Not transforming variable {varname} because it is in ignore_variables")
+                scaler = GhostScaler()
+                for vc in variable_names:
+                    if vc[0] == varname and len(vc)==3:
+                        self.scalers[vc] = scaler
+                
+
+            elif varname in self.minmax_variables:
                 if self.verbose: print(f"fitting minmax scaler for var {varname}")
                 scaler = XarrayMinMaxScaler(compute=self.compute)
                 scaler = scaler.fit(var_data)
