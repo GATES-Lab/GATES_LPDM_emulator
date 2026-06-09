@@ -564,43 +564,4 @@ if __name__ == "__main__":
 
     # Train the model with the loaded parameters
     train_and_save_model(parameters, model_save_dir=model_saving_dir)
-    '''
-    parser = argparse.ArgumentParser(description="Load parameters. Example usage: python train_GATES_model.py parameters.json")
-    parser.add_argument("file_name", help="Parameter file name")
-    parser.add_argument("--file_path", help="Parameter file path. By default, the path in config.yml will be used.", default=None)
-
-    args = parser.parse_args()
-    file_name = args.file_name
-    file_path = args.file_path
-
-    cfg = gates.config.get_config()
-
-    if file_path is None:
-        file_path = cfg.parameter_files_dir
-    
-    parameter_path = Path(file_path) / file_name
-    
-    #### 1 Set up
-    parameters = load_parameter_file(parameter_path)
-    
-    if parameters is None:
-        print("Error loading parameters. Exiting.")
-        sys.exit(1)
-
-    print("PARAMETERS:")
-    print(parameters)
-
-    if parameters.get("use_wandb", False):
-        wandb.login()
-    
-    if parameters.get("model_save_dir", None) is None: 
-        model_saving_dir=cfg.save_models_dir
-    else:
-        model_saving_dir = Path(parameters["model_save_dir"])
-
-    #TODO write a function that checks minimum parameters exist
-    
-
-    # Train the model with the loaded parameters
-    train_and_save_model(parameters, model_save_dir=model_saving_dir)
-    '''
+    # (Duplicate CLI parsing block removed; see the active entrypoint above.)

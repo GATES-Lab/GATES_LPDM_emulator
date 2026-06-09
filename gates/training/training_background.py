@@ -330,8 +330,8 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
     test_scaled_inputs = test_scaled_inputs.compute() if hasattr(test_scaled_inputs, 'compute') else test_scaled_inputs
     '''
     # Append pre-normalised auxiliary CAMS features to inputs if use_baselines is True
-    ## TO CHANGE PARAMS
-    use_auxiliary_bc = parameters.get("use_auxiliary_bc", True)
+    # the parameter file should have been updated to include the background_setup dict
+    use_auxiliary_bc = parameters.get("background_setup").get("use_auxiliary_bc")
 
     if use_auxiliary_bc:
         train_auxiliary_cams.load()

@@ -334,10 +334,14 @@ def train_and_save_model(parameters, model_save_dir):
     # update
     background_params = default_bg_params.copy()
     background_params.update(background_setup)
+    parameters["background_setup"] = background_params
 
     num_classes = parameters["model_parameters"].get("num_classes", 1)
     if num_classes not in [1, 4]:
         print("Warning: num_classes is set to a value other than 1 or 4. Defaulting to 1 (summed output).")
+        num_classes = 1
+        parameters["model_parameters"]["num_classes"] = 1
+        
 
     if num_classes == 1:
         if background_params["detrend"]:
