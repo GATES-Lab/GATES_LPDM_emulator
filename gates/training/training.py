@@ -1,6 +1,4 @@
-#from pyexpat import model
-
-from model.forecast import GraphSatelliteForecaster, GraphSatelliteForecasterConvClassifier,GraphSatelliteForecasterClassifier
+from model.forecast import GraphSatelliteForecaster
 
 
 import torch.optim as optim
@@ -115,7 +113,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
         months: list[int | str]     — explicit list of months (alternative to month)
         load_into_memory : bool     — if True, materialise each month into memory before
                                       concatenating (avoids large dask graphs at the cost
-                                      of sequential I/O); default False
+                                      of sequential I/O); default True
 
     All other keys are forwarded to LoadSquareSatelliteData.
 

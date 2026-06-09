@@ -461,8 +461,8 @@ class LoadBaseSatelliteData:
                 **chunk_args,
                 drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"],
                 compat="override",
-                engine="netcdf4",
-                #engine="h5netcdf",
+                #engine="netcdf4",
+                engine="h5netcdf",
                 preprocess=preprocess_met_data,
             )
             if len(met_levels)>0:
@@ -615,11 +615,7 @@ class LoadBaseSatelliteData:
         if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
         if load_fps_in_mem:
             self.fp_data_full.fp.load()
-            print("loaded fp variable into mem")
-            #print(self.fp_data_full)
-            #self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": "auto"})
-
-
+            if self.verbose: print("loaded fp variable into mem")
 
         
     
@@ -1276,9 +1272,8 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None):
         flux_suffix = str(flux_suffix_cfg)
 
     path = Path(cfg.flux_datadir) / resolved_domain_name / f"{species}_{resolved_domain_name}_{year}{flux_suffix}.nc"
-    # make the sorted list a list of strings
+
     if not path.is_file():
-        #raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_*.nc"))}")
         existing_files = sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_*.nc"))
         raise ValueError(
             f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \n"

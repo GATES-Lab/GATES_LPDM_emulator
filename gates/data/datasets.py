@@ -1133,6 +1133,7 @@ def make_boundary_dataloader(inputs, outputs, batch_size=10, randomize=False,
 
     Returns:
         torch.utils.data.DataLoader: yields (inputs_batch, outputs_batch) tensors.
+    """
     if inputs.sizes["fp_time"] != outputs.sizes["time"]:
         raise ValueError(
             f"inputs and outputs have mismatched time dimensions: "
@@ -1254,6 +1255,7 @@ def _cut_satellite_met_multi_delta(
         )
 
         if interp_to is None:
+            # choose the nearest met timestamp for each target time, within the specified tolerance
             nearest = met_time_index.get_indexer(target_times, method="nearest", tolerance=tol)
             nan_mask = nearest == -1
             nearest_safe = np.where(~nan_mask, nearest, 0)
@@ -1268,6 +1270,7 @@ def _cut_satellite_met_multi_delta(
             all_unique_times.update(nearest_timestamps[~nan_mask])
 
         else:
+            # If required, calculate the target times rounded to the specified resolution to interpolate to later, and find the nearest met timestamps that bracket those targets on either side (floor and ceil).
             interp_targets = target_times.round(interp_to)
             floor_idxs = met_time_index.get_indexer(interp_targets, method="ffill")
             ceil_idxs = met_time_index.get_indexer(interp_targets, method="bfill")
@@ -1319,7 +1322,7 @@ def _cut_satellite_met_multi_delta(
     lat_ds = fp.lat_coords
     lon_ds = fp.lon_coords
 
-    # --- Phase 2c (interp_to only): linearly interpolate to rounded target times ---
+    # --- Phase 3c (interp_to only): linearly interpolate to rounded target times ---
     if interp_to is not None:
         all_interp_targets = sorted({
             t for info in nearest_info.values()

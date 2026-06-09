@@ -14,6 +14,7 @@ def load_cams_data(domain, year=2016, month="*", species="ch4", cfg=None):
         month (str or int): The month for which to load the data. Can be an integer (1-12) or a string (e.g., "01", "*") (default: "*", which means all months).
         species (str): The species to load (default: "ch4").
         cfg: The configuration object containing the data directory paths. If None, the function will call get_config() to load the configuration.
+
     Returns:
         xarray.Dataset: The loaded CAMS reanalysis data.
     """
@@ -61,8 +62,13 @@ def load_cams_data(domain, year=2016, month="*", species="ch4", cfg=None):
 
 def calculate_bg(fp, bc_data):
     """
-    Calculate the background concentration for each side of the domain (north, south, east, west) by multiplying the particle locations in the footprints with the corresponding boundary condition data from the CAMS reanalysis, and summing the height, latitude, and longitude dimensions to get a single background concentration value for each time point and direction. The result is returned as an xarray Dataset with variables "north", "south", "east", and "west".
+    Calculate background concentration for each domain boundary by convolving particle locations from footprints with CAMS boundary condition data. Convolving means doing element-wise multiplication and summing over the spatial dimensions. 
 
+    Args:
+        fp (xarray.Dataset): Footprint dataset containing variables 'particle_locations_n/s/e/w'.
+        bc_data (xarray.Dataset): CAMS boundary condition dataset containing variables 'vmr_n/s/e/w', aligned to monthly or finer resolution.
+    Returns:
+        xarray.Dataset: Background concentrations with variables 'north', 'south', 'east', 'west', and 'summed' (their sum), each indexed by time.
     """
     
     if not all(var in fp.variables for var in ["particle_locations_n", "particle_locations_s", "particle_locations_e", "particle_locations_w"]):
@@ -70,26 +76,12 @@ def calculate_bg(fp, bc_data):
     
 
     # --- 1. Time matching ---
-    ### NOTE this actually should be done differently! each 
     tol = pd.Timedelta("32D")
-    """
-    nearest = bc_data.indexes["time"].get_indexer(
-        pd.DatetimeIndex(fp.time.values), method="nearest", tolerance=tol)
-    nan_idxs = pd.DatetimeIndex(fp.time.values)[nearest == -1]
-    
-    if len(nan_idxs):
-        print(f"Warning: {len(nan_idxs)} time points in fp have no matching time point in bc_data within a tolerance of {tol}. These will be set to NaN in the output.")
-    nearest_safe = np.where(nearest != -1, nearest, 0)
-    bc_matched = bc_data.isel(time=xr.DataArray(nearest_safe, dims="time"))
-    bc_matched["time"] = fp.time.values
-    if len(nan_idxs):
-        bc_matched = bc_matched.where(
-            xr.DataArray(nearest != -1, dims="time"), np.nan)
-    """
+
     bc_matched = bc_data.reindex(
     time=fp.time,
     method="ffill",
-    tolerance=pd.Timedelta("32D") )  
+    tolerance=tol )  
     
     # bg is a dataset with variables "bc_n", "bc_s", "bc_e", "bc_w" which is each the multiplication of the respective particle location variable in fp with the matched bc data
     bg = xr.Dataset()
