@@ -53,5 +53,5 @@ Launch the train file with `python train_boundary_model.py parameter_template_bo
 
 **Launching predicting**
 
-Launch a prediction run with the following command, where `trained_model_20260520_144557` is the name of your train model which should be at `save_models_dir` in `config.yaml` (or pass a specific model path with arg `--model_path /path/to/folder/`)
+Launch a prediction run with the following command, where `trained_model_20260520_144557` is the name of your trained model which should be at `save_models_dir` in `config.yaml` (or pass a specific model path with arg `--model_path /path/to/folder/`)
 ```python predict_boundary_model.py  --test_year 2016   --reference_model trained_model_20260520_144557   --checkpoint best ```
