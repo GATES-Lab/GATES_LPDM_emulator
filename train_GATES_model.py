@@ -54,16 +54,15 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
 
     Args:
         model (torch.nn.Module): The model to train.
-        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, labels, true_fp).
-        model_ctx (ModelContext): Context object containing model configuration and training parameters.
-        paths_ctx (PathContext): Context object containing file paths for logging and saving.
+        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, fp).
+        model_ctx (ModelContext): Context object containing optimizer, loss functions, device, and epoch settings.
         epoch (int): The current epoch number, used for progress logging.
-
-        device (torch.device): The device (CPU or GPU) on which to run computation.
-        epoch (int): The current epoch number, used for progress logging.
+        paths_ctx (PathContext, optional): Context object containing file paths for logging.
 
     Returns:
-        float: The mean display loss across all batches in the epoch.
+        tuple:
+            - float: The mean display loss (criterion_test) across all batches.
+            - float: The mean training loss (criterion) across all batches.
     """
     model.train()
     running_loss = 0.0
@@ -113,14 +112,13 @@ def validate_and_predict(model, model_ctx, loader):
 
     Args:
         model (torch.nn.Module): The model to evaluate.
-        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, labels).
-        criterion_test (callable): The loss function used to score predictions against labels.
-        device (torch.device): The device (CPU or GPU) on which to run computation.
+        model_ctx (ModelContext): Context object providing criterion_test and device.
+        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, fp).
 
     Returns:
         tuple:
-            - float: The mean loss across all batches.
-            - np.ndarray: A 2D array of shape (total_samples, features) containing all model predictions.
+            - float: The mean loss (criterion_test) across all batches.
+            - np.ndarray: Array of shape (total_samples, flat_lat_lon) containing all model predictions.
     """
     model.eval()
     test_error = 0.0
@@ -162,28 +160,17 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
     Args:
         model (torch.nn.Module): The model to train.
-        parameters (dict): A dictionary of training configuration values. Expected keys include:
-            - 'learning_rate' (float): The learning rate used for logging in checkpoints.
-            - 'epochs' (dict): Sub-keys 'training' (int), 'visualize' (int), 'model_saving' (int),
-              and 'patience' (int) controlling loop behaviour.
+        model_ctx (ModelContext): Context object containing optimizer, loss functions, device, epoch
+            counts, early stopping, and W&B flag.
+        training_ctx (TrainingContext): Context object containing scalers, grid, image plot indices,
+            dates, and other training-time metadata.
+        paths_ctx (PathContext): Context object containing all file paths for logs, plots, and checkpoints.
         train_loader (torch.utils.data.DataLoader): DataLoader for the training set.
         test_loader (torch.utils.data.DataLoader): DataLoader for the validation/test set.
-        optimizer (torch.optim.Optimizer): The optimiser used to update model weights.
-        criterion (callable): The training loss function, called as criterion(outputs, labels, true_fp).
-        criterion_test (callable): A secondary loss function used for validation and display metrics.
-        test_dataset: A dataset object exposing fp, inverse_transform(), and evaluate() / evaluate_flux() methods.
-        test_data: An object exposing met.time.values, used when exporting results to NetCDF.
-        device (torch.device): The device (CPU or GPU) on which to run computation.
-        epoch_so_far (int): The epoch count to start from, allowing training to resume from a checkpoint.
+        test_fp_dataset (xr.Dataset): Dataset holding the test footprints; predictions are written
+            into this object each epoch for evaluation and plotting.
         losses (dict): A dictionary of lists used to accumulate per-epoch metrics across the run.
-        flux_evaluation (list of str): Flux evaluation mode names (e.g. "uniform", "checkerboard_10") passed to evaluate_flux().
-        image_plots (list of int): Indices of test samples to visualise at each visualisation epoch.
-        image_dates (list of str): Date strings corresponding to each index in image_plots.
-        size (tuple of int): Spatial dimensions (height, width) used to reshape predictions for plotting and export.
-        path (str): Base directory path for saving logs, plots, and checkpoints.
-        model_name (str): The model name used for subfolder paths, filenames, and W&B artifact names.
-        NMAE_function (callable): A function to compute the Normalised Mean Absolute Error,
-            called as NMAE_function(predictions, truths).
+        epoch_so_far (int): The epoch count to start from, allowing training to resume from a checkpoint.
 
     Returns:
         None
@@ -486,7 +473,6 @@ def train_and_save_model(parameters, model_save_dir):
     # parameters["dynamic_edges"] can be None (default), a dict (with specific dynamic edge settings), or True (which defaults to dynamic wind edges)
 
     if parameters.get("dynamic_edges", None) is not None:
-        print("here")
         # if its a dict
         if isinstance(parameters["dynamic_edges"], dict):
             dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"], **parameters["dynamic_edges"])
@@ -534,37 +520,6 @@ def train_and_save_model(parameters, model_save_dir):
     
     run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, test_loader, test_scaled_fp, losses, epoch_so_far=0)
 
-
-    # lr = parameters["learning_rate"]
-    # print(lr)
-
-    # feature_dim = np.shape(inputs)[-1]
-    # aux_dim = 0
-
-    # model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim, **parameters["model_parameters"])
-    # criterion = eval(parameters["loss_functions"]["criterion"])
-    # criterion_test = eval(parameters["loss_functions"]["criterion_test"])
-    # optimizer = optim.AdamW(model.parameters(), lr=lr)
-    # flux_evaluation = ["uniform", "checkerboard_10", "checkerboard_5"]
-    # losses = {"train": [], "test": [], "NMAE_test": [], "MSE_test_transformed": [], "NMAE_test_transformed": [], "accuracy": [], "IoU": []}
-    # losses.update({f"flux_{f}": {"MAE": [], "R2": []} for f in flux_evaluation})
-
-
-    # if use_wandb:
-    #     wandb.watch(model, log="all", log_freq=100)
-
-    # epoch_so_far = 0
-    # if torch.cuda.is_available():
-    #     model.cuda()
-
-    # run_full_training(model, parameters, train_loader, test_loader, optimizer, criterion, criterion_test,
-    #                   test_dataset, test_data, device, epoch_so_far, losses,
-    #                   flux_evaluation, image_plots, image_dates, size, path, model_name, NMAE_function=NMAE_function)
-
-    # if use_wandb:
-    #     wandb.finish()
-
-    ## save checkpoint every 50 epochs
 
 if __name__ == "__main__":  
 
