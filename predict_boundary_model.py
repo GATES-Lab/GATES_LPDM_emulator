@@ -27,6 +27,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+from model.forecast import GraphSatelliteBackgroundPredictor
 import torch
 import xarray as xr
 
@@ -48,7 +49,6 @@ from gates.training.training_background import (
     concat_auxiliary_to_inputs,
 )
 
-from model.forecast import GraphSatelliteForecasterConvClassifier, GraphSatelliteForecasterClassifier
 
 
 # ---------------------------------------------------------------------------
@@ -309,19 +309,11 @@ class BoundaryPredictor:
         decoder = model_params.pop("decoder", training_params.get("network_decoder", "conv"))
         model_params.pop("num_classes", None)
 
-        if decoder == "conv":
-            print("Using conv network")
-            model = GraphSatelliteForecasterConvClassifier(
+
+        model = GraphSatelliteBackgroundPredictor(
                 grid, whole_world=False, feature_dim=feature_dim,
                 aux_dim=aux_dim, num_classes=num_classes,
                 input_height=size, input_width=size,
-                **model_params
-            )
-        else:
-            print("Using classifier network")
-            model = GraphSatelliteForecasterClassifier(
-                grid, whole_world=False, feature_dim=feature_dim,
-                aux_dim=aux_dim, num_classes=num_classes,
                 **model_params
             )
 
