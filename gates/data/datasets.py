@@ -1038,35 +1038,6 @@ def trim_to_batch_size(inputs, fps, batch_size):
     return inputs, fps
 
 
-def outputs_to_xarray(outputs, times, output_names=None):
-    """
-    Convert a numpy array of boundary condition outputs to an xarray DataArray
-    compatible with make_fps_batcher.
-
-    Args:
-        outputs (np.ndarray): Shape (N, num_classes).
-        times: Time coordinate values matching the N samples.
-        output_names (list of str, optional): Names for each output column.
-            Defaults to ['output_0', 'output_1', ...].
-
-    Returns:
-        xr.DataArray: Shape (time, num_classes).
-    """
-    if output_names is None:
-        output_names = [f"output_{i}" for i in range(outputs.shape[1])]
-
-    return xr.DataArray(
-        outputs,
-        dims=["time", "num_classes"],
-        coords={
-            "time": times,
-            "num_classes": output_names
-        },
-        name="boundary_outputs"
-    )
-
-
-
 def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42, dataloader_params=None, flatten=False):
     """
     Build a PyTorch dataloader from input and footprint datasets using xbatcher.
