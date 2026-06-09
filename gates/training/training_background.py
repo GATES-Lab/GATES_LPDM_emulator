@@ -17,7 +17,14 @@ from model.forecast import GraphSatelliteForecasterConvClassifier,GraphSatellite
 
 def calculate_detrending_factor(bc_file, boundary="south", height_index=1):
     """
-    Calculate a detrending factor for the boundary condition correction by taking the mean value of the specified boundary direction (e.g., "south") at the specified height index across all time points in the bc_file. This factor can be used to detrend the boundary condition correction by dividing the correction values by this factor, which helps to remove any systematic bias in the boundary condition data.
+    Compute the mean boundary condition value at a given height index, used to detrend background corrections.
+
+    Args:
+        bc_file (xarray.Dataset): CAMS boundary condition dataset containing variables 'vmr_<direction>'.
+        boundary (str): Boundary direction to use (default: "south"). One of "north", "south", "east", "west".
+        height_index (int): Index along the height dimension to select (default: 1).
+    Returns:
+        xarray.DataArray: Mean VMR value at the specified height, indexed by time.
     """
     var_name = f"vmr_{boundary[0]}"
     mean_dim = "lat" if boundary in ["east", "west"] else "lon"
@@ -27,10 +34,15 @@ def calculate_detrending_factor(bc_file, boundary="south", height_index=1):
 
 def get_auxiliary_bc_data(bc_file, height_indeces=[4], verbose=True):
     """
-    Extract boundary condition information for each side of the domain (north, south, east, west) from the CAMS reanalysis data by selecting the variable corresponding to each direction (e.g., "vmr_n" for north), and taking the value at the specified height indeces along the height dimension, and at the midpoint along the latitude or longitude dimension as appropriate.
+    Extract boundary condition values at the spatial midpoint for each domain boundary at specified height indices.
 
+    Args:
+        bc_file (xarray.Dataset): CAMS boundary condition dataset containing variables 'vmr_n/s/e/w'.
+        height_indeces (list[int]): Height indices to extract (default: [4]).
+        verbose (bool): If True, print the extracted height levels (default: True).
     Returns:
-        xarray Dataset with coords "time" and "height_index" and variables "north", "south", "east", and "west", each containing the boundary condition at the midpoint for that direction at the specified height indeces.
+        xarray.Dataset: Variables 'north', 'south', 'east', 'west' with coordinates 'time' and 'height_index'.
+            Attribute 'heights' lists the actual height values at the selected indices.
     """
     bc_auxiliary_dict = {}
     for height_index in height_indeces:
@@ -63,23 +75,22 @@ def get_auxiliary_bc_data(bc_file, height_indeces=[4], verbose=True):
 
 def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, detrend=True, verbose=True, load_into_memory=True, use_aux_bc=True, aux_indeces=[4]):
     """
-    Loads footprints, inputs  and background data for each year-month pair specified in data_parameters,
-    returning them as concatenated xarrays rather than a LoadSquareSatelliteData object.
+    Load footprints, met inputs, and background data for each year-month pair in data_parameters.
 
-    data_parameters may contain:
-        years : list[int | str]     — multiple years (alternative to year)
-        months: list[int | str]     — explicit list of months
-        load_into_memory : bool     — if True, materialise each month into memory before
-                                      concatenating (avoids large dask graphs at the cost
-                                      of sequential I/O); default False
-        detrend : bool             — if True, apply a simple detrending to the background data by calculating a detrending factor based on the value of the boundary conditions at a specified height and subtracting the background correction by this factor; default True
-        use_aux_bc : bool          — if True, extract and return auxiliary boundary condition data; default True
-        aux_indeces : list[int]    — list of height indices for auxiliary boundary condition data; default [4]
-
+    Args:
+        data_parameters (dict): Data loading parameters, must include 'years'/'year' and 'months'/'month'.
+        input_variables (dict): Keyword arguments forwarded to get_square_satellite_inputs_v2.
+        datapath_args (dict): Additional kwargs forwarded to LoadSquareSatelliteData (default: {}).
+        detrend (bool): If True, subtract the southern boundary midpoint value from background corrections (default: True).
+        verbose (bool): If True, print loading progress (default: True).
+        load_into_memory (bool): If True, materialise each month before concatenating (default: True).
+        use_aux_bc (bool): If True, extract and return auxiliary boundary condition data (default: True).
+        aux_indeces (list[int]): Height indices for auxiliary boundary condition extraction (default: [4]).
     Returns:
-        fp_xr  : xr.Dataset   — concatenated footprints (time, lat, lon)
-        inputs : xr.DataArray — concatenated met inputs  (time, lat, lon, variable_name)
-        bgs    : xr.DataArray — concatenated background corrections (time, lat, lon)
+        fp_xr (xr.Dataset): Concatenated footprints, shape (time, lat, lon).
+        inputs (xr.DataArray): Concatenated met inputs, shape (fp_time, lat, lon, variable_name).
+        bgs (xr.Dataset): Concatenated background corrections, shape (time,).
+        aux_data (xr.Dataset or None): Auxiliary CAMS boundary data, or None if use_aux_bc is False.
     """
     if "met_args" in data_parameters and "met_args" in datapath_args:
         merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
@@ -190,9 +201,8 @@ def normalize_data(outputs, norm_vals=None):
             If None, mean and std are computed from outputs.
 
     Returns:
-        tuple:
-            - np.ndarray or xr.DataArray: Normalised array, same type as input.
-            - tuple: (mean, std) used for normalisation.
+        normalized (np.ndarray or xr.DataArray): Normalised array, same type as input.
+        norm_vals (tuple): (mean, std) used for normalisation.
     """
     if norm_vals is None:
         if isinstance(outputs, xr.DataArray):
@@ -224,7 +234,15 @@ def denormalize(array, mean, std):
     return (array * std) + mean
 
 def format_aux_data(auxiliary_cams, time_coord):
-    ## stack and relable the auxiliary_cams data to prepare for concatenation
+    """
+    Reindex auxiliary CAMS data to a target time coordinate and reshape into a flat (time, aux) DataArray.
+
+    Args:
+        auxiliary_cams (xr.Dataset): Dataset with variables per boundary direction and coordinate 'height_index'.
+        time_coord (xr.DataArray): Target time coordinate for forward-fill reindexing.
+    Returns:
+        xr.DataArray: Shape (time, aux) with aux coordinate labels formatted as 'cams_aux_<height_index>'.
+    """
     auxiliary_cams = auxiliary_cams.reindex(time=time_coord, method="ffill", tolerance=pd.Timedelta("32D") )
 
     aux_labels = [
@@ -292,7 +310,17 @@ def concat_auxiliary_to_inputs(scaled_inputs, auxiliary_cams):
 
 def normalize_boundary_data(bgs, aux_data=None, norm_vals=None):
     """
-    Normalize the boundary condition background data and auxiliary CAMS data (if provided) using the mean and std from the training data, or compute them if norm_vals is None. Returns the normalized boundary data, normalized auxiliary data, and the normalization values used.
+    Normalize background and auxiliary CAMS data using provided or computed mean and std.
+
+    Args:
+        bgs (xr.Dataset or np.ndarray): Background concentration data to normalize.
+        aux_data (xr.DataArray or None): Auxiliary CAMS data to normalize, or None (default: None).
+        norm_vals (dict or None): Dict with keys 'outputs' and optionally 'auxiliary', each a (mean, std) tuple.
+            If None, statistics are computed from the data (default: None).
+    Returns:
+        norm_bgs: Normalized background data.
+        norm_aux_data: Normalized auxiliary data, or None.
+        norm_vals_out (dict): Normalization values used, with keys 'outputs' and 'auxiliary'.
     """
     if norm_vals is None:
         norm_bgs, bg_norm = normalize_data(bgs)
@@ -317,6 +345,22 @@ def normalize_boundary_data(bgs, aux_data=None, norm_vals=None):
 
 def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inputs, test_outputs,
                                 train_auxiliary_cams=None, test_auxiliary_cams=None):
+    """
+    Scale inputs, optionally append auxiliary CAMS features, and build train/test DataLoaders.
+
+    Args:
+        parameters (dict): Full parameter dict; must include 'background_setup' and 'dataloader' keys.
+        train_inputs (xr.DataArray): Training met inputs, shape (fp_time, lat, lon, variable_name).
+        train_outputs (xr.DataArray): Training background targets.
+        test_inputs (xr.DataArray): Test met inputs.
+        test_outputs (xr.DataArray): Test background targets.
+        train_auxiliary_cams (xr.DataArray or None): Auxiliary CAMS features for training (default: None).
+        test_auxiliary_cams (xr.DataArray or None): Auxiliary CAMS features for test (default: None).
+    Returns:
+        train_loader (DataLoader): Training DataLoader with randomized batches.
+        test_loader (DataLoader): Test DataLoader with fixed single-worker settings.
+        scalers (dict): Dict with key 'inputs_scaler' containing the fitted input scaler.
+    """
     # Scale inputs using training statistics
     
     input_dataset = setup_input_dataset(parameters, train_inputs)
@@ -393,6 +437,17 @@ def setup_boundary_dataloaders(parameters, train_inputs, train_outputs, test_inp
 
 
 def setup_boundary_model(parameters, training_ctx, paths_ctx):
+    """
+    Instantiate and configure the boundary model, optimizer, loss functions, and early stopping.
+
+    Args:
+        parameters (dict): Full parameter dict; must include 'model_parameters', 'loss_functions', 'epochs', and 'learning_rate'.
+        training_ctx: Object with attributes grid, n_variables, aux_dim, size, and device.
+        paths_ctx: Object with attributes model_path and model_name for checkpoint saving.
+    Returns:
+        model (nn.Module): Instantiated model, moved to CUDA if available.
+        model_ctx (ModelContext): Training context with optimizer, criteria, and scheduling parameters.
+    """
     lr = parameters["learning_rate"]
     
     decoder = parameters["model_parameters"].get("decoder", "conv")
@@ -468,7 +523,10 @@ def setup_boundary_model(parameters, training_ctx, paths_ctx):
 
 def initialise_boundary_losses():
     """
-    Return a dictionary to store losses and metrics during training and evaluation. 
+    Initialize the loss tracking dictionary for training and evaluation.
+
+    Returns:
+        losses (dict): Dict with keys 'train' and 'test', each mapping to an empty list.
     """
     losses = {
         "train": [],
