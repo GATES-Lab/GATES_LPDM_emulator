@@ -614,8 +614,8 @@ class LoadBaseSatelliteData:
 
         if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
         if load_fps_in_mem:
-            self.fp_data_full.fp.load()
-            if self.verbose: print("loaded fp variable into mem")
+            self.fp_data_full.load()
+            if self.verbose: print("loaded fp dataset into mem with variables:", list(self.fp_data_full.data_vars))
 
         
     
