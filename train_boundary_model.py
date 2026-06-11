@@ -23,17 +23,7 @@ import matplotlib.patches as mpatches
 from sklearn.metrics import mean_squared_error, r2_score
 from torch.utils.data import DataLoader
 
-# from model.layers.encoder import *
-# from model.layers.decoder import *
-# from model.layers.processor import *
-# from model.layers.graph_net_block import *
-# from model.data.dataloader_graphnet import BoundaryDataset
-# from model.data.load_data import *
-# from model.forecast import GraphSatelliteForecasterClassifier, GraphSatelliteForecasterConvClassifier
-# from model.loss_functions import *
 
-#from general_train_nawid import write_to_file, load_file, set_reproducibility, log_object_as_artifact, EarlyStopping
-#from general_train_nawid import  load_file,  EarlyStopping
 
 import sys
 
@@ -77,7 +67,6 @@ from gates.training.training_dataclasses import PathContext, TrainingContext, Bo
 
 from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility
 
-from gates.data.load_background_data import load_cams_data
 
 # ---------------------------------------------------------------
 # Training loop

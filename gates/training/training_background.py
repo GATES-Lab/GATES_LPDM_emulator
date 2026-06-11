@@ -12,7 +12,7 @@ import torch
 from .training_helperfuns import EarlyStopping
 import torch.optim as optim
 from .training_dataclasses import ModelContext
-from model.forecast import GraphSatelliteForecasterConvClassifier,GraphSatelliteForecasterClassifier
+from model.forecast import GraphSatelliteBackgroundPredictor
 
 
 def calculate_detrending_factor(bc_file, boundary="south", height_index=1):
@@ -456,9 +456,8 @@ def setup_boundary_model(parameters, training_ctx, paths_ctx):
     num_classes = parameters["model_parameters"].get("num_classes", 1)
     parameters["model_parameters"].pop("num_classes", None)
     
-    if decoder == "conv":
-        print("Using conv network")
-        model = GraphSatelliteForecasterConvClassifier(
+
+    model = GraphSatelliteBackgroundPredictor(
             training_ctx.grid,
             whole_world=False,
             feature_dim=training_ctx.n_variables,
@@ -466,17 +465,7 @@ def setup_boundary_model(parameters, training_ctx, paths_ctx):
             num_classes=num_classes,
             input_height=training_ctx.size,
             input_width=training_ctx.size,
-            **parameters["model_parameters"],
-        )
-    else:
-        print("Using normal network")
-        model = GraphSatelliteForecasterClassifier(
-            training_ctx.grid,
-            whole_world=False,
-            feature_dim=training_ctx.n_variables,
-            aux_dim=training_ctx.aux_dim,
-            num_classes=num_classes,
-            **parameters["model_parameters"],
+            **parameters["model_parameters"], decoder_type=decoder
         )
 
     criterion_params = parameters["loss_functions"].get("criterion_params", {})
