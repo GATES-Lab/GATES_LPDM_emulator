@@ -166,25 +166,41 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=Non
     return dynamic_edge_params
 
 
-def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False):
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False, wandb_month_counter=1, return_wandb_month_counter=False):
     """
     Loads footprints and inputs for each year-month pair specified in data_parameters,
     returning them as concatenated xarrays rather than a LoadSquareSatelliteData object.
 
-    data_parameters may contain:
-        year  : int | str           — single year
-        years : list[int | str]     — multiple years (alternative to year)
-        month : int | str | None    — single month; omit or None for all 12
-        months: list[int | str]     — explicit list of months (alternative to month)
-        load_into_memory : bool     — if True, materialise each month into memory before
-                                      concatenating (avoids large dask graphs at the cost
-                                      of sequential I/O); default False
-
-    All other keys are forwarded to LoadSquareSatelliteData.
+    Args:
+        data_parameters (dict): Controls which data to load. Recognised keys:
+            - year  (int | str)        — single year
+            - years (list[int | str])  — multiple years (alternative to year)
+            - month (int | str | None) — single month; omit or None for all 12
+            - months (list[int | str]) — explicit list of months (alternative to month)
+            All other keys are forwarded to LoadSquareSatelliteData.
+        input_variables (dict): Variable extraction settings forwarded to
+            get_square_satellite_inputs_v2.
+        datapath_args (dict): Path overrides merged into data_parameters before each
+            monthly load. If both contain 'met_args', they are merged with datapath_args
+            taking precedence.
+        verbose (bool): Print per-month progress messages. Defaults to True.
+        load_into_memory (bool): If True, materialise each month's inputs and footprints
+            into memory before concatenating, avoiding large cross-month Dask task graphs.
+            Defaults to False.
+        use_wandb (bool): If True, log per-month loading metrics (time, sample count) to
+            W&B under the 'loading/*' namespace. Defaults to False.
+        wandb_month_counter (int): Starting step value for W&B loading metrics. Defaults
+            to 1. Pass the value returned by a previous call to chain metrics continuously
+            across multiple loads (e.g. train then test, or across regions).
+        return_wandb_month_counter (bool): If True, return the final counter value as a
+            third return value so callers can chain it into the next call. Defaults to False
+            to preserve backward compatibility.
 
     Returns:
-        fp_xr  : xr.Dataset   — concatenated footprints (time, lat, lon)
-        inputs : xr.DataArray — concatenated met inputs  (time, lat, lon, variable_name)
+        fp_xr (xr.Dataset): Concatenated footprints with shape (time, lat, lon).
+        inputs (xr.DataArray): Concatenated met inputs with shape (fp_time, lat, lon, variable_name).
+        wandb_month_counter (int): Final counter value after all months are loaded.
+            Only returned when return_wandb_month_counter=True.
     """
     if "met_args" in data_parameters and "met_args" in datapath_args:
         merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
@@ -203,7 +219,6 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     all_fp_xr = []
     loading_times = {}
 
-    month_counter = 1
     total_time=0
     total_samples = 0
 
@@ -260,13 +275,13 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
             total_time += elapsed_mins
             if use_wandb:
                 wandb.log({
-                    "loading/loaded_month": month_counter,
+                    "loading/loaded_month": wandb_month_counter,
                     "loading/train_time": elapsed_mins,
                     "loading/total_time": total_time,
                     "loading/samples_loaded": loaded_samples,
                     "loading/total_samples": total_samples,
                 })
-            month_counter += 1 
+            wandb_month_counter += 1
 
     print("")
     print("")
@@ -278,6 +293,8 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
     inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
 
+    if return_wandb_month_counter:
+        return fp_xr, inputs, wandb_month_counter
     return fp_xr, inputs
 
 

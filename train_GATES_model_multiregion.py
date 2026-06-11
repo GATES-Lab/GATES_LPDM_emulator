@@ -11,15 +11,6 @@ import copy
 import wandb
 
 
-sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
-sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
-from model.layers.encoder import *
-from model.layers.decoder import *
-from model.layers.processor import *
-from model.layers.graph_net_block import *
-from model.loss_functions import *
-
-
 import time
 from datetime import datetime
 
@@ -140,7 +131,7 @@ def build_region_configs(regions_dict, shared_load_parameters):
     return region_configs
 
 
-def load_multiregion_data(region_configs, input_variables, datapath_args, verbose=True, load_into_memory=True, load_monthly=False):
+def load_multiregion_data(region_configs, input_variables, datapath_args, verbose=True, load_into_memory=True, load_monthly=False, use_wandb=False):
     """
     Loads each region's train and test data sequentially, then returns concatenated train data
     and a per-region list of test data.
@@ -152,21 +143,27 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
 
     Args:
         region_configs (list of dict): Each entry must have 'train_load_data' and 'test_load_data'
-            keys, matching the structure expected by load_GATES_data.
-        input_variables (dict): Variable extraction settings forwarded to load_GATES_data.
-        datapath_args (dict): Path overrides forwarded to load_GATES_data.
-        verbose (bool): Print progress messages.
+            keys, matching the structure expected by load_GATES_data / load_GATES_data_v2.
+        input_variables (dict): Variable extraction settings forwarded to each data loader.
+        datapath_args (dict): Path overrides forwarded to each data loader.
+        verbose (bool): Print per-region progress messages. Defaults to True.
         load_into_memory (bool): If True, call .compute() on each region's inputs before moving
-            to the next. Defaults to True for multiregion use to avoid cross-region Dask graphs.
+            to the next region. Defaults to True to avoid cross-region Dask task graphs.
+        load_monthly (bool): If True, use load_GATES_data_v2 (month-by-month loading);
+            otherwise use load_GATES_data. Defaults to False.
+        use_wandb (bool): Passed to load_GATES_data_v2 when load_monthly=True. Enables
+            per-month W&B loading metrics with a continuous counter across all regions.
+            Defaults to False.
 
     Returns:
-        all_train_inputs (xr.DataArray): Concatenated train inputs with integer fp_time coord.
-        all_train_fps: Concatenated train footprints with integer time coord.
-        test_regions (list of dict): One entry per region with keys 'name', 'inputs', 'fp_xr', 'data'.
+        all_train_inputs (xr.DataArray): Concatenated train inputs (fp_time, lat, lon, variable_name).
+        all_train_fps (xr.Dataset): Concatenated train footprints (time, lat, lon).
+        test_regions (list of dict): One entry per region with keys 'name', 'inputs', 'fp_xr'.
     """
     train_inputs_list = []
     train_fps_list = []
     test_regions = []
+    wandb_month_counter = 1
 
     for region_config in region_configs:
         train_params = copy.deepcopy(region_config["train_load_data"])
@@ -182,9 +179,10 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 datapath_args=datapath_args, verbose=verbose)
             train_fp_r = data_r.fp_xr
         else:
-            data_r, train_inputs_r = gates_training.load_GATES_data_v2(
+            data_r, train_inputs_r, wandb_month_counter = gates_training.load_GATES_data_v2(
                 train_params, input_variables=input_variables,
-                datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory)
+                datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory,
+                use_wandb=use_wandb, wandb_month_counter=wandb_month_counter, return_wandb_month_counter=True)
             train_fp_r = data_r
 
         if verbose:
@@ -196,9 +194,10 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 datapath_args=datapath_args, verbose=verbose)
             test_fp_r = test_data_r.fp_xr
         else:
-            test_data_r, test_inputs_r = gates_training.load_GATES_data_v2(
+            test_data_r, test_inputs_r, wandb_month_counter = gates_training.load_GATES_data_v2(
                 test_params, input_variables=input_variables,
-                datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory)
+                datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory,
+                use_wandb=use_wandb, wandb_month_counter=wandb_month_counter, return_wandb_month_counter=True)
             test_fp_r = test_data_r
 
         if verbose:
@@ -396,17 +395,26 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
             logging_dict.update({
                 f"metrics_original/aggregate/{k}": v
                 for k, v in computed_metrics["eval_metrics"].items()})
-            logging_dict.update({
-                f"flux/{flux_mode}/{metric_name}": metric_value
-                for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items()
-                for metric_name, metric_value in metrics.items()})
+            for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items():
+                logging_dict.update({
+                    f"metrics_fluxes_static/aggregate/{flux_mode}/{k}": v
+                    for k, v in metrics.items()})
+            # logging_dict.update({
+            #     f"flux/{flux_mode}/{metric_name}": metric_value
+            #     for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items()
+            #     for metric_name, metric_value in metrics.items()})
             for region_name, rd in region_log.items():
+                # log per-region metrics with region name in the key, e.g. "metrics_transformed/0-SAHARA/MSE"
                 logging_dict.update({
                     f"metrics_transformed/{region_name}/{k}": v
                     for k, v in rd["trans_eval"].items()})
                 logging_dict.update({
                     f"metrics_original/{region_name}/{k}": v
                     for k, v in rd["eval"].items()})
+                for flux_mode, metrics in rd["static_mf_eval"].items():
+                    logging_dict.update({
+                        f"metrics_fluxes_static/{region_name}/{flux_mode}/{k}": v
+                        for k, v in metrics.items()})
                 logging_dict[f"test_loss/{region_name}"] = rd["test_loss"]
 
             wandb.log(logging_dict, step=epoch)
@@ -545,13 +553,31 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
 
     all_train_inputs, all_train_fps, test_regions = load_multiregion_data(
         region_configs, input_variables, datapath_args,
-        verbose=verbose, load_into_memory=load_into_memory, load_monthly=load_monthly)
+        verbose=verbose, load_into_memory=load_into_memory, load_monthly=load_monthly, use_wandb=use_wandb)
 
-    write_to_file("successfully loaded all region data", paths_ctx.updates_path)
+    num_train_samples = len(all_train_fps.time)
+    num_test_samples_per_region = {r["name"]: r["inputs"].sizes["fp_time"] for r in test_regions}
+    num_test_samples_total = sum(num_test_samples_per_region.values())
+
+    write_to_file(
+        f"Successfully loaded all region data. "
+        f"Train samples: {num_train_samples}. "
+        f"Test samples per region: {num_test_samples_per_region}. "
+        f"Total test samples: {num_test_samples_total}",
+        paths_ctx.updates_path)
+    print(f"Train samples: {num_train_samples}, total test samples: {num_test_samples_total}")
+
+    if use_wandb:
+        wandb.summary.update({
+            "num_training_samples": num_train_samples,
+            "num_testing_samples": num_test_samples_total,
+            **{f"num_testing_samples_{name}": n for name, n in num_test_samples_per_region.items()},
+        })
 
     if cluster is not None:
-        cluster.close()
+        print("closing client before cluster!")
         client.close()
+        cluster.close()
 
     # Fit scalers on concatenated train data
     write_to_file("fitting scalers on concatenated train data", paths_ctx.updates_path)
@@ -576,7 +602,13 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
         train_scaled_inputs, train_scaled_fps, batch_size,
         randomize=True, dataloader_params=dataloader_params, flatten=True)
 
-    scalers = {"inputs_scaler": input_dataset.scaler, "fp_scaler": fp_dataset.scaler}
+    scalers = {"inputs_scaler": input_dataset.scaler, "fp_scaler": fp_dataset.scaler,
+               "input_names": list(train_scaled_inputs.variable_name.values)}
+
+    num_features = train_scaled_inputs.sizes["variable_name"]
+    parameters["num_features"] = num_features
+    if use_wandb:
+        wandb.summary.update({"num_features": num_features})
 
     # Build per-region test loaders using the already-fitted scalers
     add_nan_mask = dataloader_info.get("nans_to_zeros", True)
@@ -617,9 +649,18 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
                 description="Grid object used during training", use_wandb=use_wandb)
 
+    print("dynamic edges parameters:", parameters.get("dynamic_edges", None))
+    if parameters.get("dynamic_edges", None) is not None:
+        if isinstance(parameters["dynamic_edges"], dict):
+            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"], **parameters["dynamic_edges"])
+        elif parameters.get("dynamic_edges") is True:
+            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"])
+    else:
+        dynamic_edges_params = {}
+
     training_ctx = TrainingContext(
         parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers,
-        all_train_inputs.variable_name.size, first_region["fp_xr"].lat.size)
+        all_train_inputs.variable_name.size, first_region["fp_xr"].lat.size, dynamic_edges_params)
 
     write_to_file("setting up model", paths_ctx.updates_path)
     model, model_ctx = gates_training.setup_GATES_model(parameters, training_ctx, paths_ctx)
@@ -628,6 +669,25 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
         wandb.watch(model, log="all", log_freq=100)
 
     losses = gates_training.initialise_losses()
+
+    if use_wandb:
+        wandb.define_metric("epoch")
+        wandb.define_metric("MSE/*", step_metric="epoch")
+        wandb.define_metric("train/*", step_metric="epoch")
+        wandb.define_metric("test/*", step_metric="epoch")
+        wandb.define_metric("test_loss/*", step_metric="epoch")
+        wandb.define_metric("LossFn/*", step_metric="epoch")
+        wandb.define_metric("metrics_*", step_metric="epoch")
+        wandb.define_metric("fps_epoch_*", step_metric="epoch")
+
+        # Flux metrics need explicit definitions due to deep nesting ({region}/{flux_mode}/{metric})
+        region_names = parameters.get("region_names", [])
+        if "metrics_fluxes_static" in losses:
+            for flux_mode, flux_metrics in losses["metrics_fluxes_static"].items():
+                for metric_name in flux_metrics:
+                    wandb.define_metric(f"metrics_fluxes_static/aggregate/{flux_mode}/{metric_name}", step_metric="epoch")
+                    for region_name in region_names:
+                        wandb.define_metric(f"metrics_fluxes_static/{region_name}/{flux_mode}/{metric_name}", step_metric="epoch")
 
     print("Successfully set up model. Starting multiregion training loop.")
 

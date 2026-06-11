@@ -14,18 +14,6 @@ import random
 import copy
 import wandb
 
-# PREVIOUS IMPORTS
-# sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
-# sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
-# from model.layers.encoder import *
-# from model.layers.decoder import *
-# from model.layers.processor import *
-# from model.layers.graph_net_block import *
-
-# # from model.data.dataloader_graphnet import *
-# # from model.data.load_data import *
-# from model.loss_functions import *
-
 
 
 import time
