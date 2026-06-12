@@ -126,6 +126,9 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=Non
         }
     """
     
+    if (dynamic_wind or dynamic_latlon) and input_names is None:
+        raise ValueError("input_names must be provided when dynamic_wind and/or dynamic_latlon is enabled")
+
     dynamic_edge_params = {}
 
     if dynamic_wind:
