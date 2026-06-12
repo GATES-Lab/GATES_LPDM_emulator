@@ -351,7 +351,8 @@ def setup_fp_dataset(parameters, train_fps):
 
 def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, test_fps):
 
-    print(parameters["input_scaler"])
+    if parameters.get("verbose", False):
+        print(parameters.get("input_scaler"))
     input_dataset = setup_input_dataset(parameters, train_inputs)
 
     train_scaled_inputs = input_dataset.transform(train_inputs)
