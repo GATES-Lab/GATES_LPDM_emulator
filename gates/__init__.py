@@ -7,7 +7,6 @@ from .data.load_data import (
     cut_satellite_data)
 
 from .data.datasets import (
-    get_square_satellite_inputs,
     FootprintDataset,
     InputsDataset,
     make_dataloader 

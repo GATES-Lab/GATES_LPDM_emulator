@@ -6,16 +6,52 @@ import dask
 import sys
 import os
 
-def haversine(lat1, lon1, lat2, lon2, radius=6371.0):
+import numpy as np
+
+def haversine(lat1, lon1, lat2, lon2, radius=6371.0, degrees=False):
     """
-    All inputs are in radians. Returns distance in kilometers.
-    Supports broadcasting.
+    Compute great-circle distance using the haversine formula.
+
+    Parameters
+    ----------
+    lat1, lon1, lat2, lon2 : array-like or scalar
+        Coordinates of the two points.
+        Interpreted as degrees if degrees=True, otherwise radians.
+    radius : float, default=6371.0
+        Sphere radius (Earth radius in km by default).
+    degrees : bool, default=False
+        If True, inputs are assumed to be in degrees and are converted
+        to radians internally.
+
+    Returns
+    -------
+    distance : array-like or scalar
+        Great-circle distance in the same units as `radius`.
+
+    Supports NumPy arrays, xarray DataArrays, and PyTorch tensors (including CUDA).
     """
+    import torch
+    _is_tensor = isinstance(lat1, torch.Tensor) or isinstance(lon1, torch.Tensor)
+
+    if _is_tensor:
+        math = torch
+        deg2rad = lambda x: x * (torch.pi / 180.0)
+    else:
+        math = np
+        deg2rad = np.deg2rad
+
+    if degrees:
+        lat1, lon1, lat2, lon2 = deg2rad(lat1), deg2rad(lon1), deg2rad(lat2), deg2rad(lon2)
+
     dlat = lat2 - lat1
     dlon = lon2 - lon1
 
-    a = np.sin(dlat / 2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0)**2
-    c = 2 * np.arcsin(np.sqrt(a))
+    a = (
+        math.sin(dlat / 2.0) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2.0) ** 2
+    )
+    c = 2 * math.asin(math.sqrt(a)) if _is_tensor else 2 * np.arcsin(np.sqrt(a))
+
     return radius * c
 
 
@@ -70,19 +106,23 @@ def _static_var_landcover_disaggregated(topog_ds, coordinate_ds):
     return coordinate_ds
 
 def _static_var_sin_lat_coords(coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"sin_lat_coords":np.sin(coordinate_ds.lat_coords)})
+    deg_to_rad = np.pi/180
+    coordinate_ds = coordinate_ds.assign({"sin_lat_coords":np.sin(coordinate_ds.lat_coords * deg_to_rad)})
     return coordinate_ds
 
 def _static_var_sin_lon_coords(coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"sin_lon_coords":np.sin(coordinate_ds.lon_coords)})
+    deg_to_rad = np.pi/180
+    coordinate_ds = coordinate_ds.assign({"sin_lon_coords":np.sin(coordinate_ds.lon_coords * deg_to_rad)})
     return coordinate_ds
 
 def _static_var_cos_lat_coords(coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"cos_lat_coords":np.cos(coordinate_ds.lat_coords)})
+    deg_to_rad = np.pi/180
+    coordinate_ds = coordinate_ds.assign({"cos_lat_coords":np.cos(coordinate_ds.lat_coords * deg_to_rad)})
     return coordinate_ds
 
 def _static_var_cos_lon_coords(coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"cos_lon_coords":np.cos(coordinate_ds.lon_coords)})
+    deg_to_rad = np.pi/180
+    coordinate_ds = coordinate_ds.assign({"cos_lon_coords":np.cos(coordinate_ds.lon_coords * deg_to_rad)})
     return coordinate_ds
 
 def _static_var_x_coords(coordinate_ds):
@@ -159,6 +199,26 @@ def _domain_binary_release(fp_data, coordinate_ds):
 
 
 
+def _earth_distance_centre(fp_data, coordinate_ds):
+    # Haversine distance from each grid cell (using real lat/lon coords) to the release point
+    lat_coords = np.radians(fp_data.lat_coords.values)           # (n_time, n_lat)
+    lon_coords = np.radians(fp_data.lon_coords.values)           # (n_time, n_lon)
+    release_lat = np.radians(fp_data.release_lat.values)         # (n_time,)
+    release_lon = np.radians(fp_data.release_lon.values)         # (n_time,)
+
+    lat_3d = lat_coords[:, :, np.newaxis]                        # (n_time, n_lat, 1)
+    lon_3d = lon_coords[:, np.newaxis, :]                        # (n_time, 1, n_lon)
+    release_lat_3d = release_lat[:, np.newaxis, np.newaxis]      # (n_time, 1, 1)
+    release_lon_3d = release_lon[:, np.newaxis, np.newaxis]      # (n_time, 1, 1)
+
+    distances = haversine(lat_3d, lon_3d, release_lat_3d, release_lon_3d)  # (n_time, n_lat, n_lon)
+
+    coordinate_ds = coordinate_ds.assign({"earth_distance_centre":(("fp_time", "lat", "lon"), distances)})
+
+    return coordinate_ds
+
+
+
 def _binary_centre(coordinate_ds):
     assert coordinate_ds.lat.size == coordinate_ds.lon.size, "_binary_centre function only works for square datasets!"
 
@@ -171,7 +231,7 @@ def _binary_centre(coordinate_ds):
     return coordinate_ds
 
 def _xy_distance_centre(coordinate_ds):
-    assert coordinate_ds.lat.size == coordinate_ds.lon.size, "_binary_centre function only works for square datasets!"
+    assert coordinate_ds.lat.size == coordinate_ds.lon.size, "_xy_distance_centre function only works for square datasets!"
 
     centre = int(coordinate_ds.lat.size/2)
     grid_coords = np.meshgrid(np.arange(coordinate_ds.lat.size), np.arange(coordinate_ds.lon.size)) 
@@ -205,6 +265,8 @@ def get_static_variables_functions():
                                 _binary_centre,
                                 "xy_distance_centre":
                                 _xy_distance_centre, 
+                                "earth_distance_centre":
+                                _earth_distance_centre,
                                 "lat_degrees_distance":
                                 NotImplemented,
                                 "lon_degrees_distance":

@@ -1,41 +1,44 @@
-from pyexpat import model
+#from pyexpat import model
 
-from model.forecast import GraphSatelliteForecaster
+#from model.forecast import GraphSatelliteForecaster
 
 
 import torch.optim as optim
 import time
-from datetime import datetime
-import json
-import argparse
-from pathlib import Path
+# from datetime import datetime
+# import json
+# import argparse
+# from pathlib import Path
 
-import random
-import yaml
+# import random
+# import yaml
 
-import sys
-
-import matplotlib.pyplot as plt
+# import sys
+# import pickle
+# import random
 
 import numpy as np
 import torch
 import os
-import pickle
-import random
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
+
 import xarray as xr
 
 from pathlib import Path
 
 import wandb
 
+from gates.model.forecast import GraphSatelliteForecaster
 
-from gates import LoadSquareSatelliteData, get_square_satellite_inputs
+
+from gates import LoadSquareSatelliteData
 import gates.data.datasets as gates_datasets
 from gates.data.datasets import get_square_satellite_inputs_v2
 import gates.evaluation.metrics as gates_metrics
 import gates.evaluation.loss_functions as gates_losses
 
-from .training_helperfuns import save_wandb_artifact, EarlyStopping
+from .training_helperfuns import EarlyStopping #save_wandb_artifact, 
 
 from .training_dataclasses import ModelContext
 
@@ -101,26 +104,106 @@ def _resolve_years_months(data_parameters):
 
     return years, months
 
+def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=None, latlon_tuples=None, input_names=None, dynamic_earthdistance=False):
+    """
+    Prepare the input dictionary to pass to the GraphSatelliteForecaster relating to the mesh edges attributes. 
+    Args:
+    - dynamic_wind (bool): Whether to include dynamic wind-based edges in the graph. If True, the function will look for wind feature tuples in input_names based on wind_tuples.
+    - dynamic_latlon (bool): Whether to include dynamic lat/lon-based edges in the graph. If True, the function will look for lat/lon feature tuples in input_names based on latlon_tuples.
+    - wind_tuples (list of tuples): Optional list of tuples specifying the names and positions of wind features in input_names. Each tuple should be (feature_name, feature_dim, time_lag). If None, defaults to [("x_wind", 3, 0), ("y_wind", 3, 0)].
+    - latlon_tuples (list of tuples): Optional list of tuples specifying the names and positions of lat/lon features in input_names. Each tuple should be (feature_name, feature_dim, time_lag). If None, defaults to [("lat_coords", 0, 0), ("lon_coords", 0, 0)].
+    - input_names (list of str): List of feature names corresponding to the input variables, used to identify the indices of wind and lat/lon features based on the provided tuples.
+    - dynamic_earthdistance (bool): Whether to compute dynamic earth distance edges based on lat/lon coordinates. Requires dynamic_latlon to be True (if dynamic_latlon is False, dynamic_earthdistance will be set to False and a warning will be printed)
 
-def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False):
+    Returns:
+    - dynamic_edge_params (dict): A dictionary containing the parameters to be passed to the GraphSatelliteForecaster for configuring dynamic edges. Example:
+        {
+            "wind_mesh_edges": True,
+            "wind_indices": [3, 4],
+            "latlon_mesh_edges": True,
+            "latlon_indices": [0, 1],
+            "dynamic_earthdistance": True
+        }
+    """
+    
+    if (dynamic_wind or dynamic_latlon) and input_names is None:
+        raise ValueError("input_names must be provided when dynamic_wind and/or dynamic_latlon is enabled")
+
+    dynamic_edge_params = {}
+
+    if dynamic_wind:
+        if wind_tuples is None:
+            wind_tuples = [("x_wind", 3, 0), ("y_wind", 3, 0)]
+        elif type(wind_tuples[0]) == list:
+            wind_tuples = [tuple(t) for t in wind_tuples]
+        wind_indices = [i for i, name in enumerate(input_names) if name in wind_tuples]
+        dynamic_edge_params["wind_mesh_edges"] = True
+        dynamic_edge_params["wind_indices"] = wind_indices
+    else:
+        dynamic_edge_params["wind_mesh_edges"] = False
+
+    if dynamic_earthdistance and not dynamic_latlon:
+        print("Warning: dynamic_earthdistance is True but dynamic_latlon is False - earth distance edges will not be computed because lat/lon coordinates are required for this. Setting dynamic_earthdistance to False.")
+        dynamic_earthdistance = False
+        dynamic_edge_params["dynamic_earthdistance"] = False
+
+    if dynamic_latlon:
+        if latlon_tuples is None:
+            latlon_tuples = [("lat_coords", 0, 0), ("lon_coords", 0, 0)]
+        elif type(latlon_tuples[0]) == list:
+            latlon_tuples = [tuple(t) for t in latlon_tuples]
+        latlon_indices = [i for i, name in enumerate(input_names) if name in latlon_tuples]
+        if len(latlon_indices) != 2:
+            raise ValueError(
+                f"Expected exactly 2 latlon feature indices, found {len(latlon_indices)} "
+                f"for tuples {latlon_tuples}. Check that lat/lon are included in input_names."
+            )
+        dynamic_edge_params["latlon_mesh_edges"] = True
+        dynamic_edge_params["latlon_indices"] = latlon_indices
+    else:
+        dynamic_edge_params["latlon_mesh_edges"] = False
+
+    if dynamic_earthdistance:
+        dynamic_edge_params["dynamic_earthdistance"] = True
+
+    return dynamic_edge_params
+
+
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False, wandb_month_counter=1, return_wandb_month_counter=False):
     """
     Loads footprints and inputs for each year-month pair specified in data_parameters,
     returning them as concatenated xarrays rather than a LoadSquareSatelliteData object.
 
-    data_parameters may contain:
-        year  : int | str           — single year
-        years : list[int | str]     — multiple years (alternative to year)
-        month : int | str | None    — single month; omit or None for all 12
-        months: list[int | str]     — explicit list of months (alternative to month)
-        load_into_memory : bool     — if True, materialise each month into memory before
-                                      concatenating (avoids large dask graphs at the cost
-                                      of sequential I/O); default False
-
-    All other keys are forwarded to LoadSquareSatelliteData.
+    Args:
+        data_parameters (dict): Controls which data to load. Recognised keys:
+            - year  (int | str)        — single year
+            - years (list[int | str])  — multiple years (alternative to year)
+            - month (int | str | None) — single month; omit or None for all 12
+            - months (list[int | str]) — explicit list of months (alternative to month)
+            All other keys are forwarded to LoadSquareSatelliteData.
+        input_variables (dict): Variable extraction settings forwarded to
+            get_square_satellite_inputs_v2.
+        datapath_args (dict): Path overrides merged into data_parameters before each
+            monthly load. If both contain 'met_args', they are merged with datapath_args
+            taking precedence.
+        verbose (bool): Print per-month progress messages. Defaults to True.
+        load_into_memory (bool): If True, materialise each month's inputs and footprints
+            into memory before concatenating, avoiding large cross-month Dask task graphs.
+            Defaults to False.
+        use_wandb (bool): If True, log per-month loading metrics (time, sample count) to
+            W&B under the 'loading/*' namespace. Defaults to False.
+        wandb_month_counter (int): Starting step value for W&B loading metrics. Defaults
+            to 1. Pass the value returned by a previous call to chain metrics continuously
+            across multiple loads (e.g. train then test, or across regions).
+        return_wandb_month_counter (bool): If True, return the final counter value as a
+            third return value so callers can chain it into the next call. Defaults to False
+            to preserve backward compatibility.
 
     Returns:
-        fp_xr  : xr.Dataset   — concatenated footprints (time, lat, lon)
-        inputs : xr.DataArray — concatenated met inputs  (time, lat, lon, variable_name)
+        fp_xr (xr.Dataset): Concatenated footprints with shape (time, lat, lon).
+        inputs (xr.DataArray): Concatenated met inputs with shape (fp_time, lat, lon, variable_name).
+        wandb_month_counter (int): Final counter value after all months are loaded.
+            Only returned when return_wandb_month_counter=True.
     """
     if "met_args" in data_parameters and "met_args" in datapath_args:
         merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
@@ -139,6 +222,13 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     all_fp_xr = []
     loading_times = {}
 
+    total_time=0
+    total_samples = 0
+
+    if use_wandb:
+        wandb.define_metric("loading/loaded_month")
+        wandb.define_metric("loading/*", step_metric="loading/loaded_month")
+    
     for year in years:
         for month in months:
             month_start = time.perf_counter()
@@ -148,23 +238,53 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
             month_params = {**base_params, "year": year, "month": month}
             try:
                 data = LoadSquareSatelliteData(**month_params, **datapath_args, verbose=verbose)
+
+                inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
+                if load_into_memory:
+                    print(f"Loading data into memory for {year}-{month} before concatenation...")
+                    inputs = inputs.load()
+                    inputs.close()
+                    print("and footprints...")
+                    data.fp_xr = data.fp_xr.load()
+                    data.fp_xr.close()
+                all_inputs.append(inputs)
+                all_fp_xr.append(data.fp_xr)
+
+                # Close the source file handles so they don't accumulate across months.
+                if hasattr(data, "met_file") and data.met_file is not None:
+                    data.met_file.close()
+                if hasattr(data, "fp_data_full") and data.fp_data_full is not None:
+                    data.fp_data_full.close()
+                
+                loaded_samples = len(data.fp_xr.fp.time)
+                
+
             except Exception as e:
                 print(f"Error loading data for {year}-{month}: {e}")
-                elapsed_mins = (time.perf_counter() - month_start) / 60
-                loading_times[month_key] = f"{elapsed_mins:.2f}mins"
-                print(f"{month_key} : {loading_times[month_key]}")
-                continue
-            inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
-            if load_into_memory:
-                print(f"Loading data into memory for {year}-{month} before concatenation...")
-                inputs = inputs.load()
-                data.fp_xr = data.fp_xr.load()
-            all_inputs.append(inputs)
-            all_fp_xr.append(data.fp_xr)
+
+                # elapsed_mins = (time.perf_counter() - month_start) / 60
+                # loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+                # print(f"{month_key} : {loading_times[month_key]}")
+
+                loaded_samples = 0
 
             elapsed_mins = (time.perf_counter() - month_start) / 60
             loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+
             print(f"{month_key} : {loading_times[month_key]}")
+
+            total_samples += loaded_samples
+            # sum of all loading times
+            total_time += elapsed_mins
+            if use_wandb:
+                wandb.log({
+                    "loading/loaded_month": wandb_month_counter,
+                    "loading/train_time": elapsed_mins,
+                    "loading/total_time": total_time,
+                    "loading/samples_loaded": loaded_samples,
+                    "loading/total_samples": total_samples,
+                })
+            wandb_month_counter += 1
 
     print("")
     print("")
@@ -172,10 +292,12 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     print("\n".join(f"{k} : {v}" for k, v in loading_times.items()))
     print("")
 
-
+    
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
     inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
 
+    if return_wandb_month_counter:
+        return fp_xr, inputs, wandb_month_counter
     return fp_xr, inputs
 
 
@@ -208,7 +330,7 @@ def setup_input_dataset(parameters, train_inputs):
         else:
             inputs_scaler = None
 
-    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params)
+    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params, verbose=parameters.get("verbose", False))
     input_dataset.fit()
 
     return input_dataset
@@ -232,7 +354,8 @@ def setup_fp_dataset(parameters, train_fps):
 
 def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, test_fps):
 
-
+    if parameters.get("verbose", False):
+        print(parameters.get("input_scaler"))
     input_dataset = setup_input_dataset(parameters, train_inputs)
 
     train_scaled_inputs = input_dataset.transform(train_inputs)
@@ -271,7 +394,7 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
     if fp_labels != fp_labels_test:
         raise ValueError("The labels for the training and test datasets do not match - something went wrong. Please check the data loading and scaling steps to ensure consistency between train and test sets.")  
 
-    scalers = {"inputs_scaler": input_dataset.scaler, "fp_scaler": fp_dataset.scaler}
+    scalers = {"inputs_scaler": input_dataset.scaler, "input_names": list(train_scaled_inputs.variable_name.values), "fp_scaler": fp_dataset.scaler}
 
     return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
 
@@ -353,7 +476,7 @@ def evaluate_outputs(test_outpts, true_fp, fp_mask):
 def setup_GATES_model(parameters, training_ctx, paths_ctx):
     lr = parameters["learning_rate"]
 
-    model = GraphSatelliteForecaster(training_ctx.grid, whole_world=False, feature_dim=training_ctx.n_variables, **parameters["model_parameters"])
+    model = GraphSatelliteForecaster(training_ctx.grid, whole_world=False, feature_dim=training_ctx.n_variables, **parameters["model_parameters"], **training_ctx.dynamic_edges_params)
 
     loss_fn = eval(parameters["loss_functions"]["criterion"])
 

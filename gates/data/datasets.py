@@ -16,7 +16,7 @@ import xbatcher.loaders.torch
 
 from .load_data_helper_funs import *
 
-from .load_data import cut_satellite_met, _get_release_idxs, _pad_domain
+from .load_data import _get_release_idxs, _pad_domain
 
 def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None, verbose=False):
     """
@@ -129,245 +129,6 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
     return stacked
 
 
-def get_square_satellite_inputs(data, met_variables, time_deltas=None, static_variables=None, verbose=True, add_timedelta_zero=True):
-    """
-    Refactored version of get_square_satellite_inputs with unified stacking logic and explicit edge-case handling.
-
-    Inputs:
-    - data: LoadSquareSatelliteData object 
-    - met_variables: dict, of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list
-    - time_deltas: list, of t-H hours to extract the met variables. t=0 (ie the time of the satellite measurement) is extracted automatically if add_timedelta_zero is True. time_deltas=[6,12] extracts the data at t=0, t-6h and t-12h.
-    - static_variables: list of static variables to add, eg topog, landcover, lat_coords. You can see or increase the list of valid names get_static_variables_functions()
-    - verbose: bool, if true prints out the steps of the function
-    - add_timedelta_zero: bool, if true adds t=0 to the time_deltas if it is not already present, to ensure that the meteorology at the time of the measurement is included. If false, only the time deltas passed in time_deltas will be extracted
-    
-
-    Returns:
-    - xarray DataArray with dims (fp_time, lat, lon, variable_name)
-    - input data object, which may be updated if indices were removed during meteorology filtering
-
-    Notes:
-    - ``met_variables`` must map variable names to lists of levels. Use an empty list for surface variables.
-    - ``time_deltas`` is normalized to a sorted, unique list and ``0`` is added automatically when ``add_timedelta_zero`` is True.
-    - variables that are requested as surface variables but actually have levels in the meteorology are warned about and skipped.
-    """
-    assert hasattr(data, "dataset_format"), "It doesn't seem this is a SatelliteData object"
-    assert data.met_processed is True, "Make sure that you have loaded and cut the meteorology in the SatelliteData object"
-
-    if type(met_variables) is not dict:
-        raise ValueError("met_variables should be a dict of shape {'variable_name':levels_to_extract, 'surface_variable':[], ...}. For each atmospheric variable with levels, pass the levels to extract as a list. For each surface variable, pass an empty list")
-
-    if time_deltas is None:
-        time_deltas = []
-    else:
-        time_deltas = list(time_deltas)
-
-    if static_variables is None:
-        static_variables = []
-    else:
-        static_variables = list(static_variables)
-
-    if verbose:
-        print("------------------------")
-        print("---EXTRACTING MET DATA---")
-
-    if add_timedelta_zero and 0 not in time_deltas:
-        time_deltas.append(0)
-    time_deltas = sorted(set(time_deltas))
-    if verbose: print(f"Time deltas: {time_deltas}")
-
-    met_variables_needed = list(met_variables.keys())
-    surface_variables_needed = [var_name for var_name, levs in met_variables.items() if levs == []]
-    levels_variables_needed = [var_name for var_name, levs in met_variables.items() if len(levs) > 0]
-    min_levels_needed = sorted({lev for levels in met_variables.values() for lev in levels})
-
-    all_met_files = {}
-    met_nan_idxs = {}
-
-    if len(time_deltas) > 0:
-        if verbose: print(f"extracting met at t-H for H in: {time_deltas}")
-        for delta in time_deltas:
-            if delta == 0:
-                met = data.met
-                met = select_met_levels(met, levels=min_levels_needed.copy())
-                met = select_met_variables(met, variables=met_variables_needed.copy())
-                met = met.swap_dims({"time": "fp_time"})
-                met = met.drop_vars("time", errors="ignore")
-
-                for var in [v for v in met_variables_needed if v in met.data_vars]:
-                    met[var] = met[var].expand_dims("time_delta").assign_coords({"time_delta": ("time_delta", [delta])})
-
-                missing_in_zero = [v for v in met_variables_needed if v not in met.data_vars]
-                for mv in missing_in_zero:
-                    warnings.warn(f"Warning: requested variable {mv} is not available in met data at t=0 and will be skipped")
-            else:
-                if data.dataset_format == "square":
-                    met, nan_idxs = cut_satellite_met(
-                        data.met_file,
-                        data.fp_data_full,
-                        metsize=data.metsize,
-                        time_delta=delta,
-                        relevant_levels=min_levels_needed,
-                        relevant_variables=met_variables_needed,
-                        pad_mode=data.fill_outofdomain_with,
-                        load=False,
-                        add_wind_direction=True,
-                        return_nan_idxs=True,
-                    )
-                    met_nan_idxs[delta] = nan_idxs
-
-                met = met.swap_dims({"time": "fp_time"})
-                met = met.drop_vars("time", errors="ignore")
-                # if met_timestamps is a coordinate or variable, drop it
-                if "met_timestamps" in met.data_vars:
-                    met = met.drop_vars("met_timestamps", errors="ignore")
-
-
-            all_met_files[delta] = met
-            del met
-
-    if time_deltas != list(all_met_files.keys()):
-        warnings.warn(f"the time_deltas passed {time_deltas} are not the same as the time_deltas of the extracted met {list(all_met_files.keys())}. Check that cut_satellite_met is working correctly for the passed time_deltas")
-
-    if len(all_met_files.keys()) == 1:
-        only_delta = list(all_met_files.keys())[0]
-        full_met = all_met_files[only_delta].transpose("fp_time", "lat", "lon", ..., "time_delta")
-    else:
-        full_met = xr.concat(list(all_met_files.values()), dim="time_delta", data_vars=met_variables_needed)
-        full_met = full_met.transpose("fp_time", "lat", "lon", ..., "time_delta")
-    
-    all_nan_idxs = np.unique(np.concatenate([np.atleast_1d(v) for v in met_nan_idxs.values()])) if len(met_nan_idxs) > 0 else np.array([], dtype=int)
-
-    for v in full_met.data_vars:
-        full_met[v] = full_met[v].astype("float32", copy=False)
-
-    wrongly_surface_vars = [
-        var_name
-        for var_name in surface_variables_needed
-        if var_name in full_met.data_vars and "levels" in full_met[var_name].coords
-    ]
-    if len(wrongly_surface_vars) > 0:
-        warnings.warn(
-            "The following variables were passed as surface variables but have levels in meteorology and "
-            f"will be skipped: {wrongly_surface_vars}. Pass explicit levels, e.g. {{'x_wind': [3]}}.",
-            UserWarning,
-        )
-        surface_variables_needed = [v for v in surface_variables_needed if v not in wrongly_surface_vars]
-
-    if len(all_nan_idxs) > 0:
-        full_met = full_met.drop_sel(fp_time=all_nan_idxs)
-        warnings.warn(f"removing {len(all_nan_idxs)} indeces due to problems with interpolating meteorology for the passed time_deltas")
-        data.remove_indeces(all_nan_idxs)
-
-    input_arrays = []
-
-    ### SETTING UP VARIABLES WITH LEVELS
-    if len(levels_variables_needed) > 0:
-        stacked_levels_met = _stack_and_label_variables(
-            full_met,
-            levels_variables_needed,
-            "met_with_levels",
-            met_variables_dict=met_variables,
-            verbose=verbose,
-        )
-
-        if stacked_levels_met is not None:
-            input_arrays.append(stacked_levels_met)
-
-    ### SETTING UP VARIABLES WITH NO LEVELS
-    if len(surface_variables_needed) > 0:
-        stacked_surface_met = _stack_and_label_variables(
-            full_met,
-            surface_variables_needed,
-            "surface_met",
-            verbose=verbose,
-        )
-
-        if stacked_surface_met is not None:
-            input_arrays.append(stacked_surface_met)
-
-    ### SETTING UP NON-MET VARIABLES
-    if len(static_variables) > 0:
-        #if verbose:
-        #   print(f"Setting up static variables: {static_variables}")
-
-        static_variables_functions = get_static_variables_functions()
-
-        if data.dataset_format == "square":
-            (static_ds,) = xr.broadcast(full_met[["lat_coords", "lon_coords"]])
-        elif data.dataset_format == "domain":
-            (static_ds,) = xr.broadcast(
-                full_met.assign({"lat_coords": (("lat"), full_met.lat.values), "lon_coords": (("lon"), full_met.lon.values)})
-                [["lat_coords", "lon_coords", "fp_time"]]
-            )
-            static_ds = static_ds[["lat_coords", "lon_coords"]]
-
-            if "time" not in data.topog.coords:
-                data.topog = data.topog.broadcast_like(static_ds, exclude=["lat", "lon", "landcover_level"])
-                data.topog = data.topog.assign_coords({"lat": static_ds.lat.values, "lon": static_ds.lon.values}).rename({"fp_time": "time"})
-        else:
-            raise ValueError(f"Unsupported dataset_format: {data.dataset_format}")
-
-        for var in static_variables:
-            if var in ["topog", "landcover", "landcover_disaggregated"]:
-                assert hasattr(data, "topog"), "Load topog on the data object before trying to extract this as an input!"
-                static_ds = static_variables_functions[var](data.topog, static_ds)
-            elif "domain" in var:
-                if var in static_variables_functions:
-                    static_ds = static_variables_functions[var](data.fp_data_full, static_ds)
-                else:
-                    warnings.warn(f"variable {var} was not found in the list of known functions and will be skipped")
-            elif var in list(static_variables_functions.keys()) and var not in ["lat_coords", "lon_coords"]:
-                static_ds = static_variables_functions[var](static_ds)
-            elif var not in ["lat_coords", "lon_coords"]:
-                warnings.warn(f"variable {var} was not found in the list of known functions and will be skipped")
-
-        if "lat_coords" not in static_variables:
-            static_ds = static_ds.drop_vars(["lat_coords"], errors="ignore")
-        if "lon_coords" not in static_variables:
-            static_ds = static_ds.drop_vars(["lon_coords"], errors="ignore")
-
-        stacked_static_inputs = _stack_and_label_variables(
-            static_ds,
-            list(static_ds.data_vars),
-            "static",
-            verbose=verbose,
-        )
-
-        if stacked_static_inputs is not None:
-            input_arrays.append(stacked_static_inputs)
-
-    ### FINAL CONCATENATION
-    if len(input_arrays) == 0:
-        raise ValueError(
-            "All requested variables/levels were unavailable after filtering. "
-            "Please check met_variables/static_variables against dataset contents."
-        )
-
-    concatenated_inputs = xr.concat(input_arrays, dim="variable_name")
-    mindex = pd.MultiIndex.from_tuples(concatenated_inputs.variable_name.values, names=["variable", "levels", "time_delta"])
-    concatenated_inputs = concatenated_inputs.assign_coords(xr.Coordinates.from_pandas_multiindex(mindex, "variable_name"))
-
-    concatenated_inputs.attrs = {
-        "source": concatenated_inputs.attrs["source"] if "source" in concatenated_inputs.attrs else "unknown",
-        "time_deltas": time_deltas,
-        "generated on": str(datetime.datetime.now()),
-    }
-    concatenated_inputs = concatenated_inputs.astype("float32", copy=False)
-
-    if concatenated_inputs.sizes.get("variable_name", 0) == 0:
-        raise ValueError(
-            "All requested variables/levels were unavailable after filtering. "
-            "Please check met_variables/static_variables against dataset contents."
-        )
-
-    return concatenated_inputs, data
-
-
-####
-####
-####
-####
 
 ### Transforming and scaling data - inputs
 class XarrayScaler:
@@ -400,6 +161,23 @@ class XarrayScaler:
     def fit_transform(self, da: xr.DataArray) -> xr.DataArray:
         return self.fit(da).transform(da)
     
+
+class GhostScaler:
+    """
+    A placeholder scaler that does not apply any transformation, but has the same interface as the other scalers. Useful for testing and ablation when you want to use the same code but without scaling the inputs.
+    """
+    def __init__(self):
+        self.scaler_type = "ghost"
+        self.scaler_name = "GhostScaler"
+    
+    def fit(self, da: xr.DataArray):
+        return self
+
+    def transform(self, da: xr.DataArray) -> xr.DataArray:
+        return da
+    
+
+
 class XarrayMinMaxScaler:
     """
     A simple scaler for xarray DataArrays that applies minmax transformation. 
@@ -416,16 +194,26 @@ class XarrayMinMaxScaler:
     def fit(self, da: xr.DataArray):
         #if self.min is None or self.max is None:
             #da = da.astype("float32", copy=False)
-        
         if self.min is None:
             self.min = da.min()
             if self.compute:
                 print("Computing min for scaler...")
                 self.min = self.min.compute().astype("float32").values
+                print("min:", self.min)
+                if abs(self.min) > 1e25 or self.min<-50000:
+                    self.min = np.min(da.values).astype("float32")
+                    print("recalculated min from values:", self.min)
         if self.max is None:
             self.max = da.max()
             if self.compute:
+                print("Computing max for scaler...")
                 self.max = self.max.compute().astype("float32").values
+                #self.max = np.max(da.values).astype("float32")
+                print("max:", self.max)
+                if abs(self.max) > 1e25:
+                    self.max = np.max(da.values).astype("float32")
+                    print("recalculated max from values:", self.max)
+
 
         self.params = {"min": self.min, "max": self.max, "feature_range": self.feature_range}
         return self
@@ -446,9 +234,20 @@ class InputsDataset:
     The scaler is fitted on the stored inputs when `fit` is called and can then be applied to compatible inputs via `transform`. When ``fit_on_subsample`` is
     between 0 and 1, only a random subset of ``fp_time`` indices is used for fitting and the selected subset is exposed on ``subsampled_inputs``.
 
+    Inputs:
+    - inputs: xarray DataArray with dims (fp_time, lat, lon, variable_name) containing the input variables to be scaled
+    - scaler: scaler class or string name of scaler class to use. If None, defaults to DefaultInputsScaler. See below for valid scalers.
+    - fit_on_subsample: float between 0 and 1. that determines how many samples to use for fitting the scaler. If a float between 0 and 1, it is the fraction of samples to use. If 1, all samples are used. Default is 1.
+    - scaler_params: dict of parameters to pass to the scaler when initializing it. For example, for DefaultInputsScaler, you can pass {"minmax_variables": ["topog", "land_cover"]} to specify which variables to apply minmax scaling to instead of standard scaling. 
+    - verbose: bool, if true, prints out information about the fitting process
+    - compute: bool, if true, computes the scaler parameters immediately and stores them as numpy arrays. If false, stores them as dask arrays and computes them on demand during transformation. Default is True, which is recommended for most use cases to avoid issues with dask arrays during transformation.
+
+
     Valid scalers:
      - DefaultInputsScaler, applies a standard scaler to each variable across all timesteps per level for meteorological variables, and a minmax scaler to land cover and topog variables
     - HandcraftedInputsScaler (only a placeholder for now), which applies different scalers to different variables based on some predefined logic
+
+
     """
     def __init__(self, inputs: xr.DataArray, scaler=None, fit_on_subsample=1, scaler_params={}, verbose=False, compute=True):
         self.inputs = inputs
@@ -461,10 +260,11 @@ class InputsDataset:
         if scaler is None:
             self.scaler = DefaultInputsScaler(**scaler_params, verbose=self.verbose, compute=self.compute)
         else:
+            scaler = eval(scaler) if isinstance(scaler, str) else scaler
             self.scaler = scaler(**scaler_params)
 
     def fit(self):
-        if self.fit_on_subsample<0 or type(self.fit_on_subsample) not in [int, float] or self.fit_on_subsample>1: 
+        if self.fit_on_subsample<=0 or type(self.fit_on_subsample) not in [int, float] or self.fit_on_subsample>1: 
             raise ValueError(f"fit_on_subsample should be a float between 0 and 1, but got {self.fit_on_subsample}. Please provide a valid value for fit_on_subsample.")
         elif self.fit_on_subsample<1:
             times = pd.DatetimeIndex(self.inputs.fp_time.values)
@@ -500,11 +300,20 @@ class DefaultInputsScaler:
     Default input scaler for the stacked input ``xarray.DataArray``.
 
     Meteorological variables are standardized per variable and level (ie across all time deltas).
-    Variables listed in ``minmax_variables`` are scaled with min-max scaling. The fitted scalers are stored by full variable tuple, and `transform` returns a new DataArray
-    named ``stacked_transformed_inputs`` with the same dims and ``variable_name`` labels as the inputs.
+    Variables listed in `minmax_variables` are scaled with min-max scaling. The fitted scalers are stored by full variable tuple, and `transform` returns a new DataArray named `stacked_transformed_inputs` with the same dims and `variable_name` labels as the inputs. 
+    Variables listed in `ignore_variables` are not transformed, but are still included in the output and have a GhostScaler assigned to them in self.scalers for consistency. If any variable is listed in both minmax_variables and ignore_variables, it will be ignored and a warning will be printed.
     """
-    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords", "xy_distance_centre", "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords"], verbose=True, compute=True):
+    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords", "xy_distance_centre", "earth_distance_centre", "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords"], ignore_variables=[], verbose=True, compute=True):
+
+        self.ignore_variables = ignore_variables
+
+        # remove any variables from minmax that are in ignore_variables, and warn about it
+        if len(set(minmax_variables).intersection(set(ignore_variables))) > 0:
+            ignored_minmax_vars = set(minmax_variables).intersection(set(ignore_variables))
+            minmax_variables = [v for v in minmax_variables if v not in ignored_minmax_vars]
+
         self.minmax_variables = minmax_variables
+        
         self.scalers = {}
         self.scaler_name = "DefaultInputsScaler"
         self.verbose = verbose
@@ -513,13 +322,26 @@ class DefaultInputsScaler:
     def fit(self, inputs: xr.DataArray):
 
         variable_names = inputs.variable_name.values
-        varnames = [var[0] for var in inputs.variable_name.values]
-        varnames = np.unique(varnames)
-        self.fitted_variable_names = list(variable_names)
+        varnames = []
+        for var in variable_names:
+            if var[0] not in varnames:
+                varnames.append(var[0])
+        #varnames = np.unique(varnames)
+        self.full_variable_names = list(variable_names)
+        self.fitted_variable_names = varnames
+        #print(varnames)
 
-        for varname in np.unique(varnames):
+        for varname in varnames: #np.unique(varnames):
             var_data = inputs.sel(variable=varname)
-            if varname in self.minmax_variables:
+            if varname in self.ignore_variables:
+                if self.verbose: print(f"Not transforming variable {varname} because it is in ignore_variables")
+                scaler = GhostScaler()
+                for vc in variable_names:
+                    if vc[0] == varname and len(vc)==3:
+                        self.scalers[vc] = scaler
+                
+
+            elif varname in self.minmax_variables:
                 if self.verbose: print(f"fitting minmax scaler for var {varname}")
                 scaler = XarrayMinMaxScaler(compute=self.compute)
                 scaler = scaler.fit(var_data)
@@ -528,6 +350,8 @@ class DefaultInputsScaler:
                 for vc in variable_names:
                     if vc[0] == varname and len(vc)==3:
                         self.scalers[vc] = scaler
+
+                        #print(f"saved minmax scaler for variable {vc}")
                 
             else:
                 if self.verbose: print(f"fitting standardise scaler for var {varname}")
@@ -543,19 +367,26 @@ class DefaultInputsScaler:
                     for vc in variable_names:
                         if vc[0] == varname and vc[1] == level and len(vc)==3:
                             self.scalers[vc] = scaler
+                        
+                            #print(f"saved standardise scaler for variable {vc}")
+            
+
 
         
     def transform(self, inputs: xr.DataArray) -> xr.DataArray:
         variable_names = inputs.variable_name.values
-        for varname in variable_names:
-            if varname not in self.fitted_variable_names:
-                raise ValueError(f"Variable name {varname} in inputs is not in the variable names that were fitted on: {self.fitted_variable_names}. Please fit the scaler on data that contains all the variable names in the inputs.")
 
+        for var in variable_names:
+            if var not in self.full_variable_names:
+                raise ValueError(
+                    f"Variable name {var} in inputs is not in the variable names that were fitted on: {self.full_variable_names}. "
+                    "Please make sure that the inputs you are trying to transform have the same variable names as the inputs you fitted the scaler on."
+                )
         transformed = inputs.copy()
         
         transformed_variables = []
 
-        for varname in np.unique(variable_names):
+        for varname in variable_names:
             #print(f"Transforming {varname}")
             var_data = inputs.sel(variable_name=varname)
             
@@ -761,10 +592,13 @@ class FootprintDataset:
     """
     Wrapper around footprint data that applies a footprint scaler.
 
-    The dataset accepts either an ``xarray.DataArray`` or an ``xarray.Dataset`` containing
-    a variable named ``fp``. ``fit`` fits the underlying scaler, ``transform`` returns a
-    Dataset containing ``fp_transformed`` and ``fp_original``, and ``inverse_transform``
-    accepts either the Dataset returned by ``transform`` or the transformed DataArray.
+    The dataset accepts either an ``xarray.DataArray`` or an ``xarray.Dataset`` containing a variable named ``fp``.
+    ``fit`` fits the underlying scaler, ``transform`` returns a
+    Dataset containing ``fp_transformed`` and ``fp_original``, and ``inverse_transform`` accepts either the Dataset returned by ``transform`` or the transformed DataArray.
+
+    Valid scalers:
+    - LogAndShiftMeanFpScaler (default): takes the mean of the log of fp data where non-zero, and offsets the log of the data by the mean, so that the mean of the logged data is at zero
+    - LogAndShiftFpScaler: takes log of fp data where non-zero, and offsets by minimum order-of-magnitude value so its strictly positive
     """
 
     def __init__(self, fp, scaler=None, scaler_params={}, add_nan_mask=False, verbose=False):
@@ -1485,6 +1319,11 @@ def get_square_satellite_inputs_v2(
                     static_ds = static_variables_functions[var](data.fp_data_full, static_ds)
                 else:
                     warnings.warn(f"variable {var} was not found and will be skipped")
+            elif "earth" in var:
+                if var in static_variables_functions:
+                    static_ds = static_variables_functions[var](data.fp_xr, static_ds)
+                else:
+                    warnings.warn(f"variable {var} was not found and will be skipped")
             elif var in static_variables_functions and var not in ["lat_coords", "lon_coords"]:
                 static_ds = static_variables_functions[var](static_ds)
             elif var not in ["lat_coords", "lon_coords"]:
@@ -1530,5 +1369,21 @@ def get_square_satellite_inputs_v2(
             "All requested variables/levels were unavailable after filtering. "
             "Please check met_variables/met_levels/static_variables against dataset contents."
         )
+    
+    len_inputs_before = len(concatenated_inputs.fp_time)
+
+    if len(concatenated_inputs.fp_time) < len_inputs_before:
+        warnings.warn(
+            f"Dropped {len_inputs_before - len(concatenated_inputs.fp_time)} duplicate fp_time entries after concatenating inputs. "
+            "The duplicates have been dropped, but you may want to investigate the underlying met timestamp issues for those fp_time entries."
+        )
+        len_fp_before = len(data.fp_xr.time)
+        data.fp_xr = data.fp_xr.sel(time=concatenated_inputs.fp_time.values)
+        print(f"Filtered fp_xr to keep only {len(data.fp_xr.time)} unique time steps (from the original number of samples {len_fp_before})")
+
+
+
+
+
 
     return concatenated_inputs, data

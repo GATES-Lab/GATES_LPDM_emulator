@@ -1,30 +1,44 @@
 #!/bin/bash
 #SBATCH --partition=gpu
-#SBATCH --mem=300GB
+#SBATCH --mem=180GB
 #SBATCH --gres=gpu:1
-#SBATCH --job-name=train
-#SBTACH --output=train
-#SBATCH --time=24:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=5
+#SBATCH --job-name=gatesimports2_SAHARA_dynamic_wind__latlon_dist_deg2rad
+#SBATCH --time=18:00:00
 #SBATCH --account=SEMT030444
+#SBATCH --export=NONE
 #SBATCH --exclude=bp1-gpu030,bp1-gpu035
-#### this is specific to the University of Bristol's BluePebble
-#### make sure you modify to remove/add any relevant modules
 
-## chem007981  SEMT030444 
-
-# the two gpus above seem to have a different version of cuda! avoid
-
-echo "activate env"
-# activate your own environment here
-source ~/initConda.sh
-conda activate /user/work/yl18410/graphnet_bp_220324_backup
+## chem007981 SEMT030444
 
 
-echo "loading modules"
-module load cuda/12.4.1
-module load cudnn/8.9.7.29-12
-#module add languages/python/3.12.9.tensorflow-2.16.1
 
+export PYTHONNOUSERSITE=1
+eval "$(conda shell.bash hook)"
+conda init
+conda activate new_gates_env
+
+echo "cpus-per-task: $SLURM_CPUS_PER_TASK"
+echo "gpus: $SLURM_GPUS"
+echo "memory: $SLURM_MEM_PER_NODE"
+echo "job name: $SLURM_JOB_NAME"
+echo "ntasks: $SLURM_NTASKS"
+
+echo "starting from new_gates_env, activating in file also"
+echo "Active env: ${CONDA_DEFAULT_ENV:-none}"
+echo "Python path: $(which python)"
 
 echo "train"
-python general_train_nawid.py parameter_template_train_small.json --file_path parameter_files/
+export WANDB_NAME="${SLURM_JOB_ID}_${SLURM_JOB_NAME}"
+export WANDB_NOTES="Launch settings - cpus-per-task: $SLURM_CPUS_PER_TASK, memory: $SLURM_MEM_PER_NODE"
+
+python train_GATES_model.py NEW_parameter_template_gpu_new_edge_exps_4.json
+echo "done test job"
+
+
+
+
+
+
+

@@ -1,3 +1,6 @@
+import faulthandler
+faulthandler.enable()
+
 import sys
 
 
@@ -12,17 +15,6 @@ import copy
 import wandb
 
 
-sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
-sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
-from model.layers.encoder import *
-from model.layers.decoder import *
-from model.layers.processor import *
-from model.layers.graph_net_block import *
-#from model.data.dataloader_graphnet import *
-#from model.data.load_data import *
-from model.loss_functions import *
-
-
 
 import time
 from datetime import datetime
@@ -33,11 +25,14 @@ import random
 from pathlib import Path
 
 import gates.training.training as gates_training
-import gates
+
+#import gates
+from gates.config import get_config
 from gates.data.load_data import get_grid
 from gates.training.training_dataclasses import PathContext, TrainingContext
 
 from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility
+
 
 
 def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
@@ -47,16 +42,15 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
 
     Args:
         model (torch.nn.Module): The model to train.
-        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, labels, true_fp).
-        model_ctx (ModelContext): Context object containing model configuration and training parameters.
-        paths_ctx (PathContext): Context object containing file paths for logging and saving.
+        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, fp).
+        model_ctx (ModelContext): Context object containing optimizer, loss functions, device, and epoch settings.
         epoch (int): The current epoch number, used for progress logging.
-
-        device (torch.device): The device (CPU or GPU) on which to run computation.
-        epoch (int): The current epoch number, used for progress logging.
+        paths_ctx (PathContext, optional): Context object containing file paths for logging.
 
     Returns:
-        float: The mean display loss across all batches in the epoch.
+        tuple:
+            - float: The mean display loss (criterion_test) across all batches.
+            - float: The mean training loss (criterion) across all batches.
     """
     model.train()
     running_loss = 0.0
@@ -106,14 +100,13 @@ def validate_and_predict(model, model_ctx, loader):
 
     Args:
         model (torch.nn.Module): The model to evaluate.
-        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, labels).
-        criterion_test (callable): The loss function used to score predictions against labels.
-        device (torch.device): The device (CPU or GPU) on which to run computation.
+        model_ctx (ModelContext): Context object providing criterion_test and device.
+        loader (torch.utils.data.DataLoader): DataLoader providing batches of (inputs, fp).
 
     Returns:
         tuple:
-            - float: The mean loss across all batches.
-            - np.ndarray: A 2D array of shape (total_samples, features) containing all model predictions.
+            - float: The mean loss (criterion_test) across all batches.
+            - np.ndarray: Array of shape (total_samples, flat_lat_lon) containing all model predictions.
     """
     model.eval()
     test_error = 0.0
@@ -155,28 +148,17 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
     Args:
         model (torch.nn.Module): The model to train.
-        parameters (dict): A dictionary of training configuration values. Expected keys include:
-            - 'learning_rate' (float): The learning rate used for logging in checkpoints.
-            - 'epochs' (dict): Sub-keys 'training' (int), 'visualize' (int), 'model_saving' (int),
-              and 'patience' (int) controlling loop behaviour.
+        model_ctx (ModelContext): Context object containing optimizer, loss functions, device, epoch
+            counts, early stopping, and W&B flag.
+        training_ctx (TrainingContext): Context object containing scalers, grid, image plot indices,
+            dates, and other training-time metadata.
+        paths_ctx (PathContext): Context object containing all file paths for logs, plots, and checkpoints.
         train_loader (torch.utils.data.DataLoader): DataLoader for the training set.
         test_loader (torch.utils.data.DataLoader): DataLoader for the validation/test set.
-        optimizer (torch.optim.Optimizer): The optimiser used to update model weights.
-        criterion (callable): The training loss function, called as criterion(outputs, labels, true_fp).
-        criterion_test (callable): A secondary loss function used for validation and display metrics.
-        test_dataset: A dataset object exposing fp, inverse_transform(), and evaluate() / evaluate_flux() methods.
-        test_data: An object exposing met.time.values, used when exporting results to NetCDF.
-        device (torch.device): The device (CPU or GPU) on which to run computation.
-        epoch_so_far (int): The epoch count to start from, allowing training to resume from a checkpoint.
+        test_fp_dataset (xr.Dataset): Dataset holding the test footprints; predictions are written
+            into this object each epoch for evaluation and plotting.
         losses (dict): A dictionary of lists used to accumulate per-epoch metrics across the run.
-        flux_evaluation (list of str): Flux evaluation mode names (e.g. "uniform", "checkerboard_10") passed to evaluate_flux().
-        image_plots (list of int): Indices of test samples to visualise at each visualisation epoch.
-        image_dates (list of str): Date strings corresponding to each index in image_plots.
-        size (tuple of int): Spatial dimensions (height, width) used to reshape predictions for plotting and export.
-        path (str): Base directory path for saving logs, plots, and checkpoints.
-        model_name (str): The model name used for subfolder paths, filenames, and W&B artifact names.
-        NMAE_function (callable): A function to compute the Normalised Mean Absolute Error,
-            called as NMAE_function(predictions, truths).
+        epoch_so_far (int): The epoch count to start from, allowing training to resume from a checkpoint.
 
     Returns:
         None
@@ -249,7 +231,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "LossFn/train": avg_train_transformed_loss,
                 **list_of_metrics,}
             
-            wandb.log(logging_dict, step=epoch)
+            wandb.log(logging_dict)
 
             # wandb.log({
             #     "epoch": epoch + 1,
@@ -277,7 +259,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             img_save_path = save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
         if epoch % (3*model_ctx.epochs_visualise) == 0:
             if model_ctx.use_wandb:
-                wandb.log({f"fps_epoch_{epoch}": wandb.Image(img_save_path)}, step=epoch)
+                wandb.log({"epoch": epoch, "training_plots": wandb.Image(img_save_path)})
 
 
 
@@ -329,8 +311,8 @@ def train_and_save_model(parameters, model_save_dir):
 
     ### setting up
     use_wandb = parameters.get('use_wandb', False)  
-
-    cfg = gates.config.get_config()
+    
+    #cfg = get_config()
 
     verbose = parameters.get("verbose", True)
 
@@ -338,6 +320,7 @@ def train_and_save_model(parameters, model_save_dir):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_name = f"{parameters['model_name']}_{timestamp}"
     model_path = Path(model_save_dir) / model_name
+    parameters["start_time"] = timestamp
     print(f"Initialising model run for model_name: {model_name}")
 
     # the paths are all stored in this dataclass (e.g. paths_ctx.model_path)
@@ -396,11 +379,12 @@ def train_and_save_model(parameters, model_save_dir):
         train_fp_data = data.fp_xr
 
     if load_monthly:
-        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))
+        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
         train_fp_data = data
 
-    write_to_file(f"Successfully load training met and fp data with {len(train_fp_data.time)} time samples", paths_ctx.updates_path)
-    print("Successfully load training met and fp data with", len(train_fp_data.time), "time samples")
+    write_to_file(f"Successfully loaded training met and fp data with {len(train_fp_data.time)} time samples. Loading test data", paths_ctx.updates_path)
+    print("Successfully loaded training met and fp data with", len(train_fp_data.time), "time samples")
+    print("Loading test data")
 
     if not load_monthly:
         test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
@@ -435,16 +419,19 @@ def train_and_save_model(parameters, model_save_dir):
         train_inputs = train_inputs.compute()  # if using dask arrays, this will load into memory; if already numpy arrays, this does nothing
         print(f"    computing test inputs, with size {test_inputs.nbytes / 1e9:.2f} GB")
         test_inputs = test_inputs.compute()
-        print("    NOT computing training fp data (should already be in mem)")
+        print("computing training fp data (although it should already be in mem)")
         #data.fp_xr = data.fp_xr.compute()
-        print("   NOT computing test fp data (should already be in mem)")
+        train_fp_data = train_fp_data.compute()
+        print("computing test fp data (although it should already be in mem)")
         #test_data.fp_xr = test_data.fp_xr.compute()
+        test_fp_data = test_fp_data.compute()
 
     write_to_file("scaling data and setting up dataloaders", paths_ctx.updates_path)
 
     if cluster is not None:
-        cluster.close()
-        client.close()
+        print("closing client before cluster!")
+        client.close()    # drain and disconnect first
+        cluster.close()   # then shut down the workers
         # closes the dask clients and frees up the memory for other workers
 
     #inputs_dataset = gates_training.setup_input_dataset(parameters, train_inputs)
@@ -468,9 +455,26 @@ def train_and_save_model(parameters, model_save_dir):
     grid, _ = get_grid(train_fp_data, parameters.get("grid_reference_fp"))
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
                            description="Grid object used during training", use_wandb=use_wandb)
-    
+    print("dyanmic edges parameters:", parameters.get("dynamic_edges", None))
 
-    training_ctx = TrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values)) # get size from train params
+    
+    # parameters["dynamic_edges"] can be None (default), a dict (with specific dynamic edge settings), or True (which defaults to dynamic wind edges)
+
+    if parameters.get("dynamic_edges", None) is not None:
+        # if its a dict
+        if isinstance(parameters["dynamic_edges"], dict):
+            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"], **parameters["dynamic_edges"])
+
+        elif parameters.get("dynamic_edges") is True:
+            dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"])
+        
+        else:
+            dynamic_edges_params = {}
+    else:
+        dynamic_edges_params = {}
+            
+
+    training_ctx = TrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values), dynamic_edges_params) # get size from train params
 
  
     ########################
@@ -488,41 +492,24 @@ def train_and_save_model(parameters, model_save_dir):
 
     losses = gates_training.initialise_losses()
 
+    if use_wandb:
+        wandb.define_metric("epoch")
+        wandb.define_metric("MSE/*", step_metric="epoch")
+        wandb.define_metric("train/*", step_metric="epoch")
+        wandb.define_metric("test/*", step_metric="epoch")
+        wandb.define_metric("LossFn/*", step_metric="epoch")
+        wandb.define_metric("metrics_*", step_metric="epoch")
+        wandb.define_metric("training_plots", step_metric="epoch")
+
+        if "metrics_fluxes_static" in losses:
+            for flux_mode, flux_metrics in losses["metrics_fluxes_static"].items():
+                for metric_name in flux_metrics:
+                    wandb.define_metric(f"metrics_fluxes_static/{flux_mode}/{metric_name}", step_metric="epoch")
+
     print("successfully set up the model!!! starting training loop")
     
     run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, test_loader, test_scaled_fp, losses, epoch_so_far=0)
 
-
-    # lr = parameters["learning_rate"]
-    # print(lr)
-
-    # feature_dim = np.shape(inputs)[-1]
-    # aux_dim = 0
-
-    # model = GraphSatelliteForecaster(grid, whole_world=False, feature_dim=feature_dim, aux_dim=aux_dim, **parameters["model_parameters"])
-    # criterion = eval(parameters["loss_functions"]["criterion"])
-    # criterion_test = eval(parameters["loss_functions"]["criterion_test"])
-    # optimizer = optim.AdamW(model.parameters(), lr=lr)
-    # flux_evaluation = ["uniform", "checkerboard_10", "checkerboard_5"]
-    # losses = {"train": [], "test": [], "NMAE_test": [], "MSE_test_transformed": [], "NMAE_test_transformed": [], "accuracy": [], "IoU": []}
-    # losses.update({f"flux_{f}": {"MAE": [], "R2": []} for f in flux_evaluation})
-
-
-    # if use_wandb:
-    #     wandb.watch(model, log="all", log_freq=100)
-
-    # epoch_so_far = 0
-    # if torch.cuda.is_available():
-    #     model.cuda()
-
-    # run_full_training(model, parameters, train_loader, test_loader, optimizer, criterion, criterion_test,
-    #                   test_dataset, test_data, device, epoch_so_far, losses,
-    #                   flux_evaluation, image_plots, image_dates, size, path, model_name, NMAE_function=NMAE_function)
-
-    # if use_wandb:
-    #     wandb.finish()
-
-    ## save checkpoint every 50 epochs
 
 if __name__ == "__main__":  
 
@@ -534,7 +521,7 @@ if __name__ == "__main__":
     file_name = args.file_name
     file_path = args.file_path
 
-    cfg = gates.config.get_config()
+    cfg = get_config()
 
     if file_path is None:
         file_path = cfg.parameter_files_dir
