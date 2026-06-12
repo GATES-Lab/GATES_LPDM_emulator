@@ -378,8 +378,10 @@ class DefaultInputsScaler:
 
         for var in variable_names:
             if var not in self.full_variable_names:
-                raise ValueError(f"Variable name {varname} in inputs is not in the variable names that were fitted on: {self.full_variable_names}. Please make sure that the inputs you are trying to transform have the same variable names as the inputs you fitted the scaler on.")
-
+                raise ValueError(
+                    f"Variable name {var} in inputs is not in the variable names that were fitted on: {self.full_variable_names}. "
+                    "Please make sure that the inputs you are trying to transform have the same variable names as the inputs you fitted the scaler on."
+                )
         transformed = inputs.copy()
         
         transformed_variables = []
