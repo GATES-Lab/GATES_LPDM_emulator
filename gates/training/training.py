@@ -32,7 +32,7 @@ import wandb
 from gates.model.forecast import GraphSatelliteForecaster
 
 
-from gates import LoadSquareSatelliteData, get_square_satellite_inputs
+from gates import LoadSquareSatelliteData
 import gates.data.datasets as gates_datasets
 from gates.data.datasets import get_square_satellite_inputs_v2
 import gates.evaluation.metrics as gates_metrics
