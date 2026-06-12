@@ -64,7 +64,7 @@ from gates.training.training import load_GATES_data, make_cluster, setup_dynamic
 from gates.training.training_helperfuns import load_parameter_file
 from gates.training.training_dataclasses import PathContext
 
-from model.forecast import GraphSatelliteForecaster
+from gates.model.forecast import GraphSatelliteForecaster
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +311,8 @@ class GATESPredictor:
                 dynamic_edges_params = setup_dynamic_edges(input_names=scalers["input_names"], **training_params["dynamic_edges"])
             elif training_params.get("dynamic_edges") is True:
                 dynamic_edges_params = setup_dynamic_edges(input_names=scalers["input_names"])
+            else:
+                dynamic_edges_params = {}
         else:
             dynamic_edges_params = {}
 

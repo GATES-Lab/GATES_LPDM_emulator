@@ -468,6 +468,8 @@ def train_and_save_model(parameters, model_save_dir):
         elif parameters.get("dynamic_edges") is True:
             dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"])
         
+        else:
+            dynamic_edges_params = {}
     else:
         dynamic_edges_params = {}
             

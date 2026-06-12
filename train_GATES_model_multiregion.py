@@ -655,6 +655,8 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
             dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"], **parameters["dynamic_edges"])
         elif parameters.get("dynamic_edges") is True:
             dynamic_edges_params = gates_training.setup_dynamic_edges(input_names=scalers["input_names"])
+        else:
+            dynamic_edges_params = {}
     else:
         dynamic_edges_params = {}
 
