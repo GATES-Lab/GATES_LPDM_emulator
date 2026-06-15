@@ -49,7 +49,7 @@ from model.layers.graph_net_block import *
 #from model.data.load_data import *
 from model.loss_functions import *
 
-from gates.training.training_background import format_aux_data, normalize_boundary_data
+from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 
 import time
 from datetime import datetime
@@ -72,12 +72,6 @@ from gates.training.training_helperfuns import load_parameter_file, save_object,
 # Training loop
 # ---------------------------------------------------------------
 
-def _denormalize(tensor, output_norm):
-    """Map normalised boundary values back to physical units using (mean, std)."""
-    mean, std = output_norm
-    return tensor * std + mean
-
-
 def _denormalized_mae_per_class(outputs, labels, output_norm):
     """Per-class MAE in denormalised (physical) units; returns shape (num_classes,).
 
@@ -85,7 +79,8 @@ def _denormalized_mae_per_class(outputs, labels, output_norm):
     so each boundary direction (e.g. north/south/east/west when num_classes=4) is
     reported separately. The overall MAE is just the mean of these.
     """
-    diff = torch.abs(_denormalize(outputs, output_norm) - _denormalize(labels, output_norm))
+    mean, std = output_norm
+    diff = torch.abs(denormalize(outputs, mean, std) - denormalize(labels, mean, std))
     return diff.reshape(diff.shape[0], -1).mean(dim=0)
 
 
