@@ -78,22 +78,30 @@ def _denormalize(tensor, output_norm):
     return tensor * std + mean
 
 
-def _denormalized_mae(outputs, labels, output_norm):
-    """Mean absolute error between predictions and labels in denormalised (physical) units."""
-    return torch.mean(torch.abs(_denormalize(outputs, output_norm) - _denormalize(labels, output_norm)))
+def _denormalized_mae_per_class(outputs, labels, output_norm):
+    """Per-class MAE in denormalised (physical) units; returns shape (num_classes,).
+
+    Averages the absolute error over the batch, keeping the output (class) dimension,
+    so each boundary direction (e.g. north/south/east/west when num_classes=4) is
+    reported separately. The overall MAE is just the mean of these.
+    """
+    diff = torch.abs(_denormalize(outputs, output_norm) - _denormalize(labels, output_norm))
+    return diff.reshape(diff.shape[0], -1).mean(dim=0)
 
 
 def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device, epoch, output_norm=None):
     """Run one training epoch.
 
-    Returns the average normalised criterion_test loss and, when ``output_norm``
-    (the (mean, std) used to normalise the boundary outputs) is provided, the
-    average MAE computed in denormalised (physical) units. The denormalised MAE
-    is ``None`` when ``output_norm`` is not given.
+    Returns ``(avg_loss, avg_mae_denorm, avg_mae_denorm_per_class)``. ``avg_loss`` is
+    the mean normalised criterion_test loss. When ``output_norm`` (the (mean, std)
+    used to normalise the boundary outputs) is provided, ``avg_mae_denorm`` is the
+    overall MAE in denormalised (physical) units and ``avg_mae_denorm_per_class`` is
+    a numpy array of the per-class (per-direction) MAE; both are ``None`` otherwise.
     """
     model.train()
     running_loss = 0.0
     running_mae_denorm = 0.0
+    running_mae_per_class = None
     start_time = time.time()
     n_batches = 0
 
@@ -110,7 +118,9 @@ def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device,
             display_loss = criterion_test(outputs, labels)
             running_loss += display_loss.item()
             if output_norm is not None:
-                running_mae_denorm += _denormalized_mae(outputs, labels, output_norm).item()
+                per_class = _denormalized_mae_per_class(outputs, labels, output_norm).cpu().numpy()
+                running_mae_per_class = per_class if running_mae_per_class is None else running_mae_per_class + per_class
+                running_mae_denorm += float(per_class.mean())
 
         n_batches += 1
 
@@ -121,22 +131,29 @@ def train_one_epoch(model, loader, optimizer, criterion, criterion_test, device,
             print(f"{msg} Time: {time.time()-start_time:.1f}s")
 
     avg_loss = running_loss / max(n_batches, 1)
-    avg_mae_denorm = running_mae_denorm / max(n_batches, 1) if output_norm is not None else None
-    return avg_loss, avg_mae_denorm
+    if output_norm is not None:
+        avg_mae_denorm = running_mae_denorm / max(n_batches, 1)
+        avg_mae_denorm_per_class = running_mae_per_class / max(n_batches, 1)
+    else:
+        avg_mae_denorm = None
+        avg_mae_denorm_per_class = None
+    return avg_loss, avg_mae_denorm, avg_mae_denorm_per_class
 
 
 @torch.no_grad()
 def validate_and_predict(model, loader, criterion_test, device, output_norm=None):
     """Validate the model.
 
-    Returns ``(avg_loss, avg_mae_denorm, preds)`` where ``avg_loss`` is the mean
-    normalised criterion_test loss, ``avg_mae_denorm`` is the mean absolute error in
-    denormalised (physical) units (``None`` if ``output_norm`` is not provided),
-    and ``preds`` are the (normalised) predictions stacked across batches.
+    Returns ``(avg_loss, avg_mae_denorm, avg_mae_denorm_per_class, preds)``. ``avg_loss``
+    is the mean normalised criterion_test loss; ``avg_mae_denorm`` is the overall MAE in
+    denormalised (physical) units and ``avg_mae_denorm_per_class`` is the per-class
+    (per-direction) MAE as a numpy array (both ``None`` if ``output_norm`` is not
+    provided); ``preds`` are the (normalised) predictions stacked across batches.
     """
     model.eval()
     test_error = 0.0
     test_mae_denorm = 0.0
+    test_mae_per_class = None
     preds_list = []
     n_batches = 0
 
@@ -146,17 +163,24 @@ def validate_and_predict(model, loader, criterion_test, device, output_norm=None
 
         test_error += criterion_test(outputs, labels).item()
         if output_norm is not None:
-            test_mae_denorm += _denormalized_mae(outputs, labels, output_norm).item()
+            per_class = _denormalized_mae_per_class(outputs, labels, output_norm).cpu().numpy()
+            test_mae_per_class = per_class if test_mae_per_class is None else test_mae_per_class + per_class
+            test_mae_denorm += float(per_class.mean())
         pred_np = outputs.cpu().numpy().reshape(outputs.shape[0], -1)
         preds_list.append(pred_np)
         n_batches += 1
 
     avg_error = test_error / max(n_batches, 1)
-    avg_mae_denorm = test_mae_denorm / max(n_batches, 1) if output_norm is not None else None
-    return avg_error, avg_mae_denorm, np.vstack(preds_list)
+    if output_norm is not None:
+        avg_mae_denorm = test_mae_denorm / max(n_batches, 1)
+        avg_mae_denorm_per_class = test_mae_per_class / max(n_batches, 1)
+    else:
+        avg_mae_denorm = None
+        avg_mae_denorm_per_class = None
+    return avg_error, avg_mae_denorm, avg_mae_denorm_per_class, np.vstack(preds_list)
 
 
-def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx, paths_ctx, losses, output_norm=None):
+def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx, paths_ctx, losses, output_norm=None, class_names=None):
     """
     Executes the full training loop with early stopping and checkpointing,
     using context dataclasses for configuration.
@@ -175,26 +199,34 @@ def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx,
         output_norm (tuple, optional): The (mean, std) used to normalise the boundary
             outputs. When provided, the train/test MAE in denormalised (physical) units
             is also computed and logged under the 'train_mae_denorm'/'test_mae_denorm' keys.
+        class_names (list[str], optional): Names of the output classes/directions
+            (e.g. ["north","south","east","west"] for num_classes=4). When given with
+            more than one class, the per-direction denormalised MAE is also logged.
 
     Returns:
         None
     """
     # Track the denormalised (physical-unit) MAE alongside the normalised loss.
+    log_per_class = output_norm is not None and class_names is not None and len(class_names) > 1
     if output_norm is not None:
         losses.setdefault("train_mae_denorm", [])
         losses.setdefault("test_mae_denorm", [])
+    if log_per_class:
+        for name in class_names:
+            losses.setdefault(f"train_mae_denorm_{name}", [])
+            losses.setdefault(f"test_mae_denorm_{name}", [])
 
     updates_path = paths_ctx.model_path / f"{paths_ctx.model_name}_updates.txt"
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx
         print(f"\n--- Start Epoch: {epoch} ---")
 
-        avg_train_loss, avg_train_mae_denorm = train_one_epoch(
+        avg_train_loss, avg_train_mae_denorm, avg_train_mae_per_class = train_one_epoch(
             model, train_loader, model_ctx.optimizer,
             model_ctx.criterion, model_ctx.criterion_test,
             model_ctx.device, epoch, output_norm=output_norm
         )
-        avg_test_loss, avg_test_mae_denorm, _ = validate_and_predict(
+        avg_test_loss, avg_test_mae_denorm, avg_test_mae_per_class, _ = validate_and_predict(
             model, test_loader, model_ctx.criterion_test, model_ctx.device, output_norm=output_norm
         )
 
@@ -203,6 +235,10 @@ def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx,
         if output_norm is not None:
             losses["train_mae_denorm"].append(avg_train_mae_denorm)
             losses["test_mae_denorm"].append(avg_test_mae_denorm)
+        if log_per_class:
+            for c, name in enumerate(class_names):
+                losses[f"train_mae_denorm_{name}"].append(float(avg_train_mae_per_class[c]))
+                losses[f"test_mae_denorm_{name}"].append(float(avg_test_mae_per_class[c]))
 
         if training_ctx.use_wandb:
             log_dict = {
@@ -213,6 +249,10 @@ def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx,
             if output_norm is not None:
                 log_dict["train/mae_denorm"] = avg_train_mae_denorm
                 log_dict["test/mae_denorm"] = avg_test_mae_denorm
+            if log_per_class:
+                for c, name in enumerate(class_names):
+                    log_dict[f"train/mae_denorm_{name}"] = float(avg_train_mae_per_class[c])
+                    log_dict[f"test/mae_denorm_{name}"] = float(avg_test_mae_per_class[c])
             wandb.log(log_dict, step=epoch)
 
         model_ctx.early_stopping(avg_test_loss, model)
@@ -227,6 +267,11 @@ def run_full_training(model, train_loader, test_loader, model_ctx, training_ctx,
                 f", Train MAE (denorm): {avg_train_mae_denorm:.4e}, "
                 f"Test MAE (denorm): {avg_test_mae_denorm:.4e}"
             )
+        if log_per_class:
+            per_dir = ", ".join(
+                f"{name}: {float(avg_test_mae_per_class[c]):.4e}" for c, name in enumerate(class_names)
+            )
+            update_msg += f" | Test MAE (denorm) per direction -> {per_dir}"
         write_to_file(update_msg, updates_path)
 
         if epoch % model_ctx.epochs_save == 0:
@@ -363,9 +408,13 @@ def train_and_save_model(parameters, model_save_dir):
     if num_classes == 1:
         train_bgs = train_bgs[["summed"]].to_dataarray()
         test_bgs = test_bgs[["summed"]].to_dataarray()
+        class_names = ["summed"]
     elif num_classes == 4:
         train_bgs = train_bgs[["north", "south", "east", "west"]].to_dataarray()
         test_bgs = test_bgs[["north", "south", "east", "west"]].to_dataarray()
+        class_names = ["north", "south", "east", "west"]
+    else:
+        class_names = [f"class_{i}" for i in range(num_classes)]
     
     write_to_file(f"Successfully loaded test data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
@@ -458,7 +507,8 @@ def train_and_save_model(parameters, model_save_dir):
         training_ctx=training_ctx,
         paths_ctx=paths_ctx,
         losses=losses,
-        output_norm=norm_vals["outputs"]
+        output_norm=norm_vals["outputs"],
+        class_names=class_names
     )
 
     if use_wandb:

@@ -5,7 +5,7 @@
     "parallel_loading": true,
     "load_into_memory": true,
     "train_load_data" : {
-        "years":["2014", "2015", "2016"],
+        "years":["2014"],
         "months":["01","02","03","04", "05","06","07","08","09","10","11","12"],
         "freq":3,
         "region":"BRAZIL",
@@ -34,6 +34,7 @@
         "static_variables":["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "x_coords", "y_coords", "topog","normalised_time_of_year","normalised_day_of_year"],
         "time_deltas":[6,12],
         "add_wind_direction":true,
+        "interp_to": "3h",
         "load_into_memory": true
     },
 
