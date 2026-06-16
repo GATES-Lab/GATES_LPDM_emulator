@@ -135,6 +135,43 @@ def empty_folder(folder_path):
             print(f"Failed to delete {file_path}. Reason: {e}")
 
 
+def _normalise_periods(load_cfg):
+    """
+    Convert a load_data block into wildcard period tokens for filename matching.
+
+    Supports both old and new parameter formats:
+    - old: {"year": "2014"}
+    - new: {"years": ["2012", "2013"], "months": ["02", "03"]}
+
+    Returns
+    -------
+    list[str]
+        Period tokens suitable for matching filenames, e.g. ["2012", "201302"].
+    """
+    if not load_cfg:
+        return []
+
+    # Backward-compatible legacy key.
+    legacy_year = load_cfg.get("year")
+    if legacy_year:
+        return [str(legacy_year)]
+
+    years = load_cfg.get("years", []) or []
+    months = load_cfg.get("months", []) or []
+
+    years = [str(y) for y in years]
+    months = [str(m).zfill(2) for m in months]
+
+    if not years:
+        return []
+
+    # If no months provided, match all files for each year.
+    if not months:
+        return years
+
+    return [f"{y}{m}" for y in years for m in months]
+
+
 def parse_args():
     """
     Parse command-line arguments for the storage transfer script.
@@ -224,20 +261,26 @@ def main():
 
     create_data_directories(region)
 
-    # collect periods
-    train_period = parameters.get("train_load_data", {}).get("year")
-    test_period  = parameters.get("test_load_data", {}).get("year")
+    # collect periods (supports both legacy `year` and new `years`/`months`)
+    train_periods = _normalise_periods(parameters.get("train_load_data", {}))
+    test_periods = _normalise_periods(parameters.get("test_load_data", {}))
 
     periods = []
     if args.which in ("train", "both"):
-        if not train_period:
-            raise KeyError("train_load_data.year missing in parameter file")
-        periods.append(("train", train_period))
+        if not train_periods:
+            raise KeyError(
+                "train_load_data period missing in parameter file "
+                "(expected `year` or `years` list)"
+            )
+        periods.extend([("train", p) for p in train_periods])
 
     if args.which in ("test", "both"):
-        if not test_period:
-            raise KeyError("test_load_data.year missing in parameter file")
-        periods.append(("test", test_period))
+        if not test_periods:
+            raise KeyError(
+                "test_load_data period missing in parameter file "
+                "(expected `year` or `years` list)"
+            )
+        periods.extend([("test", p) for p in test_periods])
 
     for label, period in periods:
         print(f"\n=== Populating {label} data for period '{period}' (region={region}) ===")
