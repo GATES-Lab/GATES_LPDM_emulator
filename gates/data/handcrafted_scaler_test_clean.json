@@ -265,7 +265,16 @@
         "type": "minmax",
         "0": {
             "min": 0.0,
-            "max": 35.3553
+            "max": 35.3553,
+            "feature_range": [0, 1]
+        }
+    },
+    "earth_distance_centre": {
+        "type": "minmax",
+        "0": {
+            "min": 0.0,
+            "max": 1200,
+            "feature_range": [0, 1]
         }
     },
     "y_coords": {
