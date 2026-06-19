@@ -1,0 +1,312 @@
+{   "details": {"last_edited": "17/06/2026, 17:54",
+                "edited_by": "ef17148",
+                "description": "Scaler using the parameters extracted by DefaultInputsScaler from multiregion training (jobname: scalers_sahara_india_china_brazil_multiregion_proper_20260430_170545)"},
+    "air_pressure": {
+        "type": "standard",
+        "3": {
+            "mean": 92201.0547,
+            "std": 11097.6914
+        },
+        "9": {
+            "mean": 86759.6094,
+            "std": 9978.2295
+        },
+        "15": {
+            "mean": 77332.7812,
+            "std": 8142.1973
+        },
+        "21": {
+            "mean": 65035.168,
+            "std": 5974.4956
+        },
+        "30": {
+            "mean": 44255.5859,
+            "std": 3027.0911
+        },
+        "42": {
+            "mean": 19372.9277,
+            "std": 1005.7095
+        },
+        "51": {
+            "mean": 6655.2651,
+            "std": 204.0239
+        }
+    },
+    "air_temperature": {
+        "type": "standard",
+        "3": {
+            "mean": 290.5748,
+            "std": 12.9967
+        },
+        "9": {
+            "mean": 287.9926,
+            "std": 12.393
+        },
+        "15": {
+            "mean": 282.6633,
+            "std": 11.373
+        },
+        "21": {
+            "mean": 274.3997,
+            "std": 10.469
+        },
+        "30": {
+            "mean": 255.7347,
+            "std": 10.3064
+        },
+        "42": {
+            "mean": 219.4413,
+            "std": 3.7814
+        },
+        "51": {
+            "mean": 204.7887,
+            "std": 6.3236
+        }
+    },
+    "atmosphere_boundary_layer_thickness": {
+        "type": "standard",
+        "0": {
+            "mean": 658.7932,
+            "std": 812.457
+        }
+    },
+    "cos_lat_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -1.0,
+            "max": 1.0
+        }
+    },
+    "cos_lon_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -1.0,
+            "max": 1.0
+        }
+    },
+    "landcover": {
+        "type": "standard",
+        "0": {
+            "mean": 4.0213,
+            "std": 3.1716
+        }
+    },
+    "lat_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -41.559,
+            "max": 58.465
+        }
+    },
+    "lon_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -84.641,
+            "max": 141.108
+        }
+    },
+    "sin_lat_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -1.0,
+            "max": 1.0
+        }
+    },
+    "sin_lon_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -1.0,
+            "max": 0.9999
+        }
+    },
+    "surface_air_pressure": {
+        "type": "standard",
+        "0": {
+            "mean": 93208.0781,
+            "std": 11310.0117
+        }
+    },
+    "topog": {
+        "type": "minmax",
+        "0": {
+            "min": -170.7097,
+            "max": 5912.0527
+        }
+    },
+    "upward_air_velocity": {
+        "type": "standard",
+        "3": {
+            "mean": -0.0001,
+            "std": 0.0174
+        },
+        "9": {
+            "mean": 0.0005,
+            "std": 0.0225
+        },
+        "15": {
+            "mean": -0.001,
+            "std": 0.0291
+        },
+        "21": {
+            "mean": -0.0028,
+            "std": 0.0311
+        },
+        "30": {
+            "mean": -0.0049,
+            "std": 0.0326
+        },
+        "42": {
+            "mean": -0.0044,
+            "std": 0.0259
+        },
+        "51": {
+            "mean": -0.0001,
+            "std": 0.0123
+        }
+    },
+    "wind_angle": {
+        "type": "standard",
+        "3": {
+            "mean": 0.1515,
+            "std": 1.67
+        },
+        "9": {
+            "mean": 0.1205,
+            "std": 1.6443
+        },
+        "15": {
+            "mean": -0.1554,
+            "std": 1.6147
+        },
+        "21": {
+            "mean": -0.5012,
+            "std": 1.5201
+        },
+        "30": {
+            "mean": -0.7634,
+            "std": 1.4239
+        },
+        "42": {
+            "mean": -1.1728,
+            "std": 1.2698
+        },
+        "51": {
+            "mean": -0.4982,
+            "std": 1.6067
+        }
+    },
+    "wind_speed": {
+        "type": "standard",
+        "3": {
+            "mean": 4.9603,
+            "std": 3.0402
+        },
+        "9": {
+            "mean": 6.4264,
+            "std": 4.0374
+        },
+        "15": {
+            "mean": 6.5902,
+            "std": 4.1473
+        },
+        "21": {
+            "mean": 8.6524,
+            "std": 5.5192
+        },
+        "30": {
+            "mean": 14.1033,
+            "std": 9.8889
+        },
+        "42": {
+            "mean": 27.4941,
+            "std": 17.0842
+        },
+        "51": {
+            "mean": 12.2613,
+            "std": 8.3694
+        }
+    },
+    "x_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -25.0,
+            "max": 24.0
+        }
+    },
+    "x_wind": {
+        "type": "standard",
+        "3": {
+            "mean": -0.6104,
+            "std": 4.1599
+        },
+        "9": {
+            "mean": -0.5644,
+            "std": 5.6288
+        },
+        "15": {
+            "mean": 1.0942,
+            "std": 5.938
+        },
+        "21": {
+            "mean": 3.811,
+            "std": 7.7169
+        },
+        "30": {
+            "mean": 9.5536,
+            "std": 12.2785
+        },
+        "42": {
+            "mean": 22.9302,
+            "std": 19.9472
+        },
+        "51": {
+            "mean": 5.7882,
+            "std": 12.9203
+        }
+    },
+    "xy_distance_centre": {
+        "type": "minmax",
+        "0": {
+            "min": 0.0,
+            "max": 35.3553
+        }
+    },
+    "y_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -25.0,
+            "max": 24.0
+        }
+    },
+    "y_wind": {
+        "type": "standard",
+        "3": {
+            "mean": -0.7581,
+            "std": 3.9491
+        },
+        "9": {
+            "mean": -1.0499,
+            "std": 4.9493
+        },
+        "15": {
+            "mean": -1.077,
+            "std": 4.7972
+        },
+        "21": {
+            "mean": -1.2435,
+            "std": 5.4503
+        },
+        "30": {
+            "mean": -1.21,
+            "std": 7.2936
+        },
+        "42": {
+            "mean": 1.2391,
+            "std": 11.0714
+        },
+        "51": {
+            "mean": -0.0042,
+            "std": 4.4666
+        }
+    }
+}

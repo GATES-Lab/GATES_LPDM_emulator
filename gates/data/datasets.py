@@ -439,19 +439,42 @@ class DefaultInputsScaler:
 
 class HandcraftedInputsScaler:
     """
-    IN DEVELOPMENT - NOT READY FOR USE
     Input scaler using pre-determined statistics rather than computing them from data.
 
-    ``stats_file`` is a path to a JSON file or a dict. Each variable entry has a ``"type"`` key
-    (``"standard"`` or ``"minmax"``) plus per-level statistics::
+    ``stats_file`` is a path to a JSON file or a dict. Example stats files can be found in
+    the ``scaler_files/`` folder. Each variable entry has a ``"type"`` key
+    (``"standard"``, ``"minmax"``, or ``"ghost"``) plus per-level statistics::
 
         {
-            "x_wind":   {"type": "standard", "3": {"mean": 5.21, "std": 3.14}},
-            "topog":    {"type": "minmax",   "0": {"min": -50.0, "max": 3200.0}}
+            "x_wind": {
+                "type": "standard",
+                "3": {"mean": 5.21, "std": 3.14}
+            },
+            "topog": {
+                "type": "minmax",
+                "0": {"min": -50.0, "max": 3200.0, "feature_range": [0, 1]}
+            },
+            "atmosphere_boundary_layer_thickness": {
+                "type": "minmax",
+                "0": {"min": 0, "max": 5000, "feature_range": [0, 1]}
+            },
+            "topog": {
+                "type": "ghost"
+            }
         }
+
+    Supported types:
+    - ``"standard"``: standardises using provided ``mean`` and ``std`` per level.
+    - ``"minmax"``: scales to ``feature_range`` (default ``[0, 1]``) using provided ``min``/``max`` per level.
+      Optionally pass ``"log": true`` to apply a log transform before scaling.
+    - ``"ghost"``: passes the variable through unchanged (no transformation applied). No level key needed.
+
+    ``"standard"`` and ``"minmax"`` require a level key for every level used. This applies to static
+    variables too — they are assigned level ``0`` by default, so their entry must include a ``"0"`` key.
 
     Level keys are strings (JSON requirement) and are cast to int internally.
     ``fit()`` populates ``self.scalers`` without touching the data — all stats come from the dict.
+    If a variable or level is missing from the stats file, a data-driven standard scaler is fitted instead.
     """
     def __init__(self, stats_file, verbose=True):
         if isinstance(stats_file, str):
