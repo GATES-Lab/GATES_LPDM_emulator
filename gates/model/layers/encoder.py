@@ -76,7 +76,7 @@ class SatelliteEncoder(torch.nn.Module):
         hidden_layers_processor_edge=2,
         mlp_norm_type="LayerNorm",
         use_checkpointing: bool = False,
-        dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False, release_coords="default", release_edges=False, concat_enc_neighbours=False, initial_enc=False,
+        dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False, release_coords="default", release_edges=False, concat_enc_neighbours=False, initial_enc=False, initial_enc_dim=None,
     ):
         """
         Encode the lat/lon data inot the isohedron graph
@@ -113,7 +113,8 @@ class SatelliteEncoder(torch.nn.Module):
         self.num_latlons = len(lat_lons)
         self.v2_edges = v2_edges
         self.concat_enc_neighbours = concat_enc_neighbours
-        self.initial_enc=initial_enc
+        self.initial_enc = initial_enc
+        self.initial_enc_dim = initial_enc_dim if initial_enc_dim is not None else output_dim
         if self.v2_edges:
             assert input_names is not None, "Pass input names to do edges v2 (wind on the mesh edges)"
             self.input_names=input_names
@@ -279,13 +280,13 @@ class SatelliteEncoder(torch.nn.Module):
         if self.initial_enc:
             self.initial_encoder = MLP(
                     input_dim,
-                    output_dim,
+                    self.initial_enc_dim,
                     hidden_dim_processor_node,
                     hidden_layers_processor_node,
                     mlp_norm_type,
                     self.use_checkpointing, dropout=dropout
                 )
-            node_encoder_input_dim = output_dim
+            node_encoder_input_dim = self.initial_enc_dim
 
         if self.concat_enc_neighbours:
             node_encoder_input_dim = np.max(np.unique(self.graph.edge_index[1], return_counts=True)[1])* node_encoder_input_dim
@@ -455,8 +456,9 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         release_edges: bool, if true connect all nodes in abstract layer to corresponding release node. (needs testing)
         release_coords: latlon coordinates of the release point, required if release_edges=True. If "default", uses the centre point of the latlon grid. (needs testing)
         concat_enc_neighbours: Whether to concatenate (instead of mean) the features of the grid nodes connected to each mesh node before encoding. Cannot be combined with dynamic_edges. (needs testing)
-        initial_enc: Whether to apply an initial encoding MLP to the input features before any aggregation. Cannot be combined with dynamic_edges. (needs testing)
-        wind_mesh_edges (bool): Whether to add wind features to the mesh edges. 
+        initial_enc: Whether to apply an initial encoding MLP to the input features before any aggregation. Cannot be combined with dynamic_edges.
+        initial_enc_dim: Output dimension of the initial encoding MLP. Defaults to output_dim if not set. Setting this to a value different from output_dim gives the two MLPs distinct roles: initial_encoder compresses/transforms each grid node's raw features (input_dim → initial_enc_dim) before spatial aggregation, and node_encoder then maps the aggregated mesh-node representation to the final latent space (initial_enc_dim → output_dim).
+        wind_mesh_edges (bool): Whether to add wind features to the mesh edges.
         wind_indices (list of ints): Indices of the input feature tensor corresponding to the wind variables to use for the mesh edge features. The mesh attribute is calculated as the mean of the wind features at the two endpoint mesh nodes. Required if wind_mesh_edges=True. Cannot be combined with concat_enc_neighbours or initial_enc.
         latlon_mesh_edges (bool): Whether to add lat/lon features to the mesh edges. The mesh edge attributes are extended with the delta_lat and delta_lon between the two endpoint mesh nodes, calculated from the input features at the latlon_indices. 
         latlon_indices (list of 2 ints): Indices of the input feature tensor corresponding to the latitude and longitude variables to use for calculating the lat/lon features for the mesh edges. Required if latlon_mesh_edges=True. 
@@ -487,6 +489,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         release_edges: bool = False,
         concat_enc_neighbours: bool = False,
         initial_enc: bool = False,
+        initial_enc_dim: int = None,
         wind_mesh_edges: bool = False,
         wind_indices=None,
         latlon_mesh_edges: bool = False,
@@ -522,6 +525,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         self.num_latlons = len(lat_lons)
         self.concat_enc_neighbours = concat_enc_neighbours
         self.initial_enc = initial_enc
+        self.initial_enc_dim = initial_enc_dim if initial_enc_dim is not None else output_dim
         self.wind_mesh_edges = wind_mesh_edges
         self.latlon_mesh_edges = latlon_mesh_edges
         if dynamic_earthdistance and not latlon_mesh_edges:
@@ -651,14 +655,18 @@ class SatelliteDynamicEncoder(torch.nn.Module):
             self.attention_mask = None
 
         # --- node encoder MLP ---
+        # If initial_enc is True, initial_encoder transforms each grid node's raw features
+        # (input_dim → initial_enc_dim) before spatial aggregation onto mesh nodes.
+        # node_encoder then maps the aggregated result to the final latent space
+        # (initial_enc_dim → output_dim), restoring its natural expansion/compression role.
         node_encoder_input_dim = input_dim
         if self.initial_enc:
             self.initial_encoder = MLP(
-                input_dim, output_dim, hidden_dim_processor_node,
+                input_dim, self.initial_enc_dim, hidden_dim_processor_node,
                 hidden_layers_processor_node, mlp_norm_type,
                 self.use_checkpointing, dropout=dropout,
             )
-            node_encoder_input_dim = output_dim
+            node_encoder_input_dim = self.initial_enc_dim
         if self.concat_enc_neighbours:
             node_encoder_input_dim = (
                 int(np.max(np.unique(
