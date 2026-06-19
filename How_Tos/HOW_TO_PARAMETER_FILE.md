@@ -34,7 +34,7 @@ A copy of the resolved parameters is saved to the folder `save_models_dir` in `c
 (Recommended for cluster jobs, not recommended for terminal jobs) |
 | `load_into_memory` | If `true`, loads the dataset into memory. Currently training *will* crash if `false`. |
 | `notes` | Free-text field for experiment notes. Saved alongside model artefacts. |
-| `load_data_monthly` | Load data for each month separately into memory and concatenate, rather than loading the full dataset at once. Significantly more gentle on memory. Soon, `load_data_monthly:false` will be deprecated. |
+| `load_data_monthly` | Load data for each month separately into memory and concatenate, rather than loading the full dataset at once. Significantly more gentle on memory. **`load_data_monthly: false` is deprecated — always set this to `true`.** |
 
 
 > **Note:** Fields prefixed with `_ignore_` (e.g. `_ignore_model_save_dir`) are read but not used by the training script. They can be used to store alternative values without activating them.
@@ -113,7 +113,7 @@ Selects which variables are assembled into the model inputs.
 | `static_variables` | (required) Time-invariant input features appended to each node. Includes coordinate encodings, topography, and land cover. |
 | `time_deltas` | (optional) List of time offsets (in hours) for which lagged meteorological fields are included (e.g. `[6, 12]` adds met at t−6h and t−12h alongside t). |
 | `add_wind_direction` | (recommended) If `true`, computes `wind_speed` and `wind_angle` from `x_wind`/`y_wind` and adds them to the input array. |
-| `load_into_memory` | (required) Determines whether the monthly data is loaded into memory before concantenation. Confusing wrt top-level `load_into_memory`!! |
+| `load_into_memory` | If `true`, loads each month's met data into memory before stacking variables. Distinct from the top-level `load_into_memory`, which forces the final assembled arrays into RAM before the DataLoader is set up. Set both to `true` for large cluster jobs to avoid dask overhead during training. |
 
 ---
 
@@ -131,11 +131,27 @@ Configures normalisation of meteorological and static input features.
 
 | Field | Description |
 |-------|-------------|
-| `scaler` | (optional) Class name of the input scaler to use. The default scaler `DefaultInputsScaler` applies `StandardScaler` to met variables and `MinMaxScaler` to static fields. |
+| `scaler` | (optional) Class name of the input scaler to use. Options: `DefaultInputsScaler` (default) or `HandcraftedInputsScaler`. |
 | `fit_on_subsample` | (recommended) Fraction of the training data used to fit the scaler. Fraction is selected at random. Speeds up scaler fitting on large datasets. |
-| `scaler_params` | Additional keyword arguments passed to the scaler constructor. |
+| `scaler_params` | Additional keyword arguments passed to the scaler constructor (see below). |
 
-Within `DefaultInputsScaler`, the variables that are standardised vs min-max vs no transform can be specified by passing `scaler_params:{"ignore_variables": ["lat_coords", "lon_coords"], "minmax_variables":["land_cover", "topog", "xy_distance_centre, ..."]}`. Currently, the default is that static variables are transformed through minmax, and met variables standardised.
+**`DefaultInputsScaler`** — applies `StandardScaler` to met variables and `MinMaxScaler` to static fields by default. Control per-variable behaviour via `scaler_params`:
+
+| `scaler_params` key | Description |
+|---------------------|-------------|
+| `minmax_variables` | List of variable names to apply MinMax scaling (default: `topog`, `land_cover`, coordinate fields). |
+| `ignore_variables` | List of variable names to pass through unchanged (no transformation). If a variable appears in both lists, it is ignored and a warning is printed. |
+
+**`HandcraftedInputsScaler`** — uses pre-determined statistics from a JSON file instead of computing them from the training data. Useful for ensuring consistent, externally validated scaling across runs. Pass `stats_file` in `scaler_params`:
+
+```json
+"input_scaler": {
+    "scaler": "HandcraftedInputsScaler",
+    "scaler_params": {"stats_file": "/path/to/scaler_files/my_stats.json"}
+}
+```
+
+Each variable entry in the stats JSON has a `"type"` key (`"standard"`, `"minmax"`, or `"ghost"`) plus per-level statistics keyed by level as a string. Variables or levels missing from the file fall back to a data-driven standard scaler. Example files are in `scaler_files/`.
 
 
 ---
@@ -153,10 +169,23 @@ Configures transformation of the footprint (target) values.
 
 | Field | Description |
 |-------|-------------|
-| `scaler` | Class name of the footprint scaler. Options are `LogAndShiftFpScaler` (applies a log₁₀ transform to non-zero values followed by a shift) and `LogAndSiftMeanFpscaler` (which applies the same log-transform and shift by the mean) |
-| `scaler_params` | Additional keyword arguments passed to the footprint scaler constructor. |
+| `scaler` | Class name of the footprint scaler. Options: `LogAndShiftFpScaler` or `LogAndShiftMeanFpScaler` (default). |
+| `scaler_params` | Additional keyword arguments passed to the footprint scaler constructor (see below). |
 
-**TODO**: add info on scalers
+**`LogAndShiftMeanFpScaler`** (default) — takes log₁₀ of non-zero footprint values and shifts so the mean of the logged data is ~0. Parameters:
+
+| `scaler_params` key | Default | Description |
+|---------------------|---------|-------------|
+| `minimum_oom` | `5` | The order-of-magnitude floor. Values below `10^(-minimum_oom)` are treated as zero. |
+
+**`LogAndShiftFpScaler`** — takes log₁₀ of non-zero values and offsets by `minimum_oom` so all transformed non-zero values are strictly positive (i.e. the transformed minimum is 0). Does not mean-centre. Parameters:
+
+| `scaler_params` key | Default | Description |
+|---------------------|---------|-------------|
+| `minimum_oom` | `5` | Offset added after log₁₀ to ensure non-negativity. |
+| `non_negative` | `true` | If `true`, clips any residual negative transformed values to 0. |
+
+Both scalers have an `inverse_transform` method that recovers original-space values for evaluation.
 ---
 
 ## `dataloader`
@@ -201,19 +230,23 @@ The dataloader params above are set up for cluster runs with multiple workers. W
 ---
 ## `dynamic_edges`
 
-**TODO**
-Controls the features that get addded to the mesh graph edges. 
+Controls the features that get added to the mesh graph edges at each forward pass. By default (`dynamic_edges` omitted or `null`), edges use static geometric attributes only. Pass a dict for full control.
 
 ```json
-"dynamic_edges": {"dynamic_wind": true, "wind_tuples": [["x_wind", 3, 0],["y_wind", 3, 0]], "dynamic_latlon":true, "dynamic_earthdistance":true}
+"dynamic_edges": {
+    "dynamic_wind": true,
+    "wind_tuples": [["x_wind", 3, 0], ["y_wind", 3, 0]],
+    "dynamic_latlon": true,
+    "dynamic_earthdistance": true
+}
 ```
 
-| Field | Description |
-|-------|-------------|
-| `dynamic_wind` | bool, whether to incorporate wind features to the edges |
-| `wind_tuples` | list of lists, with the name of each wind-related feature to be added as features to the edges. Each feature has name in format `(variable_name, level, time_delta)`. By default, the x- and y- wind at level three are appended if `dynamic_wind=True` |
-| `dynamic_latlon` | bool, whether to replace the static mesh edge attributes with delta-lat and delta-lon features calculated from the data. Control the name of the lat/lon coords with `latlon_tuples`|
-| `dynamic_earthdistance` | bool, only valid `dynamic_latlon=True`. Whether to append the distance between two mesh nodes as attribute. |
+| Field | Default | Description |
+|-------|---------|-------------|
+| `dynamic_wind` | `false` | If `true`, appends wind features to mesh edge attributes at each forward pass. |
+| `wind_tuples` | `[["x_wind",3,0],["y_wind",3,0]]` | List of input features to use as wind edge attributes. Each entry is `[variable_name, level, time_delta]`, matching the `variable_name` MultiIndex of the input array. |
+| `dynamic_latlon` | `false` | If `true`, replaces static lat/lon distance attributes on mesh edges with data-derived delta-lat / delta-lon values. |
+| `dynamic_earthdistance` | `false` | If `true` (and `dynamic_latlon` is also `true`), appends the great-circle distance between mesh node pairs as an additional edge attribute. |
 
 ---
 
