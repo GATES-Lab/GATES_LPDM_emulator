@@ -73,7 +73,8 @@ class SatelliteDecoder(torch.nn.Module):
         use_checkpointing: bool = False,
         dropout=0,
         n_neighbours=3,
-        final_activation=None, concat_neighbours=False, idx_latlon=None, append_latlon=False, concat_neighbours_2=False
+        final_activation=None, concat_neighbours=False, idx_latlon=None, append_latlon=False, concat_neighbours_2=False,
+        shortcut_indices=None,
     ):
         """
         Decoder from latent graph to lat/lon graph
@@ -112,6 +113,12 @@ class SatelliteDecoder(torch.nn.Module):
         self.concat_neighbours_2 = concat_neighbours_2
         self.n_neighbours = n_neighbours
         self.append_latlon = append_latlon
+        if shortcut_indices is not None and (concat_neighbours or concat_neighbours_2):
+            raise ValueError("shortcut_indices cannot be combined with concat_neighbours or concat_neighbours_2.")
+        self.shortcut_indices = shortcut_indices
+        n_shortcut = len(shortcut_indices) if shortcut_indices is not None else 0
+        print("adding shortcut indices", n_shortcut)
+        print(shortcut_indices)
 
         if append_latlon:
             assert idx_latlon is not None, "pass idx latlon!"
@@ -251,13 +258,13 @@ class SatelliteDecoder(torch.nn.Module):
 
         else:
             self.node_decoder = MLP(
-            input_dim + 2*self.append_latlon,
+            input_dim + 2*self.append_latlon + n_shortcut,
             output_dim,
             hidden_dim_decoder,
             hidden_layers_decoder,
             None,
             self.use_checkpointing, dropout=dropout, final_activation=final_activation
-        )          # no normalising here?
+        )
 
     def forward(
         self, processor_features: torch.Tensor, start_features: torch.Tensor
@@ -335,10 +342,12 @@ class SatelliteDecoder(torch.nn.Module):
         if self.append_latlon:
             normalised_idx_latlon = einops.repeat(self.normalised_idx_latlon, "e f -> n f e", n=batch_size)
             normalised_idx_latlon = normalised_idx_latlon.to(start_features.device)
-
             processor_features = torch.cat([processor_features, normalised_idx_latlon], dim=1)
 
-        #print(np.shape(processor_features))
+        if self.shortcut_indices is not None:
+            # start_features: (B, n_grid, feature_dim) → select and permute to (B, n_shortcut, n_grid)
+            shortcut = einops.rearrange(start_features[:, :, self.shortcut_indices], "b n f -> b f n")
+            processor_features = torch.cat([processor_features, shortcut], dim=1)
 
         processor_features = einops.rearrange(processor_features, "b f n -> (b n) f", b=batch_size)
         #print("after scatter", processor_features.size(), processor_features.dtype)

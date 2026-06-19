@@ -166,6 +166,39 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=Non
     return dynamic_edge_params
 
 
+def setup_shortcut_indices(shortcut_tuples, input_names):
+    """
+    Find indices of shortcut features in input_names to pass directly to the decoder.
+
+    These features bypass the encode-process stage and are appended to the aggregated
+    mesh-node representation for each grid node just before the decoder MLP, giving the
+    decoder direct access to local input information.
+
+    Args:
+        shortcut_tuples: list of (feature_name, level, time_lag) tuples identifying
+            which input features to connect directly to the decoder. Same format as
+            wind_tuples / latlon_tuples in setup_dynamic_edges.
+        input_names: list of feature name tuples from the dataset (scalers["input_names"]).
+
+    Returns:
+        dict with key "shortcut_indices" — a list of integer indices into the input
+        feature dimension, ready to be unpacked into GraphSatelliteForecaster.
+
+    Example:
+        setup_shortcut_indices([("x_wind", 3, 0), ("y_wind", 3, 0)], input_names)
+        # → {"shortcut_indices": [3, 4]}
+    """
+    if type(shortcut_tuples[0]) == list:
+        shortcut_tuples = [tuple(t) for t in shortcut_tuples]
+    shortcut_indices = [i for i, name in enumerate(input_names) if name in shortcut_tuples]
+    if not shortcut_indices:
+        raise ValueError(
+            f"No input features matched shortcut_tuples {shortcut_tuples}. "
+            f"Check that the tuples match entries in input_names."
+        )
+    return {"shortcut_indices": shortcut_indices}
+
+
 def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False, wandb_month_counter=1, return_wandb_month_counter=False):
     """
     Loads footprints and inputs for each year-month pair specified in data_parameters,
