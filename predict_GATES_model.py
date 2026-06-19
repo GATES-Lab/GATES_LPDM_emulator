@@ -60,7 +60,7 @@ sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
 import gates
 import gates.config
 import gates.data.datasets as gates_datasets
-from gates.training.training import load_GATES_data, make_cluster, setup_dynamic_edges
+from gates.training.training import load_GATES_data, make_cluster, setup_dynamic_edges, setup_shortcut
 from gates.training.training_helperfuns import load_parameter_file
 from gates.training.training_dataclasses import PathContext
 
@@ -315,6 +315,10 @@ class GATESPredictor:
                 dynamic_edges_params = {}
         else:
             dynamic_edges_params = {}
+
+        if training_params.get("shortcut", None) is not None and "shortcut_indices" not in training_params["model_parameters"]:
+            shortcut_params = setup_shortcut(input_names=scalers["input_names"], **training_params["shortcut"])
+            training_params["model_parameters"].update(shortcut_params)
 
         # Model
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

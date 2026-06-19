@@ -472,7 +472,10 @@ def train_and_save_model(parameters, model_save_dir):
             dynamic_edges_params = {}
     else:
         dynamic_edges_params = {}
-            
+
+    if parameters.get("shortcut", None) is not None:
+        shortcut_params = gates_training.setup_shortcut_indices(input_names=scalers["input_names"], **parameters["shortcut"])
+        parameters["model_parameters"].update(shortcut_params)
 
     training_ctx = TrainingContext(parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers, train_inputs.variable_name.size, len(train_fp_data.lat.values), dynamic_edges_params) # get size from train params
 

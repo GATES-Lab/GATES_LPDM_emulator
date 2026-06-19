@@ -217,6 +217,25 @@ Controls the features that get addded to the mesh graph edges.
 
 ---
 
+## `shortcut`
+
+Connects selected input features directly to the decoder, bypassing the encode–process stage. For each grid node, the chosen features are appended to the aggregated mesh-node representation just before the decoder MLP. This gives the decoder direct access to local information (e.g. wind) that may be diluted or lost during the grid→mesh→grid round-trip.
+
+
+```json
+"shortcut": {
+    "shortcut_tuples": [["x_wind", 3, 0], ["y_wind", 3, 0]]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `shortcut_tuples` | List of `[variable_name, level, time_delta]` triples identifying which input features to pass directly to the decoder. Each triple must match an entry in the assembled input feature list (same format as `wind_tuples` in `dynamic_edges`). The corresponding indices are resolved at runtime from `input_names` and injected into `model_parameters` automatically. |
+
+The resolved `shortcut_indices` are stored in the saved `training_settings` JSON so that inference with `predict_GATES_model.py` reconstructs the model correctly without any extra arguments.
+
+---
+
 
 ## `model_parameters`
 
@@ -235,8 +254,6 @@ Defines the GNN architecture.
     "hidden_dim_decoder": 16,
     "resolution": 4,
     "output_dim": 1,
-    "residuals": false,
-    "attention": false
 }
 ```
 
@@ -253,6 +270,8 @@ Defines the GNN architecture.
 | `hidden_dim_decoder` | Hidden dimension of the Decoder MLP. |
 | `resolution` | H3 mesh resolution controlling hexagon granularity. Resolution 4 is standard (~1–3 grid nodes per hexagon). Lower = coarser. |
 | `output_dim` | Number of output values per grid node. `1` for a single footprint value. |
+| `initial_enc` | (optional) If `true`, applies a small MLP to each grid node's raw features before the scatter-aggregation onto mesh nodes. This gives the model per-node non-linear capacity before the irreversible spatial pooling step. Cannot be combined with `dynamic_edges`. Default: `false`. |
+| `initial_enc_dim` | (optional) Output dimension of the initial encoding MLP when `initial_enc` is `true`. Setting this to a value different from `node_dim` gives the two encoder MLPs distinct roles: `initial_encoder` maps `input_dim → initial_enc_dim` per grid node before aggregation, and `node_encoder` maps `initial_enc_dim → node_dim` after aggregation. Defaults to `node_dim` if not set (preserves old behaviour). |
 
 ---
 

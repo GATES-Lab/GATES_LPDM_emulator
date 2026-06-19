@@ -660,6 +660,10 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
     else:
         dynamic_edges_params = {}
 
+    if parameters.get("shortcut", None) is not None:
+        shortcut_params = gates_training.setup_shortcut(input_names=scalers["input_names"], **parameters["shortcut"])
+        parameters["model_parameters"].update(shortcut_params)
+
     training_ctx = TrainingContext(
         parameters, device, use_wandb, image_dates, image_plots, grid, fp_labels, scalers,
         all_train_inputs.variable_name.size, first_region["fp_xr"].lat.size, dynamic_edges_params)
