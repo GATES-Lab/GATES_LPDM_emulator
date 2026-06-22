@@ -99,3 +99,35 @@ class ModelContext:
     #grid : array
 
 
+@dataclass()
+class DualModelContext:
+    '''Model context for the dual-head model (footprint + background heads).
+
+    Holds a separate criterion (and display criterion) for each head, plus the
+    relative weight applied to the background loss when forming the joint loss
+    ``total = fp_loss + bg_loss_weight * bg_loss``.'''
+    model_name: str
+    use_wandb: bool
+    device: str
+
+    optimizer: object
+
+    # footprint head (per-node) criteria
+    fp_criterion: object
+    fp_criterion_test: object
+    # background head (whole-grid) criteria
+    bg_criterion: object
+    bg_criterion_test: object
+
+    bg_loss_weight: float
+
+    lr: float
+
+    early_stopping: object
+
+    epochs_num: int
+    epochs_visualise: int
+    epochs_save: int
+    epochs_patience: int
+
+

@@ -323,3 +323,186 @@ class GraphSatelliteBackgroundPredictor(torch.nn.Module): #, PyTorchModelHubMixi
         return x
 
 
+class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
+    """GATES model with two decoder heads sharing a single encoder + processor.
+
+    Combines the two model variants in this module:
+      - a *footprint* head (``SatelliteDecoder``, as in ``GraphSatelliteForecaster``)
+        producing a per-node output of shape ``[B, num_nodes, fp_output_dim]``, and
+      - a *background* head (``SatelliteDecoderConvPredictor`` / ``SatelliteDecoderPredictor``,
+        as in ``GraphSatelliteBackgroundPredictor``) producing a whole-grid output of
+        shape ``[B, num_classes]``.
+
+    The encoder and processor are run once and their output is fed to both heads, so the
+    shared backbone is trained jointly by both objectives. ``forward`` returns a dict
+    ``{"footprint": <per-node output>, "background": <num_classes output>}``.
+    """
+
+    def __init__(
+        self,
+        lat_lons: list,
+        whole_world: bool = False,
+        resolution: int = 2,
+        feature_dim: int = 78,
+        aux_dim: int = 24,
+        output_dim: Optional[int] = None,
+        node_dim: int = 256,
+        edge_dim: int = 256,
+        num_blocks: int = 9,
+        hidden_dim_processor_node: int = 256,
+        hidden_dim_processor_edge: int = 256,
+        hidden_layers_processor_node: int = 2,
+        hidden_layers_processor_edge: int = 2,
+        hidden_dim_decoder: int = 128,
+        hidden_layers_decoder: int = 2,
+        residuals: bool = False,
+        norm_type: str = "LayerNorm",
+        use_checkpointing: bool = False,
+        dropout: float = 0,
+        encode_edges=True,
+        encode_nodes=True,
+        n_decoder_neighbours=3,
+        decoder_final_layer=None,
+        higher_mesh_res=0,
+        idx_latlon=None,
+        concat_decoder_neighbours=False, concat_decoder_neighbours_2=False, better_meshnodes=False, scatter="mean", disaggregated=False, batchsize=5, attention=False, release_coords="default", release_edges=False, decoder_append_latlon=False, concat_enc_neighbours=False, initial_enc=False,
+        num_classes=4, decoder_type: str = "conv", input_height=100, input_width=100,
+        fp_output_dim: Optional[int] = None, bg_output_dim: Optional[int] = None,
+    ):
+        """
+        Args:
+            All arguments shared with ``GraphSatelliteBackgroundPredictor`` keep the same
+            meaning (e.g. ``aux_dim`` is the number of auxiliary boundary features that are
+            concatenated to the meteorological inputs, ``num_classes`` is the number of
+            background outputs, ``decoder_type`` selects the background head, and
+            ``input_height``/``input_width`` are used by the convolutional background head).
+
+            fp_output_dim: Per-node output dimension of the footprint head. Defaults to 1
+                (a single footprint value per node), matching the GATES footprint setup.
+            bg_output_dim: Per-node intermediate output dimension of the background head
+                (the per-node features that are flattened/pooled into ``num_classes``).
+                Defaults to ``output_dim``.
+        """
+
+        super().__init__()
+        self.feature_dim = feature_dim
+        if output_dim is None:
+            output_dim = self.feature_dim
+        if fp_output_dim is None:
+            fp_output_dim = 1
+        if bg_output_dim is None:
+            bg_output_dim = output_dim
+
+        # ---- Shared encoder (inputs are met features + auxiliary boundary features) ----
+        self.encoder = SatelliteEncoder(
+            lat_lons=lat_lons,
+            whole_world=whole_world,
+            resolution=resolution,
+            input_dim=feature_dim + aux_dim,
+            output_dim=node_dim,
+            output_edge_dim=edge_dim,
+            hidden_dim_processor_edge=hidden_dim_processor_edge,
+            hidden_layers_processor_node=hidden_layers_processor_node,
+            hidden_dim_processor_node=hidden_dim_processor_node,
+            hidden_layers_processor_edge=hidden_layers_processor_edge,
+            mlp_norm_type=norm_type,
+            use_checkpointing=use_checkpointing, dropout=dropout, higher_res=higher_mesh_res, idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours, initial_enc=initial_enc
+        )
+        if not encode_edges:
+            edge_dim = 2
+        if not encode_nodes:
+            node_dim = feature_dim + aux_dim
+
+        if better_meshnodes:
+            node_dim = node_dim + 2
+
+        print("set up processor")
+        # ---- Shared processor ----
+        self.processor = SatelliteProcessor(
+            input_dim=node_dim,
+            edge_dim=edge_dim,
+            num_blocks=num_blocks,
+            hidden_dim_processor_edge=hidden_dim_processor_edge,
+            hidden_layers_processor_node=hidden_layers_processor_node,
+            hidden_dim_processor_node=hidden_dim_processor_node,
+            hidden_layers_processor_edge=hidden_layers_processor_edge,
+            mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask
+        )
+
+        if residuals:
+            # residuals attach the original encoder inputs (met + aux) to each node
+            decoder_input_dim = node_dim + feature_dim + aux_dim
+        else:
+            decoder_input_dim = node_dim
+
+        print("set up footprint decoder head")
+        # ---- Head 1: per-node footprint decoder (as in GraphSatelliteForecaster) ----
+        self.fp_decoder = SatelliteDecoder(
+            lat_lons=lat_lons,
+            h_grid=self.encoder.h3_grid,
+            whole_world=whole_world,
+            resolution=resolution,
+            input_dim=decoder_input_dim,
+            output_dim=fp_output_dim,
+            mlp_norm_type=norm_type,
+            hidden_dim_decoder=hidden_dim_decoder,
+            residuals=residuals,
+            hidden_layers_decoder=hidden_layers_decoder,
+            use_checkpointing=use_checkpointing, dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours, concat_neighbours_2=concat_decoder_neighbours_2, idx_latlon=idx_latlon, append_latlon=decoder_append_latlon
+        )
+
+        print("set up background decoder head")
+        # ---- Head 2: whole-grid background predictor (as in GraphSatelliteBackgroundPredictor) ----
+        if decoder_type == "conv":
+            self.bg_decoder = SatelliteDecoderConvPredictor(
+                lat_lons=lat_lons,
+                h_grid=self.encoder.h3_grid,
+                whole_world=whole_world,
+                resolution=resolution,
+                input_dim=decoder_input_dim,
+                output_dim=bg_output_dim,
+                num_classes=num_classes,
+                mlp_norm_type=norm_type,
+                hidden_dim_decoder=hidden_dim_decoder,
+                residuals=residuals,
+                hidden_layers_decoder=hidden_layers_decoder,
+                use_checkpointing=use_checkpointing, dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours, concat_neighbours_2=concat_decoder_neighbours_2, idx_latlon=idx_latlon, append_latlon=decoder_append_latlon, input_height=input_height, input_width=input_width
+            )
+        elif decoder_type == "dense":
+            self.bg_decoder = SatelliteDecoderPredictor(
+                lat_lons=lat_lons,
+                h_grid=self.encoder.h3_grid,
+                whole_world=whole_world,
+                resolution=resolution,
+                input_dim=decoder_input_dim,
+                output_dim=bg_output_dim,
+                num_classes=num_classes,
+                mlp_norm_type=norm_type,
+                hidden_dim_decoder=hidden_dim_decoder,
+                residuals=residuals,
+                hidden_layers_decoder=hidden_layers_decoder,
+                use_checkpointing=use_checkpointing, dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours, concat_neighbours_2=concat_decoder_neighbours_2, idx_latlon=idx_latlon, append_latlon=decoder_append_latlon
+            )
+        else:
+            raise ValueError(f"Invalid decoder type {decoder_type}. Must be one of ['conv', 'dense'].")
+
+    def forward(self, features: torch.Tensor) -> dict:
+        """Run the shared backbone once and decode with both heads.
+
+        Args:
+            features: Input features ``[B, num_nodes, feature_dim + aux_dim]``.
+
+        Returns:
+            dict with keys:
+              - ``"footprint"``: per-node footprint output ``[B, num_nodes, fp_output_dim]``
+              - ``"background"``: whole-grid background output ``[B, num_classes]``
+        """
+        x, edge_idx, edge_attr = self.encoder(features)
+        x = self.processor(x, edge_idx, edge_attr, batch=self.encoder.batch_size)
+
+        footprint = self.fp_decoder(x, features)
+        background = self.bg_decoder(x, features)
+
+        return {"footprint": footprint, "background": background}
+
+

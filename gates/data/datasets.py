@@ -1177,6 +1177,110 @@ def make_boundary_dataloader(inputs, outputs, batch_size=10, randomize=False,
     return dataloader
 
 
+class _DualMapDataset(torch.utils.data.Dataset):
+    """xbatcher-backed dataset yielding ``(inputs, fps, boundary)`` triplets.
+
+    Wraps three ``xbatcher.BatchGenerator`` objects that share the same batching
+    along the time dimension, so index ``i`` returns the i-th batch of the inputs,
+    the footprint labels and the boundary/background labels respectively. Tensor
+    conversion uses xbatcher's own ``to_tensor`` transform so the output matches
+    ``make_dataloader`` / ``make_boundary_dataloader`` exactly.
+    """
+
+    def __init__(self, X_bgen, fp_bgen, bg_bgen):
+        from xbatcher.loaders.torch import to_tensor
+        self._to_tensor = to_tensor
+        self.X_bgen = X_bgen
+        self.fp_bgen = fp_bgen
+        self.bg_bgen = bg_bgen
+
+    def __len__(self):
+        return len(self.X_bgen)
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        x_batch = self.X_bgen[idx]
+        fp_batch = self.fp_bgen[idx]
+        bg_batch = self.bg_bgen[idx]
+        try:
+            import dask
+            x_batch, fp_batch, bg_batch = dask.compute(x_batch, fp_batch, bg_batch)
+        except ImportError:
+            pass
+        return (
+            self._to_tensor(x_batch),
+            self._to_tensor(fp_batch),
+            self._to_tensor(bg_batch),
+        )
+
+
+def make_dual_dataloader(inputs, fps, outputs, batch_size=10, randomize=False,
+                          random_seed=42, dataloader_params=None, flatten=False):
+    """
+    Build a PyTorch DataLoader yielding ``(inputs, fps, boundary)`` for the dual-head model.
+
+    Combines the targets of ``make_dataloader`` (per-node footprints) and
+    ``make_boundary_dataloader`` (whole-grid background) so a single batch carries
+    everything both decoder heads need. Inputs, footprints and boundary outputs must
+    all be aligned along the time dimension (use ``load_GATES_data_with_bg`` which
+    returns them aligned).
+
+    Args:
+        inputs (xr.DataArray): Shape (fp_time, lat, lon, variable_name).
+        fps (xr.DataArray or xr.Dataset): Footprint labels, (time, lat, lon[, variable_name]).
+        outputs (xr.DataArray): Background targets, shape (time, num_classes).
+        batch_size (int): Batch size.
+        randomize (bool): Shuffle along the time dimension (recommended for training only).
+        random_seed (int): Seed for the shuffle when randomize=True.
+        dataloader_params (dict, optional): Extra kwargs for the DataLoader.
+        flatten (bool): Flatten lat/lon in the inputs/footprints.
+
+    Returns:
+        dataloader (torch.utils.data.DataLoader): yields ``(inputs, fps, boundary)`` tensors.
+        fps_labels (list): footprint variable label(s), matching make_dataloader.
+    """
+    if inputs.sizes["fp_time"] != fps.sizes["time"]:
+        raise ValueError("Incompatible time dimensions between inputs and fps")
+    if inputs.sizes["fp_time"] != outputs.sizes["time"]:
+        raise ValueError("Incompatible time dimensions between inputs and boundary outputs")
+
+    if randomize:
+        np.random.seed(random_seed)
+        permuted_time = np.random.permutation(inputs.fp_time.values)
+        inputs = inputs.sel(fp_time=permuted_time)
+        fps = fps.sel(time=permuted_time)
+        outputs = outputs.sel(time=permuted_time)
+
+    X_bgen = make_inputs_batcher(inputs, batch_size=batch_size, flatten=flatten)
+    fp_bgen, fps_labels = make_fps_batcher(fps, batch_size=batch_size, flatten=flatten)
+    bg_bgen = make_boundary_batcher(outputs, batch_size=batch_size)
+
+    dataset = _DualMapDataset(X_bgen, fp_bgen, bg_bgen)
+
+    if dataloader_params is None:
+        dataloader_params = {
+            "prefetch_factor": 3,
+            "num_workers": 4,
+            "persistent_workers": True,
+            "multiprocessing_context": "forkserver",
+        }
+
+    dataloader_params = dataloader_params.copy()
+    if dataloader_params.get("num_workers", 0) == 0:
+        dataloader_params.pop("prefetch_factor", None)
+        dataloader_params.pop("persistent_workers", None)
+        dataloader_params.pop("multiprocessing_context", None)
+
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=None,
+        **dataloader_params
+    )
+
+    return dataloader, fps_labels
+
+
 
 ####
 ####  v2: single-interpolation-pass functions
