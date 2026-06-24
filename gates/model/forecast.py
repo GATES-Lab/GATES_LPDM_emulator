@@ -53,7 +53,9 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         wind_indices=None,
         latlon_mesh_edges=False,
         latlon_indices=None,
-        dynamic_earthdistance=False
+        dynamic_earthdistance=False,
+        shortcut_mlp_dim=None,
+        shortcut_mlp_hidden_dim=None,
     ):
         """
         GATES uses a GNN in an encode-process-decode architecture to output footprint values
@@ -146,6 +148,8 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_layers_decoder=hidden_layers_decoder,
             use_checkpointing=use_checkpointing, dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours, concat_neighbours_2=concat_decoder_neighbours_2, idx_latlon=idx_latlon, append_latlon=decoder_append_latlon,
             shortcut_indices=shortcut_indices,
+            shortcut_mlp_dim=shortcut_mlp_dim,
+            shortcut_mlp_hidden_dim=shortcut_mlp_hidden_dim,
         )
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:

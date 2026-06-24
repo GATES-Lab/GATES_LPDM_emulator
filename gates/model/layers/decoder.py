@@ -74,7 +74,7 @@ class SatelliteDecoder(torch.nn.Module):
         dropout=0,
         n_neighbours=3,
         final_activation=None, concat_neighbours=False, idx_latlon=None, append_latlon=False, concat_neighbours_2=False,
-        shortcut_indices=None,
+        shortcut_indices=None, shortcut_mlp_dim=None, shortcut_mlp_hidden_dim=None,
     ):
         """
         Decoder from latent graph to lat/lon graph
@@ -119,6 +119,15 @@ class SatelliteDecoder(torch.nn.Module):
         n_shortcut = len(shortcut_indices) if shortcut_indices is not None else 0
         print("adding shortcut indices", n_shortcut)
         print(shortcut_indices)
+
+        self.shortcut_encoder = None
+        if shortcut_mlp_dim is not None and n_shortcut > 0:
+            _shortcut_hidden = shortcut_mlp_hidden_dim if shortcut_mlp_hidden_dim is not None else shortcut_mlp_dim
+            self.shortcut_encoder = MLP(
+                n_shortcut, shortcut_mlp_dim, _shortcut_hidden, 1, mlp_norm_type,
+                self.use_checkpointing, dropout=dropout,
+            )
+        n_shortcut_dec = shortcut_mlp_dim if self.shortcut_encoder is not None else n_shortcut
 
         if append_latlon:
             assert idx_latlon is not None, "pass idx latlon!"
@@ -258,7 +267,7 @@ class SatelliteDecoder(torch.nn.Module):
 
         else:
             self.node_decoder = MLP(
-            input_dim + 2*self.append_latlon + n_shortcut,
+            input_dim + 2*self.append_latlon + n_shortcut_dec,
             output_dim,
             hidden_dim_decoder,
             hidden_layers_decoder,
@@ -347,6 +356,10 @@ class SatelliteDecoder(torch.nn.Module):
         if self.shortcut_indices is not None:
             # start_features: (B, n_grid, feature_dim) → select and permute to (B, n_shortcut, n_grid)
             shortcut = einops.rearrange(start_features[:, :, self.shortcut_indices], "b n f -> b f n")
+            if self.shortcut_encoder is not None:
+                shortcut = einops.rearrange(shortcut, "b f n -> (b n) f")
+                shortcut = self.shortcut_encoder(shortcut)
+                shortcut = einops.rearrange(shortcut, "(b n) f -> b f n", b=batch_size)
             processor_features = torch.cat([processor_features, shortcut], dim=1)
 
         processor_features = einops.rearrange(processor_features, "b f n -> (b n) f", b=batch_size)
