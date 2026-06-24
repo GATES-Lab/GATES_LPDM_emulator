@@ -17,4 +17,6 @@ model_runs/
 model_test_predictions/
 
 graph_weather
-
+sweeps/
+parameter_files/
+regional_job_scripts/
