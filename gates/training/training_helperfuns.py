@@ -57,14 +57,14 @@ def load_parameter_file(file_path):
         print(f"An error occurred while loading the file: {str(e)}")
         return None
     
-def save_wandb_artifact(model_name, name, file_type, description, path):
+def save_wandb_artifact(model_name, name, file_type, description, path, aliases=None):
     artifact = wandb.Artifact(
         name=f"{model_name}-{name.replace('_', '-')}",
         type=file_type,
         description=description
     )
     artifact.add_file(path)
-    wandb.log_artifact(artifact)
+    wandb.log_artifact(artifact, aliases=aliases)
 
     return artifact
 
@@ -169,13 +169,14 @@ class EarlyStopping:
         self.use_wandb = use_wandb
         self.model_name = model_name
 
-    def __call__(self, val_loss, model):
+    def __call__(self, val_loss, model, epoch=None):
         """
         Evaluates the current validation loss and updates the early-stopping state.
 
         Args:
             val_loss (float): The validation loss for the current epoch.
             model (torch.nn.Module): The model to checkpoint if validation loss has improved.
+            epoch (int, optional): The current epoch number, included in the W&B artifact description.
 
         Returns:
             None
@@ -184,7 +185,7 @@ class EarlyStopping:
 
         if self.best_score is None:
             self.best_score = score
-            self.save_checkpoint(val_loss, model)
+            self.save_checkpoint(val_loss, model, epoch)
         elif score < self.best_score + self.delta:
             self.counter += 1
             if self.verbose:
@@ -193,17 +194,18 @@ class EarlyStopping:
                 self.early_stop = True
         else:
             self.best_score = score
-            self.save_checkpoint(val_loss, model)
+            self.save_checkpoint(val_loss, model, epoch)
             self.counter = 0
 
-    def save_checkpoint(self, val_loss, model):
+    def save_checkpoint(self, val_loss, model, epoch=None):
         """
         Saves the model's state dict to disk when validation loss reaches a new minimum,
-        and optionally logs it to W&B as a versioned artifact.
+        and optionally logs it to W&B as a versioned artifact tagged with the "best" alias.
 
         Args:
             val_loss (float): The new best validation loss.
             model (torch.nn.Module): The model whose weights should be saved.
+            epoch (int, optional): The current epoch number, included in the W&B artifact description.
 
         Returns:
             None
@@ -214,7 +216,15 @@ class EarlyStopping:
         self.val_loss_min = val_loss
 
         if self.use_wandb:
-            _ = save_wandb_artifact(self.model_name, f"checkpoint_epoch_{self.counter}", "model", f"Best model checkpoint at epoch {self.counter} with val_loss: {val_loss:.6f}", self.path)
+            epoch_str = f"epoch {epoch}" if epoch is not None else "unknown epoch"
+            _ = save_wandb_artifact(
+                self.model_name,
+                "best-checkpoint",
+                "model",
+                f"Best model checkpoint at {epoch_str} with val_loss: {val_loss:.6f}",
+                self.path,
+                aliases=["best"],
+            )
 
 
 def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, colorbar=True):
