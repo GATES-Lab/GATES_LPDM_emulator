@@ -17,9 +17,9 @@ is used as-is for every job. The "__sweep__" key itself is stripped before
 writing the per-combination files.
 
 Usage:
-    python launch_sweep.py parameter_files/my_config.json
-    python launch_sweep.py parameter_files/my_config.json --dry-run
-    python launch_sweep.py parameter_files/my_config.json --sbatch-script launch_train_sweep.sh
+    python train_GATES_sweep.py my_config.json
+    python train_GATES_sweep.py parameter_files/my_config.json --dry-run
+    python train_GATES_sweep.py parameter_files/my_config.json --sbatch-script launch_train_sweep.sh
 """
 
 import argparse
@@ -63,7 +63,7 @@ def make_suffix(combo):
     parts = []
     for key_path, value in combo.items():
         label = key_path.replace(".", "-") if use_full else key_path.split(".")[-1]
-        parts.append(f"{label}={format_value(value)}")
+        parts.append(f"{label}-{format_value(value)}")
     return "_".join(parts)
 
 
