@@ -564,4 +564,4 @@ if __name__ == "__main__":
 
     # Train the model with the loaded parameters
     train_and_save_model(parameters, model_save_dir=model_saving_dir)
-
+    # (Duplicate CLI parsing block removed; see the active entrypoint above.)

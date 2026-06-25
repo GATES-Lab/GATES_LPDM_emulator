@@ -1,5 +1,3 @@
-from pyexpat import model
-
 from model.forecast import GraphSatelliteForecaster
 
 
@@ -23,6 +21,7 @@ import os
 import pickle
 import random
 import xarray as xr
+import pandas as pd
 
 from pathlib import Path
 
@@ -102,7 +101,7 @@ def _resolve_years_months(data_parameters):
     return years, months
 
 
-def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False):
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=True):
     """
     Loads footprints and inputs for each year-month pair specified in data_parameters,
     returning them as concatenated xarrays rather than a LoadSquareSatelliteData object.
@@ -114,7 +113,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
         months: list[int | str]     — explicit list of months (alternative to month)
         load_into_memory : bool     — if True, materialise each month into memory before
                                       concatenating (avoids large dask graphs at the cost
-                                      of sequential I/O); default False
+                                      of sequential I/O); default True
 
     All other keys are forwarded to LoadSquareSatelliteData.
 
@@ -276,6 +275,7 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
     return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
 
 
+
 def initialise_losses():
     """
     Return a dictionary to store losses and metrics during training and evaluation. 
@@ -295,6 +295,7 @@ def initialise_losses():
         }
     }
     return losses
+
 
 def calculate_losses(losses, test_outputs_xr):
     """

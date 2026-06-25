@@ -27,4 +27,4 @@ module load cudnn/8.9.7.29-12
 
 
 echo "train"
-python general_train_nawid.py parameter_template_train_small.json --file_path parameter_files/
+python predict_boundary_model.py     --test_year 2016     --reference_model test_working_terminal_20260520_144557     --model_path /user/work/yl18410/new_graphnet/graphnet_LPDM_emulator/model_runs     --checkpoint best     --dry_run

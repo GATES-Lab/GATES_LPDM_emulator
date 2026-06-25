@@ -60,6 +60,20 @@ class TrainingContext:
     size: int
 
 
+@dataclass()
+class BoundaryTrainingContext:
+    '''Keep track of training parameters'''
+    parameters: dict
+    device: str
+    use_wandb: bool
+    image_dates: list
+    image_plots: bool
+    grid: np.array
+    fp_labels: list
+    scalers: dict
+    n_variables: int
+    size: int
+    aux_dim: int = 0
 
 @dataclass()
 class ModelContext:
