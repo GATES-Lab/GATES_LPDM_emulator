@@ -137,25 +137,28 @@ def main():
             set_nested(combo_params, key_path, value)
 
         suffix = make_suffix(combo)
-        combo_params["model_name"] = f"{base_model_name}_sweep_{suffix}"
+        sweep_id = i + 1
+        combo_params["model_name"] = f"{base_model_name}_sweep_{sweep_id:03d}"
+        combo_params["sweep_id"] = sweep_id
+        combo_params["sweep_combination"] = combo
 
-        out_file = out_dir / f"{base_name}_sweep_{suffix}.json"
+        out_file = out_dir / f"{base_name}_sweep_{sweep_id:03d}_{suffix}.json"
         with open(out_file, "w") as f:
             json.dump(combo_params, f, indent=4)
 
         # SLURM job name: cap at 80 chars (cluster limit)
-        job_name = f"sweep_{base_model_name}_{suffix}"[:80]
+        job_name = f"sweep_{base_model_name}_{sweep_id:03d}"[:80]
 
         sbatch_cmd = [
             "sbatch",
             f"--job-name={job_name}",
-            f"--output=slurms/slurm-%j_{suffix}.out",
+            f"--output=slurms/slurm-%j_sweep{sweep_id:03d}.out",
             # NONE prevents inheriting the submitting shell's env; explicit vars are still passed
             f"--export=NONE,SWEEP_PARAM_FILE={out_file},SWEEP_JOB_NAME={job_name}",
             str(sbatch_script),
         ]
 
-        print(f"\n[{i + 1}/{n_combos}] {suffix}")
+        print(f"\n[{sweep_id:03d}/{n_combos}] {suffix}")
         print(f"  config  : {out_file}")
         print(f"  job name: {job_name}")
         if args.dry_run:
