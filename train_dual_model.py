@@ -22,8 +22,10 @@ import numpy as np
 import torch
 import wandb
 
+'''
 sys.path.insert(0, "/user/work/yl18410/new_graphnet")
 sys.path.insert(1, "/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator")
+'''
 
 import gates
 import gates.training.training as gates_training
@@ -66,12 +68,15 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
 
         model_ctx.optimizer.zero_grad()
         outputs = model(features)
+        # Nawid - predicts footprint and backgrpund
         fp_pred = outputs["footprint"]
         bg_pred = outputs["background"]
 
         fp_loss = model_ctx.fp_criterion(fp_pred, true_values, fp_batch)
+        # Nawid - background loss
         bg_loss = model_ctx.bg_criterion(bg_pred, bg_batch)
-        loss = fp_loss + model_ctx.bg_loss_weight * bg_loss
+        # Nawid - Made it so that it uses both the different losses
+        loss = (1-model_ctx.bg_loss_weight)*fp_loss + model_ctx.bg_loss_weight * bg_loss
 
         loss.backward()
         model_ctx.optimizer.step()
@@ -126,7 +131,7 @@ def validate_and_predict(model, loader, model_ctx, output_norm=None):
         total_err += total_loss.item()
         fp_err += fp_loss.item()
         bg_err += bg_loss.item()
-
+        # Nawid - get denormalized loss
         if output_norm is not None:
             mean, std = output_norm
             diff = torch.abs(denormalize(bg_pred, mean, std) - denormalize(bg_batch, mean, std))
@@ -149,11 +154,11 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx + epoch_so_far
         print(f"\n--- Start Epoch: {epoch} ---")
-
+        # Nawid - get the training losses
         avg_train_total, avg_train_fp, avg_train_bg = train_one_epoch(
             model, train_loader, model_ctx, epoch, paths_ctx=paths_ctx
         )
-
+        # Nawid- get the validation parameters
         avg_test_total, avg_test_fp, avg_test_bg, bg_mae_denorm, fp_test_out = validate_and_predict(
             model, test_loader, model_ctx, output_norm=output_norm
         )
@@ -259,17 +264,17 @@ def train_and_save_model(parameters, model_save_dir):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(f"using device {device}, starting at " + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
-
+    # Nawid - get the parameters
     train_load_data_params = copy.deepcopy(parameters["train_load_data"])
     test_load_data_params = copy.deepcopy(parameters["train_load_data"])
     test_load_data_params.update(parameters["test_load_data"])
     input_variables = parameters["variables"]
-
+    # Nawid - get all the arguments of the data path
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
 
     print("Loading met, fp AND BACKGROUND data for model", model_name)
     client, cluster = gates_training.make_cluster()
-
+    # Nawid - get background information
     background_setup = parameters.get("background_setup", {})
     default_bg_params = {"detrend": True, "use_auxiliary_bc": True, "auxilary_bc_levels": [4, 5, 6, 7]}
     background_params = default_bg_params.copy()
@@ -319,6 +324,7 @@ def train_and_save_model(parameters, model_save_dir):
         train_aux_cams_data = format_aux_data(train_aux_cams_data, time_coord=train_fp_data.time)
         test_aux_cams_data = format_aux_data(test_aux_cams_data, time_coord=test_fp_data.time)
 
+    # Nawid - normalize the data
     norm_train_bgs, norm_train_aux_data, norm_vals = normalize_boundary_data(train_bgs, aux_data=train_aux_cams_data)
     norm_test_bgs, norm_test_aux_data, norm_vals = normalize_boundary_data(test_bgs, aux_data=test_aux_cams_data, norm_vals=norm_vals)
 
@@ -365,7 +371,7 @@ def train_and_save_model(parameters, model_save_dir):
 
     if use_wandb:
         wandb.watch(model, log="all", log_freq=100)
-
+#
     losses = gates_training_dual.initialise_dual_losses()
 
     if torch.cuda.is_available():

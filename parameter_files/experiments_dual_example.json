@@ -1,0 +1,31 @@
+{
+  "experiments": [
+    {
+      "name": "baseline",
+      "overrides": {}
+    },
+    {
+      "name": "bg_weight_0p5",
+      "overrides": {
+        "loss_functions": { "bg_loss_weight": 0.5 }
+      }
+    },
+    {
+      "name": "bg_weight_2",
+      "overrides": {
+        "loss_functions.bg_loss_weight": 2.0
+      }
+    },
+    {
+      "name": "dense_decoder_bignodes",
+      "overrides": {
+        "model_parameters": {
+          "decoder": "dense",
+          "node_dim": 128,
+          "edge_dim": 128
+        },
+        "learning_rate": 0.0001
+      }
+    }
+  ]
+}

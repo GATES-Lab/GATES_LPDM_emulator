@@ -6,10 +6,10 @@
   "load_into_memory": true,
   "train_load_data": {
     "years": ["2012"],
-    "months": ["01"],
+    "months": ["01","02","03","04","05","06","07","08","09","10","11","12"],
     "freq": 10,
     "region": "BRAZIL",
-    "size": 10,
+    "size": 50,
     "met_args": {
       "met_levels": [3, 9, 15, 21, 30, 42, 51],
       "met_variables": [
@@ -20,8 +20,8 @@
     "crop_met": false
   },
   "test_load_data": {
-    "years": ["2015"],
-    "months": ["01"],
+    "years": ["2013"],
+    "months": ["01","02","03","04","05","06","07","08","09","10","11","12"],
     "freq": 10
   },
   "background_setup": {
@@ -90,7 +90,7 @@
     "tags": ["Brazil", "gpu", "dual"]
   },
   "epochs": {
-    "training": 5,
+    "training": 150,
     "visualize": 10,
     "patience": 100,
     "model_save": 50
@@ -102,6 +102,6 @@
     "bg_criterion": "torch.nn.MSELoss",
     "bg_criterion_test": "torch.nn.MSELoss",
     "bg_criterion_params": {},
-    "bg_loss_weight": 1.0
+    "bg_loss_weight": 0.0
   }
 }
