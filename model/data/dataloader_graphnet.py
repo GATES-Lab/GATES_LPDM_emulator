@@ -14,7 +14,6 @@ from ..loss_functions import *
 from sklearn.preprocessing import MinMaxScaler
 import copy
 
-
 class FootprintsDataset(Dataset):
     """
     Creates dataset to pass to the model, applying any transformations specified. 

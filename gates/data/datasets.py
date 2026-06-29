@@ -892,10 +892,71 @@ def make_inputs_batcher(inputs, batch_size=10, flatten=False):
         inputs,
         input_dims=input_dims,
         batch_dims={'fp_time': batch_size},
-        preload_batch=False,
+        preload_batch=True,
     )
     return X_bgen
 
+def make_boundary_batcher(outputs, batch_size=5):
+    """
+    Build an xbatcher BatchGenerator for boundary condition outputs.
+
+    Unlike footprint outputs which have spatial dimensions (time, lat, lon),
+    boundary condition outputs are 1D per sample with shape (time, num_classes).
+
+    Inputs:
+    - outputs: xarray DataArray of size (time, num_classes)
+    - batch_size: int, batch size
+
+    Returns:
+    - y_bgen: xbatcher BatchGenerator
+    - output_labels: list of output label names, one per class
+    """
+    if not isinstance(outputs, xr.DataArray):
+        raise ValueError(
+            f"outputs must be an xarray DataArray of shape (time, num_classes), "
+            f"got {type(outputs).__name__}"
+        )
+
+    if "time" not in outputs.dims:
+        raise ValueError("outputs must have a 'time' dimension")
+
+    if "lat" in outputs.dims or "lon" in outputs.dims:
+        raise ValueError(
+            "outputs should not have spatial dimensions (lat/lon). "
+            "For footprint outputs use make_fps_batcher instead."
+        )
+
+    # Find the output dimension (everything that is not time)
+    output_dims = [d for d in outputs.dims if d != "time"]
+    if len(output_dims) != 1:
+        raise ValueError(
+            f"outputs should have exactly 2 dimensions (time, num_classes), "
+            f"got dims: {outputs.dims}"
+        )
+    output_dim = output_dims[0]
+
+    # Extract labels from the coordinate values if they are strings,
+    # otherwise generate default names
+    # coord_vals = outputs[output_dim].values
+    # if coord_vals.dtype == object or np.issubdtype(coord_vals.dtype, np.str_):
+    #     output_labels = list(coord_vals)
+    # else:
+    #     output_labels = [f"output_{i}" for i in range(outputs.sizes[output_dim])]
+
+    if outputs.dtype != "float32":
+        outputs = outputs.astype("float32", copy=False)
+
+    outputs = outputs.chunk(time=batch_size)
+    outputs = outputs.transpose("time", output_dim)
+
+    y_bgen = xb.BatchGenerator(
+        outputs,
+        input_dims={output_dim: outputs.sizes[output_dim]},
+        batch_dims={"time": batch_size},
+        preload_batch=True,
+    )
+
+    return y_bgen #, output_labels
 
 def make_fps_batcher(fps, batch_size=10, flatten=False):
     """
@@ -1053,6 +1114,69 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     
     return dataloader, fps_labels
 
+def make_boundary_dataloader(inputs, outputs, batch_size=10, randomize=False,
+                              random_seed=42, dataloader_params=None, flatten=False):
+    """
+    Build a PyTorch DataLoader for boundary condition prediction using xbatcher.
+
+    Inputs must have dimensions (fp_time, lat, lon, variable_name).
+    Outputs must be an xarray DataArray of shape (time, num_classes).
+
+    Args:
+        inputs (xr.DataArray): Shape (fp_time, lat, lon, variable_name).
+        outputs (xr.DataArray): Shape (time, num_classes).
+        batch_size (int): Batch size.
+        randomize (bool): Whether to shuffle along the time dimension.
+        random_seed (int): Seed for reproducibility when randomize=True.
+        dataloader_params (dict, optional): Additional kwargs for DataLoader.
+        flatten (bool): Whether to flatten lat/lon in the inputs.
+
+    Returns:
+        torch.utils.data.DataLoader: yields (inputs_batch, outputs_batch) tensors.
+    """
+    if inputs.sizes["fp_time"] != outputs.sizes["time"]:
+        raise ValueError(
+            f"inputs and outputs have mismatched time dimensions: "
+            f"inputs fp_time={inputs.sizes['fp_time']}, outputs time={outputs.sizes['time']}"
+        )
+
+    if randomize:
+        np.random.seed(random_seed)
+        permuted_time = np.random.permutation(inputs.fp_time.values)
+        inputs = inputs.sel(fp_time=permuted_time)
+        outputs = outputs.sel(time=permuted_time)
+
+    X_bgen = make_inputs_batcher(inputs, batch_size=batch_size, flatten=flatten)
+
+    y_bgen = make_boundary_batcher(outputs, batch_size=batch_size)
+
+    dataset = xbatcher.loaders.torch.MapDataset(X_bgen, y_bgen)
+
+    if dataloader_params is None:
+        dataloader_params = {
+            "prefetch_factor": 3,
+            "num_workers": 4,
+            "persistent_workers": True,
+            "multiprocessing_context": "forkserver",
+        }
+
+    # prefetch_factor is only valid when num_workers > 0 — remove it otherwise
+    # to avoid a ValueError from PyTorch
+    dataloader_params = dataloader_params.copy()
+    if dataloader_params.get("num_workers", 0) == 0:
+        dataloader_params.pop("prefetch_factor", None)
+        dataloader_params.pop("persistent_workers", None)
+        dataloader_params.pop("multiprocessing_context", None)
+
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=None,
+        **dataloader_params
+    )
+
+    return dataloader
+
+
 
 ####
 ####  v2: single-interpolation-pass functions
@@ -1120,7 +1244,7 @@ def _cut_satellite_met_multi_delta(
     tol = pd.Timedelta(closest_tolerance)
     met_time_index = met_source.indexes["time"]
 
-    # --- Phase 2: timestamp lookup for every delta ---
+    # --- Phase 1: timestamp lookup for every delta ---
     nearest_info = {}
     all_unique_times = set()
 
@@ -1131,12 +1255,11 @@ def _cut_satellite_met_multi_delta(
         )
 
         if interp_to is None:
-            # Existing behaviour: snap each target to the nearest met timestamp.
+            # choose the nearest met timestamp for each target time, within the specified tolerance
             nearest = met_time_index.get_indexer(target_times, method="nearest", tolerance=tol)
             nan_mask = nearest == -1
             nearest_safe = np.where(~nan_mask, nearest, 0)
             nearest_timestamps = met_time_index.values[nearest_safe]
-            # nan_idxs reported in fp_time space (undo the delta shift)
             nan_idxs = (target_times[nan_mask] + pd.Timedelta(f"{delta}h")).to_numpy()
 
             nearest_info[delta] = {
@@ -1147,16 +1270,13 @@ def _cut_satellite_met_multi_delta(
             all_unique_times.update(nearest_timestamps[~nan_mask])
 
         else:
-            # interp_to mode: round target to the requested resolution, then
-            # find the floor/ceiling met timestamps that bracket each rounded time.
+            # If required, calculate the target times rounded to the specified resolution to interpolate to later, and find the nearest met timestamps that bracket those targets on either side (floor and ceil).
             interp_targets = target_times.round(interp_to)
             floor_idxs = met_time_index.get_indexer(interp_targets, method="ffill")
             ceil_idxs = met_time_index.get_indexer(interp_targets, method="bfill")
             nan_mask = (floor_idxs == -1) | (ceil_idxs == -1)
             nan_idxs = (target_times[nan_mask] + pd.Timedelta(f"{delta}h")).to_numpy()
 
-            # For nan positions use the first valid interp target as a safe fallback
-            # (those rows are dropped later via all_nan_idxs in the caller).
             interp_targets_arr = interp_targets.to_numpy()
             valid_targets = interp_targets_arr[~nan_mask]
             safe_targets = np.where(
@@ -1170,52 +1290,39 @@ def _cut_satellite_met_multi_delta(
                 "nan_mask": nan_mask,
                 "nan_idxs": nan_idxs,
             }
-            # Collect the bracket timestamps that will need to be loaded
             all_unique_times.update(met_time_index.values[floor_idxs[~nan_mask]])
             all_unique_times.update(met_time_index.values[ceil_idxs[~nan_mask]])
 
-    # --- Phase 2b: select the union of required timestamps ---
-    # Chunk with time=-1 (one big time chunk) so that the vectorized isel below
-    # creates O(n_vars) tasks per delta instead of O(n_fp_times × n_vars).
-    # Trade-off: computing any batch loads all unique timestamps at once.
+    # --- Phase 2: select the union of required timestamps ---
     all_unique_times_sorted = sorted(all_unique_times)
     size_chunks = len(all_unique_times_sorted) // 10
     size_chunks = max(size_chunks, 1)
     size_chunks = min(100, size_chunks)
-    n_chunks = (len(all_unique_times_sorted)) // size_chunks
-    # calculate how many chunks will be needed, if each has size size_chunks
 
     if verbose:
         print(f"Selecting {len(all_unique_times_sorted)} unique met timestamps ")
-        # print the first three
         print(f"First few unique timestamps: {all_unique_times_sorted[:3]} ...")
-        #      f"(across {len(time_deltas)} time_delta(s)) as {n_chunks} dask chunks of size {size_chunks}...")
 
     chunk_kw = {"time": size_chunks, "lat": -1, "lon": -1}
-
     if "levels" in met_source.dims:
         chunk_kw["levels"] = -1
+
     with dask.config.set(**{'array.slicing.split_large_chunks': True}):
         met_loaded = met_source.sel(time=list(all_unique_times_sorted))
     if load_into_memory:
         print("Loading selected met data into memory...")
         met_loaded = met_loaded.compute()
 
-    #met_loaded = met_loaded.chunk(chunk_kw)
-
     # --- Phase 3: spatial structure — computed once, shared across all deltas ---
-    ## the bug was here - but am now skipping over release_idxs, and just using the lat_coords and lon_coords generated when cropping the footprints
     release_idxs = _get_release_idxs(fp, domain_lats=met_source.lat.values, domain_lons=met_source.lon.values)
     met_loaded, _, _, _ = _pad_domain(
         met_loaded, fp, release_idxs, half, pad_mode, verbose=verbose
     )
 
-
     lat_ds = fp.lat_coords
     lon_ds = fp.lon_coords
 
-    # --- Phase 2c (interp_to only): linearly interpolate the padded bracket data
-    # to the rounded target times.  Padding is spatial-only so order doesn't matter.
+    # --- Phase 3c (interp_to only): linearly interpolate to rounded target times ---
     if interp_to is not None:
         all_interp_targets = sorted({
             t for info in nearest_info.values()
@@ -1252,14 +1359,30 @@ def _cut_satellite_met_multi_delta(
         met_delta = met_for_crop.isel(time=pos)
         met_delta = met_delta.assign_coords(time=fp_times)
 
-        # Spatial crop 
-
+        # Spatial crop using 2D lat/lon DataArrays from the footprint
         cropped = met_delta.sel(lat=lat_ds, lon=lon_ds, method="nearest")
-        # store the lat and lon values in cropped as coordinates before reassigning the lat and lon coordinates to be the index values (0 to metsize-1)
-        cropped = cropped.assign_coords(lat_coords=(("time", "lat"), cropped.lat.values), lon_coords=(("time", "lon"), cropped.lon.values))
 
-        cropped = cropped.assign_coords(lat=np.arange(metsize), lon=np.arange(metsize))
+        # After sel with 2D DataArray indexers, lat and lon become 2D variables
+        # of shape (time, lat) and (time, lon), which conflicts with assign_coords
+        # in older xarray versions. Save the real values, drop the 2D vars,
+        # then reassign integer coordinates and store real coords separately.
+        real_lats = cropped.lat.values
+        real_lons = cropped.lon.values
 
+        cropped = cropped.drop_vars(["lat", "lon"], errors="ignore")
+        cropped = cropped.assign_coords(
+            lat=np.arange(metsize),
+            lon=np.arange(metsize)
+        )
+        cropped["lat_coords"] = xr.DataArray(
+            real_lats, dims=["time", "lat"],
+            coords={"time": cropped.time}
+        )
+        cropped["lon_coords"] = xr.DataArray(
+            real_lons, dims=["time", "lon"],
+            coords={"time": cropped.time}
+        )
+        cropped = cropped.set_coords(["lat_coords", "lon_coords"])
 
         if add_wind_direction:
             try:
@@ -1269,7 +1392,7 @@ def _cut_satellite_met_multi_delta(
             except Exception as e:
                 warnings.warn(f"Could not compute wind variables for delta={delta}: {e}")
 
-        # Swap time → fp_time (matching convention in rest of pipeline)
+        # Swap time → fp_time to match convention in rest of pipeline
         cropped = cropped.assign({"fp_time": ("time", fp_times)})
         cropped = cropped.swap_dims({"time": "fp_time"}).drop_vars("time", errors="ignore")
 

@@ -6,6 +6,7 @@ data_paths:
     topog_datadir: "/ancillary_data/topog_file.nc"
     landcover_datadir: "/ancillary_data/landcover_file.nc"
     flux_datadir: "/fluxes_archive"
+    bc_datadir: "/bc_archive"
   bp:
     base_data_path:  "/group/chem/acrg"
     fp_datadir: "/LPDM/fp_NAME_pre20210701/"
@@ -13,6 +14,7 @@ data_paths:
     topog_datadir: "/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
     landcover_datadir: "/LPDM/topog_NAME/land_cover.nc"
     flux_datadir: "/LPDM/emissions/"
+    bc_datadir: "/LPDM/bc/"
   oracle:
     base_data_path: "./data"
     fp_datadir: "/fp_archive"
@@ -20,6 +22,7 @@ data_paths:
     topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
     landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
     flux_datadir: "/fluxes_archive"
+    bc_datadir: "/bc_archive/"
   isambard_ai:
     base_data_path: "/projects/b5s/data"
     fp_datadir: "/fp_archive"
@@ -27,6 +30,7 @@ data_paths:
     topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
     landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
     flux_datadir: "/fluxes_archive"
+    bc_datadir: "/bc_archive/"
 
 user_paths:
   save_models_dir: "path/to/folder/where/models/should/be/saved"

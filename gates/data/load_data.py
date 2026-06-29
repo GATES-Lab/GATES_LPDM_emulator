@@ -245,7 +245,7 @@ class LoadBaseSatelliteData:
 
 
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, load_bcs=False, cfg=None, parallel_loading=False, load_fps_in_mem=True):
         
         self.dataset_format = "base" 
         self.data_type="satellite"
@@ -297,7 +297,7 @@ class LoadBaseSatelliteData:
         
         #### load footprint (fp) data     
         if verbose: print("---- LOADING FOOTPRINTS")  
-        self._load_footprints(self.fp_datadir)
+        self._load_footprints(self.fp_datadir, load_bcs=load_bcs)
 
         self.met_processed = False
 
@@ -461,6 +461,7 @@ class LoadBaseSatelliteData:
                 **chunk_args,
                 drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"],
                 compat="override",
+                #engine="netcdf4",
                 engine="h5netcdf",
                 preprocess=preprocess_met_data,
             )
@@ -579,32 +580,42 @@ class LoadBaseSatelliteData:
                 UserWarning
             )
 
-    def _load_footprints(self, fp_datadir, load_fps_in_mem=True):
+    def _load_footprints(self, fp_datadir, load_fps_in_mem=True, load_bcs=False):
         """
         Load footprint from fp_datadir and applies subsampling according to the freq and sampling_mode parameters. 
         
         The footprints are stored in self.fp_data_full as an xarray dataset, with dimensions time, lat and lon. 
         """
-        #### load footprint (fp) data from file
-        if self.verbose: print("Loading footprint data from " + str(fp_datadir) )
+        if self.verbose: print("Loading footprint data from " + str(fp_datadir))
 
-        self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose, parallel_loading=self.parallel_loading, drop_variables_except=["fp", "release_lat", "release_lon"])
+        vars_to_load = [
+                "fp",
+                "release_lat",
+                "release_lon"]
+        if load_bcs:
+            bc_vars = [
+                "particle_locations_n",
+                "particle_locations_s",
+                "particle_locations_e",
+                "particle_locations_w",
+            ]
+            vars_to_load = vars_to_load + bc_vars
+        print("getting variables :", vars_to_load)
+        self.fp_data_full = load_fps(
+            fp_datadir,
+            verbose=self.verbose,
+            parallel_loading=self.parallel_loading,
+            drop_variables_except= vars_to_load
+        )
 
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
 
-        ## reduce data frequency with regular sampling 9eg keep only 1 in every 3 timesteps
-        # uses the sampling_mode and freq parameters
         self._subsample_frequency(**self.subsample_parameters)
 
-        #print(self.fp_data_full)
         if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
         if load_fps_in_mem:
-            self.fp_data_full.fp.load()
-            print("loaded fp variable into mem")
-        #print(self.fp_data_full)
-        #self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": "auto"})
-
-
+            self.fp_data_full.load()
+            if self.verbose: print("loaded fp dataset into mem with variables:", list(self.fp_data_full.data_vars))
 
         
     
@@ -899,7 +910,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, load_bcs=False, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
 
         print(dask.__version__)
 
@@ -965,7 +976,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         
         #### load footprint (fp) data, subsample, crop
         if verbose: print("---- LOADING FOOTPRINTS") 
-        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem)
+        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem, load_bcs=load_bcs)
         self._process_footprints(lazy_load)
 
         self.met_processed = False
@@ -1261,9 +1272,14 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None):
         flux_suffix = str(flux_suffix_cfg)
 
     path = Path(cfg.flux_datadir) / resolved_domain_name / f"{species}_{resolved_domain_name}_{year}{flux_suffix}.nc"
-    # make the sorted list a list of strings
+
     if not path.is_file():
-        raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_*.nc"))}")
+        existing_files = sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_*.nc"))
+        raise ValueError(
+            f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \n"
+            f"at {path}. \n"
+            f"The existing files are: {existing_files}"
+        )
     else:
         print(f"Loading flux data from {path}")
     return xr.open_dataset(path).flux
@@ -1407,6 +1423,18 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
         If True, load the result into memory immediately.
     verbose : bool
         Print progress messages.
+
+    Returns
+    -------
+    cropped_fp : xarray.Dataset
+        Cropped footprint dataset with artificial lat/lon coordinates and
+        lat_coords/lon_coords as coordinate variables.
+    fp_full : xarray.Dataset
+        The original (pre-padding) footprint dataset.
+    release_idxs : np.ndarray
+        Array of shape (n_times, 2) with the lat/lon indices of each release point.
+    padded_domain_coords : tuple
+        Tuple of (domain_lats, domain_lons) after any padding was applied.
     """
     if size % 2 != 0:
         raise ValueError("size must be even so the release point is centred")
@@ -1434,6 +1462,7 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
         fp_full, fp_full, release_idxs, half, pad_mode=fill_bads_with)
 
     padded_domain_coords = (domain_lats, domain_lons)
+
     # integer index arrays: shape (n_times, size)
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
     lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
@@ -1444,32 +1473,45 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         cropped_fp = fp_full.isel(lat=lat_da, lon=lon_da)
 
-    cropped_fp = (
-        cropped_fp
-        .assign_coords(lat=np.arange(size), lon=np.arange(size))
-        .assign({
-            "lat_coords": xr.DataArray(
-                domain_lats[lat_indices], dims=["time", "lat"],
-                coords={"time": cropped_fp.time}),
-            "lon_coords": xr.DataArray(
-                domain_lons[lon_indices], dims=["time", "lon"],
-                coords={"time": cropped_fp.time}),
-        })
+    # After isel with 2D indexers, lat and lon become 2D variables of shape
+    # (time, lat) and (time, lon) which conflicts with assign_coords in older
+    # xarray versions. Drop them first to get a clean slate.
+    cropped_fp = cropped_fp.drop_vars(["lat", "lon"], errors="ignore")
+
+    # Step 1: assign artificial integer coordinates
+    cropped_fp = cropped_fp.assign_coords(
+        lat=np.arange(size),
+        lon=np.arange(size)
     )
+
+    # Step 2: add real lat/lon values as data variables
+    cropped_fp["lat_coords"] = xr.DataArray(
+        domain_lats[lat_indices],
+        dims=["time", "lat"],
+        coords={"time": cropped_fp.time}
+    )
+    cropped_fp["lon_coords"] = xr.DataArray(
+        domain_lons[lon_indices],
+        dims=["time", "lon"],
+        coords={"time": cropped_fp.time}
+    )
+
+    # Step 3: promote lat_coords and lon_coords to coordinates
+    cropped_fp = cropped_fp.set_coords(["lat_coords", "lon_coords"])
 
     cropped_fp = cropped_fp[["fp", "lat_coords", "lon_coords", "release_lat", "release_lon"]]
     cropped_fp = cropped_fp.transpose("time", "lat", "lon")
-    #cropped_fp = cropped_fp.chunk({"time": 100, "lat": -1, "lon": -1})
 
-    fp_full = fp_full.sel(lat=slice(before_padding_coords[0][0], before_padding_coords[0][-1]),
-                          lon=slice(before_padding_coords[1][0], before_padding_coords[1][-1]))
+    fp_full = fp_full.sel(
+        lat=slice(before_padding_coords[0][0], before_padding_coords[0][-1]),
+        lon=slice(before_padding_coords[1][0], before_padding_coords[1][-1])
+    )
 
     if load:
         if verbose:
             print("loading cropped footprint dataset into memory")
         cropped_fp.load()
-    # return the same outputs as cut_satellite_data, except without the option to return as an array (we can add this later if needed, but it can be done easily with .values and reshape on the returned xarray)
-    #, fp_lats, fp_lons, release_idxs, padding, fp_full.sel(lat=slice(original_fp_domain[0], original_fp_domain[1]), lon=slice(original_fp_domain[2], original_fp_domain[3])), cropped_fp
+
     return cropped_fp, fp_full, release_idxs, padded_domain_coords
 
 
@@ -1780,7 +1822,7 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
         - landcover: integer landcover type, shape (time, lat, lon)
         - disaggregated_landcover: (time, lat, lon, landcover_level) with
           land_binary_mask inverted (sea=1, land=0) in level 0 and 9 fractional
-          landcover types in levels 1–9
+          landcover types in levels 1-9
     lat and lon are artificial coordinates 0..size; actual geographic coordinates
     are stored in lat_coords (time, lat) and lon_coords (time, lon) variables.
 
@@ -1790,15 +1832,13 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
         Topography dataset with variable surface_altitude and dimensions (lat, lon).
     landcover_file : xarray.Dataset
         Landcover dataset with variables landcover_type, land_binary_mask, and
-        landcover_fraction (lat, lon, pseudo_level),with coordinates lat, lon, pseudo_level
+        landcover_fraction (lat, lon, pseudo_level), with coordinates lat, lon, pseudo_level.
     fp : xarray.Dataset
         Footprint dataset providing release_lat, release_lon, and time coordinates.
     size : int
         Side length of the square crop. Must be even.
     pad_mode : str
         How to pad if a crop escapes the topog domain: 'zeros' (default) or 'edge'.
-    verbose : bool
-        Print progress messages.
     """
     if size % 2 != 0:
         raise ValueError("size must be even so the release point is centred")
@@ -1826,42 +1866,58 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
 
     # isel on static (lat, lon) arrays — DataArray indexers introduce the time dim
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
-        topog_crop  = topog_file.surface_altitude.isel(lat=lat_da, lon=lon_da)
-        if landcover_file is not None:
-            landcover_crop  = landcover_file.landcover_type.isel(lat=lat_da, lon=lon_da)
-            sea_mask_crop   = landcover_file.land_binary_mask.isel(lat=lat_da, lon=lon_da)
-            lc_frac_crop    = landcover_file.landcover_fraction.isel(lat=lat_da, lon=lon_da)
+        topog_crop = topog_file.surface_altitude.isel(lat=lat_da, lon=lon_da)
 
-            # assemble disaggregated_landcover: level 0 = inverted sea mask, levels 1-9 = fractions
-            # rename whatever the fractional landcover's last dim is called to "landcover_level"
-            # sea level mask should be, like topog, not having a landcover_level dimension, so we expand it and concat along the new landcover_level dim
+        if landcover_file is not None:
+            landcover_crop = landcover_file.landcover_type.isel(lat=lat_da, lon=lon_da)
+            sea_mask_crop  = landcover_file.land_binary_mask.isel(lat=lat_da, lon=lon_da)
+            lc_frac_crop   = landcover_file.landcover_fraction.isel(lat=lat_da, lon=lon_da)
 
             frac_levels = lc_frac_crop.fillna(0.0).rename({"pseudo_level": "landcover_level"})
+
+            # After isel with 2D indexers, lat and lon become 2D variables which
+            # conflicts with assign_coords in older xarray. Drop them first.
             sea_level = (1 - sea_mask_crop)
-            sea_level = sea_level.assign_coords(landcover_level=0)
-            #.expand_dims({"landcover_level": 1}, axis=-1)
+            sea_level = sea_level.drop_vars(["lat", "lon"], errors="ignore")
+            sea_level = sea_level.expand_dims({"landcover_level": [0]})
+
             disagg = xr.concat([sea_level, frac_levels], dim="landcover_level")
-    
+
+    # Build the result dataset, dropping 2D lat/lon vars from cropped arrays
+    # before assigning artificial integer coordinates
+    topog_crop = topog_crop.drop_vars(["lat", "lon"], errors="ignore")
+
     if landcover_file is None:
         result = xr.Dataset({
-        "topog":                    topog_crop,
-        "lat_coords": xr.DataArray(
-            domain_lats[lat_indices], dims=["time", "lat"], coords={"time": fp.time}),
-        "lon_coords": xr.DataArray(
-            domain_lons[lon_indices], dims=["time", "lon"], coords={"time": fp.time}),
-    })
-    else:
-        result = xr.Dataset({
-            "topog":                    topog_crop,
-            "landcover":                landcover_crop,
-            "disaggregated_landcover":  disagg,
+            "topog": topog_crop,
             "lat_coords": xr.DataArray(
-                domain_lats[lat_indices], dims=["time", "lat"], coords={"time": fp.time}),
+                domain_lats[lat_indices], dims=["time", "lat"],
+                coords={"time": fp.time}),
             "lon_coords": xr.DataArray(
-                domain_lons[lon_indices], dims=["time", "lon"], coords={"time": fp.time}),
+                domain_lons[lon_indices], dims=["time", "lon"],
+                coords={"time": fp.time}),
+        })
+    else:
+        landcover_crop = landcover_crop.drop_vars(["lat", "lon"], errors="ignore")
+
+        result = xr.Dataset({
+            "topog":                   topog_crop,
+            "landcover":               landcover_crop,
+            "disaggregated_landcover": disagg,
+            "lat_coords": xr.DataArray(
+                domain_lats[lat_indices], dims=["time", "lat"],
+                coords={"time": fp.time}),
+            "lon_coords": xr.DataArray(
+                domain_lons[lon_indices], dims=["time", "lon"],
+                coords={"time": fp.time}),
         })
 
-    result = result.assign_coords(lat=np.arange(size), lon=np.arange(size))
+    # Assign artificial integer coordinates — safe now that 2D lat/lon vars
+    # have been dropped from all component arrays before building the dataset
+    result = result.assign_coords(
+        lat=np.arange(size),
+        lon=np.arange(size)
+    )
 
     return result
 
