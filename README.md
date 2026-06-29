@@ -4,25 +4,60 @@ This repo implements a new, more user-friendly version of the model described at
 
 Please note that this is the most up-to-date branch, and although it is functional, documentation and usability can be patchy! Keep an eye on this repo and on our website [https://gates-lab.github.io/](https://gates-lab.github.io/) for updates.
 
-## New file structure (currently in construction)
+## File structure
 ```
-gates_LPDM_emulator/
-├── gates/
-│   └── data/
-│   |   ├── load_data.py         # LoadSquareSatelliteData, LoadBaseSatelliteData
-│   |   ├── datasets.py          # InputsDataset, FootprintDataset, 
-│   |   └── HOW_TO_DATA.md       # Info on how to use the data files
-|   └── evaluation/
-│   │   ├── metrics.py         
-│   │   └── loss_functions.py
-|   └── training/
-│       └── training.py
+graphnet_LPDM_emulator/
+├── gates/                                    # Main GATES package
+│   ├── config.py                             # Config loading (get_config, generates config.yml)
+│   ├── data/
+│   │   ├── datasets.py                       # InputsDataset, FootprintDataset, make_dataloader
+│   │   ├── load_data.py                      # LoadSquareSatelliteData
+│   │   ├── load_background_data.py           # Boundary condition utils
+│   │   └── load_data_helper_funs.py
+│   ├── evaluation/
+│   │   ├── loss_functions.py
+│   │   ├── metrics.py
+│   │   └── post_processing.py
+│   ├── model/
+│   │   ├── forecast.py                       # GraphSatelliteForecaster — top-level model class
+│   │   └── layers/
+│   │       ├── encoder.py                    # Grid → Mesh encoder
+│   │       ├── processor.py                  # Mesh message-passing blocks
+│   │       ├── decoder.py                    # Mesh → Grid decoder
+│   │       └── graph_net_block.py
+│   ├── plotting/
+│   │   └── plotting_predictions.py
+│   ├── training/
+│   │   ├── training.py
+│   │   ├── training_background.py
+│   │   ├── training_dataclasses.py
+│   │   └── training_helperfuns.py
+│   └── utils/
+│       ├── config_defaults.yml
+│       └── shape_utils.py
+├── How_Tos/                                  # Reference guides
+│   ├── HOW_TO_CONFIG.md
+│   ├── HOW_TO_DATA.md
+│   ├── HOW_TO_PARAMETER_FILE.md
+│   ├── HOW_TO_WandB.md
+│   ├── HOW_TO_BOUNDARIES.md
+│   └── HOW_TO_evaluation.md
 ├── notebooks/
-│       ├── data_tutorial.ipynb
-│       └── plotting_results.ipynb
-├── train_GATES_model.py
+│   ├── data_tutorial.ipynb
+│   ├── plotting_results.ipynb
+│   └── uncertainty_fluxes.ipynb
+├── parameter_files/                          # JSON parameter templates
+├── tests/
+├── trained_models/                           # Saved model checkpoints
+├── train_GATES_model.py                      # Training entry point
 ├── train_GATES_model_multiregion.py
-├── predict_GATES_model.py
+├── train_boundary_model.py
+├── predict_GATES_model.py                    # Inference entry point
+├── predict_boundary_model.py                 
+├── launch_train.sh                           # SLURM job script
+├── env_gates_pytorch.yml                     # Conda environment
+├── model_description.md
+└── pyproject.toml
 ```
 
 Please check the following HowTos for info on different aspects!
