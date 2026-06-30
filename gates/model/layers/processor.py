@@ -29,7 +29,7 @@ class SatelliteProcessor(torch.nn.Module):
         hidden_layers_processor_edge: int = 2,
         mlp_norm_type: str = "LayerNorm",   
         dropout: float=0, 
-        scatter: str="mean",disaggregated=False, attention=False,attention_mask=None
+        scatter: str="mean",disaggregated=False, attention=False,attention_mask=None, residuals: bool = False
     ):
         """
         Latent graph processor
@@ -44,6 +44,7 @@ class SatelliteProcessor(torch.nn.Module):
             hidden_layers_processor_edge: Number of hidden layers in the edge processors
             mlp_norm_type: Type of norm for the MLPs
                 one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            residuals: bool, whether to have the mesh update with residuals (change from the previous state) or not (replace the previous state)
         """
         super().__init__()
         # Build the default graph
@@ -58,7 +59,7 @@ class SatelliteProcessor(torch.nn.Module):
             hidden_dim_processor_edge,
             hidden_layers_processor_node,
             hidden_layers_processor_edge,
-            mlp_norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention,attention_mask=attention_mask
+            mlp_norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention,attention_mask=attention_mask, residuals=residuals
         )
 
     def forward(self, x: torch.Tensor, edge_index, edge_attr, batch=None) -> torch.Tensor:

@@ -535,6 +535,7 @@ class NodeSatelliteProcessor(nn.Module):
         norm_type: str = "LayerNorm",
         dropout: float=0,
         scatter: str="mean",
+        residuals: bool = False,
     ):
         """
         Node Processor
@@ -546,6 +547,7 @@ class NodeSatelliteProcessor(nn.Module):
             hidden_layers: Number of hidden layers
             norm_type: Normalization type
                 one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            residuals: If True, add x back to node_mlp_2 output (residual update)
         """
         super().__init__()
         #super(NodeProcessor, self).__init__()
@@ -562,6 +564,7 @@ class NodeSatelliteProcessor(nn.Module):
         )
 
         self.scatter=scatter
+        self.residuals=residuals
         print("hello")
 
 
@@ -600,9 +603,8 @@ class NodeSatelliteProcessor(nn.Module):
         #print("mlp 2")
         out = self.node_mlp_2(out)
 
-        #print(out.size(), x.size())
-        #out += x  # residual connection
-        #print(out.size())
+        if self.residuals:
+            out += x  # residual connection
         return out
 
 class NodeSatelliteProcessorAttention(nn.Module):
@@ -732,7 +734,7 @@ def build_satellite_graph_processor_block(
     hidden_layers_edge: int = 2,
     norm_type: str = "LayerNorm",
     dropout: float=0,
-    scatter: str="mean",disaggregated=False, attention=False,attention_mask=None
+    scatter: str="mean",disaggregated=False, attention=False,attention_mask=None, residuals=False
 ) -> torch.nn.Module:
     """
     Build the Graph Net Block
@@ -775,7 +777,7 @@ def build_satellite_graph_processor_block(
                 in_dim_node, in_dim_edge, hidden_dim_edge, hidden_layers_edge, norm_type, dropout=dropout
             ),
             node_model=NodeSatelliteProcessor(
-                in_dim_node, in_dim_edge, hidden_dim_node, hidden_layers_node, norm_type, dropout=dropout, scatter=scatter
+                in_dim_node, in_dim_edge, hidden_dim_node, hidden_layers_node, norm_type, dropout=dropout, scatter=scatter, residuals=residuals
             ),
         )
             
@@ -902,7 +904,7 @@ class GraphSatelliteProcessor(nn.Module):
         hidden_layers_edge: int = 2,
         norm_type: str = "LayerNorm",
         dropout: float = 0,
-        scatter: str="mean", disaggregated=False, attention=False, attention_mask=None
+        scatter: str="mean", disaggregated=False, attention=False, attention_mask=None, residuals: bool = False
     ):
         """
         Graph Processor
@@ -934,7 +936,7 @@ class GraphSatelliteProcessor(nn.Module):
                     hidden_dim_edge,
                     hidden_layers_node,
                     hidden_layers_edge,
-                    norm_type, dropout=dropout, scatter=scatter,disaggregated=disaggregated, attention=attention, attention_mask=attention_mask
+                    norm_type, dropout=dropout, scatter=scatter,disaggregated=disaggregated, attention=attention, attention_mask=attention_mask, residuals=residuals
                 )
             )
 

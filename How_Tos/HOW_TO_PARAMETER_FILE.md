@@ -236,7 +236,8 @@ Defines the GNN architecture.
     "resolution": 4,
     "output_dim": 1,
     "residuals": false,
-    "attention": false
+    "attention": false,
+    "release_edges": false
 }
 ```
 
@@ -253,6 +254,9 @@ Defines the GNN architecture.
 | `hidden_dim_decoder` | Hidden dimension of the Decoder MLP. |
 | `resolution` | H3 mesh resolution controlling hexagon granularity. Resolution 4 is standard (~1–3 grid nodes per hexagon). Lower = coarser. |
 | `output_dim` | Number of output values per grid node. `1` for a single footprint value. |
+| `residuals` | If `true`, each Processor block applies a residual connection: the mesh-node MLP output is added back to the node's own features (`out = node_mlp(...) + x`). Otherwise, the mesh features are completely replaced by the output of the next MLP. Default: `false`. |
+| `attention` | If `true`, replaces scatter-mean message aggregation in the Processor with multi-head self-attention over mesh nodes. Default: `false`. NEEDS TESTING|
+| `release_edges` | If `true`, adds a directed edge from the release mesh node (the h3 cell containing the satellite measurement point) to every non-adjacent mesh node. This lets all nodes receive a direct message from the release node's encoded met state (BLH, wind, stability) in the first Processor block, without waiting for multi-hop propagation. A binary `is_release_edge` flag is appended to edge features so the MLP can distinguish these long-range edges from regular k-ring-1 edges. When `dynamic_latlon=True` in `dynamic_edges`, release edge distances and lat/lon offsets are recomputed from actual input coordinates rather than fixed h3 grid geometry. Compatible with all `dynamic_edges` settings. Default: `false`. |
 
 ---
 

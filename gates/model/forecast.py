@@ -121,15 +121,10 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_layers_processor_node=hidden_layers_processor_node,
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
-            mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask
+            mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask, residuals=residuals
         )
         print("set up decoder")
-        if residuals:
-            node_dim=node_dim + feature_dim
-            print("here", node_dim)
-            # if residuals, attach the original inputs for that latlon node to the inputs of the mesh nodes
-        else:
-            node_dim=node_dim
+
         self.decoder = SatelliteDecoder(
             lat_lons=lat_lons,
             h_grid=self.encoder.h3_grid,
@@ -139,7 +134,6 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             output_dim=output_dim,
             mlp_norm_type=norm_type,
             hidden_dim_decoder=hidden_dim_decoder,
-            residuals=residuals,
             hidden_layers_decoder=hidden_layers_decoder,
             use_checkpointing=use_checkpointing , dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours, concat_neighbours_2=concat_decoder_neighbours_2,idx_latlon=idx_latlon, append_latlon=decoder_append_latlon
         )
