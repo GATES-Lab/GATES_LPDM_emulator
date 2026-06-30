@@ -111,14 +111,22 @@ def main():
     if not sweep_spec:
         sys.exit("No '__sweep__' section found in the parameter file. Nothing to do.")
 
-    sweep_keys = list(sweep_spec.keys())
-    sweep_values = [sweep_spec[k] for k in sweep_keys]
-    combos = [dict(zip(sweep_keys, vals)) for vals in product(*sweep_values)]
-
-    n_combos = len(combos)
-    print(f"Sweep over {len(sweep_keys)} parameter(s) → {n_combos} combination(s):")
-    for k, v in sweep_spec.items():
-        print(f"  {k}: {v}")
+    if isinstance(sweep_spec, list):
+        # Explicit combinations mode: __sweep__ is a list of dicts
+        combos = sweep_spec
+        n_combos = len(combos)
+        print(f"Explicit combinations mode: {n_combos} combination(s):")
+        for i, combo in enumerate(combos):
+            print(f"  [{i + 1}] {combo}")
+    else:
+        # Cartesian product mode: __sweep__ is a dict of {key: [values]}
+        sweep_keys = list(sweep_spec.keys())
+        sweep_values = [sweep_spec[k] for k in sweep_keys]
+        combos = [dict(zip(sweep_keys, vals)) for vals in product(*sweep_values)]
+        n_combos = len(combos)
+        print(f"Cartesian product over {len(sweep_keys)} parameter(s) → {n_combos} combination(s):")
+        for k, v in sweep_spec.items():
+            print(f"  {k}: {v}")
 
     out_dir = Path(args.output_dir).resolve() if args.output_dir else param_path.parent / "sweep_configs"
     out_dir.mkdir(parents=True, exist_ok=True)
