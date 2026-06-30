@@ -612,34 +612,24 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         self.register_buffer('enc_edge_weights',
                              torch.tensor(edge_weights, dtype=torch.float32))
 
-        # --- better_meshnodes ---
-        self.better_meshnodes = better_meshnodes
-        if self.better_meshnodes:
-            assert idx_latlon is not None, "pass the idx_latlon grid to do better meshnodes!"
-            size = int(np.sqrt(self.num_latlons))
-            centre_idx = np.ravel_multi_index((int(size / 2), int(size / 2)), (size, size))
-            assert idx_latlon[centre_idx] == (0, 0), \
-                "something went wrong trying to make better meshnodes"
-
-            binary_centre = np.zeros((self.num_h3, 1))
-            binary_centre[self.base_h3_grid.index(self.h3_grid[centre_idx])] = 1
-
-            distance_centre = []
-            for _, h3_point in enumerate(self.base_h3_grid):
-                distance = h3.point_dist(lat_lons[centre_idx], h3.h3_to_geo(h3_point), unit="km")
-                distance_centre.append([distance])
-            distance_centre = np.array(distance_centre)
-            distance_centre = ((distance_centre - np.min(distance_centre))
-                               / (np.max(distance_centre) - np.min(distance_centre)))
-
-            self.register_buffer('improved_mesh_nodes',
-                                 torch.tensor(np.hstack((binary_centre, distance_centre)),
-                                              dtype=torch.float32))
+        # better_meshnodes is deprecated: earth_distance_centre in the input features
+        # covers the same information via the scatter aggregation. release_edges (below)
+        # handles the "which node is the release" signalling more principled.
+        self.better_meshnodes = False
+        if better_meshnodes:
+            import warnings
+            warnings.warn(
+                "better_meshnodes is deprecated and has no effect. "
+                "Include earth_distance_centre in static_variables instead.",
+                DeprecationWarning, stacklevel=2,
+            )
 
         # --- mesh graph ---
-        mesh_edge_index, mesh_edge_attr_static = self._create_mesh_edges()
+        mesh_edge_index, mesh_edge_attr_static, release_edge_flag = self._create_mesh_edges()
         self.register_buffer('mesh_edge_index', mesh_edge_index)
         self.register_buffer('mesh_edge_attr_static', mesh_edge_attr_static)
+        if self.release_edges:
+            self.register_buffer('release_edge_flag', release_edge_flag)
 
         # --- attention ---
         self.attention = attention
@@ -672,23 +662,24 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         )
 
         # --- mesh edge encoder MLP ---
-        base_edge_dim = 3 # distance, dlat and dlon from fixed grid
+        base_edge_dim = 3  # distance, dlat, dlon from fixed grid
         if latlon_mesh_edges:
             if self.dynamic_earthdistance:
-                base_edge_dim = 3  # replace with dynamic haversine distance, dlat and dlon from data
+                base_edge_dim = 3  # dynamic haversine distance, dlat, dlon from data
             else:
-                base_edge_dim = 2  # replace with dlat and dlon from data
+                base_edge_dim = 2  # dlat, dlon from data
+        if release_edges:
+            base_edge_dim += 1  # is_release_edge flag
 
         if self.dynamic_earthdistance:
             from gates.data import haversine
-            # calculate mean distance between mesh centres from library h3
-            # using formula to derive the apothem (distance from the center to the flat midpoint of any side) from the side length, and multiplying by 2 to get the distance between centers of adjacent hexagons
-            mean_edge_length = h3.edge_length(resolution, unit='km')*(np.sqrt(3)/2)*2
+            # apothem * 2 = centre-to-centre distance between adjacent hexagons
+            mean_edge_length = h3.edge_length(resolution, unit='km') * (np.sqrt(3) / 2) * 2
             self.register_buffer('mean_edge_length', torch.tensor(mean_edge_length, dtype=torch.float32))
 
-        n_wind = len(wind_indices) if wind_mesh_edges else 0 # append as many features as there are wind variables selected
+        n_wind = len(wind_indices) if wind_mesh_edges else 0
         print("mesh edge encoder inputs:", base_edge_dim + n_wind)
-        print(f"base edge dim: {base_edge_dim }, with {latlon_mesh_edges=}, {self.dynamic_earthdistance=} and {wind_mesh_edges=} with {n_wind} wind features")
+        print(f"base edge dim: {base_edge_dim}, with {latlon_mesh_edges=}, {self.dynamic_earthdistance=}, {release_edges=} and {wind_mesh_edges=} with {n_wind} wind features")
 
         self.mesh_edge_encoder = MLP(
             base_edge_dim + n_wind, output_edge_dim, hidden_dim_processor_edge,
@@ -696,15 +687,29 @@ class SatelliteDynamicEncoder(torch.nn.Module):
             self.use_checkpointing, dropout=dropout,
         )
 
-    def _create_mesh_edges(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Build mesh edge index and static edge attribute tensor.
+    def _create_mesh_edges(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Build mesh edge index, static edge attribute tensor, and release-edge flag.
+
+        Regular k-ring-1 edges connect each mesh node to its immediate neighbours.
+        When release_edges=True, additional edges are added FROM the release mesh node
+        TO every non-adjacent mesh node, so every node receives a direct message from
+        the release node in the first processor block.
+
+        The static dist_to_release on release edges is computed from h3 grid coordinates.
+        When dynamic_earthdistance=True, this static distance is replaced in forward() by
+        a haversine computed from the input lat/lon features at the release and target nodes
+        — the same computation applied to all edges uniformly via mesh_edge_index.
 
         Returns:
-            edge_index: (2, E) long tensor
-            edge_attr:  (E, 3) float tensor [distance, dlat, dlon]
-            
+            edge_index:        (2, E) long tensor
+            edge_attr_static:  (E, 3) float tensor [distance, dlat, dlon]
+            release_edge_flag: (E, 1) float tensor — 1.0 for release edges, 0.0 otherwise
         """
         edge_sources, edge_targets, edge_attrs = [], [], []
+        rel_sources, rel_targets, rel_attrs = [], [], []
+
+        release_loc = h3.h3_to_geo(self.release_h3) if self.release_edges else None
+
         for h3_index in self.base_h3_grid:
             h_points = h3.k_ring(h3_index, 1)
             loc_point = h3.h3_to_geo(h3_index)
@@ -715,7 +720,6 @@ class SatelliteDynamicEncoder(torch.nn.Module):
                     # if h_cell is outside the reduced domain (edge of mesh), it won't be in base_h3_map and we skip it
                     edge_targets.append(self.base_h3_map[h_cell])
                     edge_sources.append(self.base_h3_map[h3_index])
-
                     dlat = loc_point[0] - loc_neighbour[0]
                     dlon = loc_point[1] - loc_neighbour[1]
                     edge_attrs.append([distance, dlat, dlon])
@@ -723,25 +727,29 @@ class SatelliteDynamicEncoder(torch.nn.Module):
                     # h_cell is outside the reduced domain (edge of mesh)
                     #print(f"h_cell {h_cell} not in base_h3_map, skipping edge from {h3_index} to {h_cell}")
                     continue
+
             if self.release_edges:
                 if h3_index != self.release_h3 and (self.release_h3 not in h_points):
-                    release_loc = h3.h3_to_geo(self.release_h3)
-                    dist_to_release = h3.point_dist(loc_point, release_loc, unit="km")
-                    dlat = loc_point[0] - release_loc[0]
-                    dlon = loc_point[1] - release_loc[1]
-                    edge_attrs.append([dist_to_release, dlat, dlon])
-                    edge_targets.append(self.base_h3_map[self.release_h3])
-                    edge_sources.append(self.base_h3_map[h3_index])
+                    dist_to_release = h3.point_dist(release_loc, loc_point, unit="km")
+                    # dlat/dlon: src (release) - dst (h3_index), consistent with regular edges
+                    dlat = release_loc[0] - loc_point[0]
+                    dlon = release_loc[1] - loc_point[1]
+                    rel_attrs.append([dist_to_release, dlat, dlon])
+                    rel_sources.append(self.base_h3_map[self.release_h3])  # FROM release
+                    rel_targets.append(self.base_h3_map[h3_index])          # TO each node
 
-        #print("mesh edge index shape:", (len(edge_sources),))
-        #print("mesh edge attr shape:", (len(edge_attrs), len(edge_attrs[0]) if edge_attrs else 0))
-        edge_index = torch.tensor([edge_sources, edge_targets], dtype=torch.long)
-        edge_attrs = torch.tensor(edge_attrs, dtype=torch.float)
-        #print(edge_index[:,:5])
-        #print(edge_attrs[:5, :5])
+        n_regular = len(edge_sources)
+        n_release = len(rel_sources)
 
-        return (edge_index,
-                edge_attrs)
+        edge_index = torch.tensor(
+            [edge_sources + rel_sources, edge_targets + rel_targets], dtype=torch.long)
+        edge_attr_static = torch.tensor(edge_attrs + rel_attrs, dtype=torch.float)
+
+        release_edge_flag = torch.zeros(n_regular + n_release, 1, dtype=torch.float)
+        if n_release > 0:
+            release_edge_flag[n_regular:] = 1.0
+
+        return edge_index, edge_attr_static, release_edge_flag
 
     def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -816,30 +824,26 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         features = einops.rearrange(features, "b f n -> (b n) f")
         out = self.node_encoder(features)
 
-        if self.better_meshnodes:
-            better_nodes = einops.repeat(
-                self.improved_mesh_nodes, "e f -> (repeat e) f", repeat=batch_size)
-            out = torch.cat([out, better_nodes], dim=1)
-
         # encode mesh edges
         if self.latlon_mesh_edges or self.wind_mesh_edges:
             if self.latlon_mesh_edges:
-                mesh_edge_feature_components = [edge_latlon]  # (B*E, 2) per-sample dlat/dlon, ignores static
+                mesh_edge_feature_components = [edge_latlon]  # (B*E, 2 or 3) per-sample dlat/dlon (or dist+dlat/dlon)
             else:
                 mesh_edge_feature_components = [einops.repeat(
                     self.mesh_edge_attr_static, "e f -> (rep e) f", rep=batch_size)]  # (B*E, 3)
             if self.wind_mesh_edges:
                 mesh_edge_feature_components.append(edge_wind)  # (B*E, n_wind)
-            
-            edges = torch.cat(mesh_edge_feature_components, dim=-1)
-            #print(f"edges: {edges.shape}")
-            #print(edges)
+            if self.release_edges:
+                # flag is static — same for every sample in the batch
+                mesh_edge_feature_components.append(
+                    einops.repeat(self.release_edge_flag, "e f -> (rep e) f", rep=batch_size))  # (B*E, 1)
             mesh_edge_attrs = self.mesh_edge_encoder(torch.cat(mesh_edge_feature_components, dim=-1))
         else:
-            #print(f"edges: {self.mesh_edge_attr_static.shape}")
-            #print(self.mesh_edge_attr_static)
-            mesh_edge_attrs = self.mesh_edge_encoder(self.mesh_edge_attr_static)
-        
+            if self.release_edges:
+                static_attrs = torch.cat([self.mesh_edge_attr_static, self.release_edge_flag], dim=-1)  # (E, 4)
+            else:
+                static_attrs = self.mesh_edge_attr_static  # (E, 3)
+            mesh_edge_attrs = self.mesh_edge_encoder(static_attrs)
             mesh_edge_attrs = einops.repeat(
                 mesh_edge_attrs, "e f -> (rep e) f", rep=batch_size)
 

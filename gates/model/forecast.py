@@ -112,9 +112,6 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         if not encode_nodes:
             node_dim=feature_dim
         
-        if better_meshnodes:
-            node_dim=node_dim+2
-
         print("set up processor")
         self.processor = SatelliteProcessor(
             input_dim=node_dim,
