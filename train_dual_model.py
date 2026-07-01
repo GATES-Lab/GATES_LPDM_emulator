@@ -126,7 +126,8 @@ def validate_and_predict(model, loader, model_ctx, output_norm=None):
 
         fp_loss = model_ctx.fp_criterion_test(fp_pred, true_values, fp_batch)
         bg_loss = model_ctx.bg_criterion_test(bg_pred, bg_batch)
-        total_loss = fp_loss + model_ctx.bg_loss_weight * bg_loss
+        # Match the training loss combination (see train_one_epoch).
+        total_loss = (1 - model_ctx.bg_loss_weight) * fp_loss + model_ctx.bg_loss_weight * bg_loss
 
         total_err += total_loss.item()
         fp_err += fp_loss.item()

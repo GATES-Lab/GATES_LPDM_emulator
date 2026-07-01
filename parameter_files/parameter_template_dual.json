@@ -20,7 +20,7 @@
     "crop_met": false
   },
   "test_load_data": {
-    "years": ["2013"],
+    "years": ["2014"],
     "months": ["01","02","03","04","05","06","07","08","09","10","11","12"],
     "freq": 10
   },
@@ -83,7 +83,7 @@
     "attention": false
   },
   "learning_rate": 5e-05,
-  "use_wandb": false,
+  "use_wandb": true,
   "wandb": {
     "project": "Dual-FP-BG-Training",
     "entity": "gates-lab",
@@ -102,6 +102,6 @@
     "bg_criterion": "torch.nn.MSELoss",
     "bg_criterion_test": "torch.nn.MSELoss",
     "bg_criterion_params": {},
-    "bg_loss_weight": 0.0
+    "bg_loss_weight": 0.5
   }
 }
