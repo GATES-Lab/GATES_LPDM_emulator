@@ -11,6 +11,7 @@ Footprint-head metrics reuse the standard GATES evaluation (``calculate_losses``
 export); the background head additionally reports a denormalised MAE.
 """
 
+import os
 import sys
 import copy
 import argparse
@@ -261,7 +262,12 @@ def train_and_save_model(parameters, model_save_dir):
             use_wandb = False
             parameters["use_wandb"] = False
         if use_wandb:
-            wandb.init(entity=wandb_entity, project=wandb_project, config=parameters, tags=wandb_tags)
+            # Build a descriptive run name from the SLURM job info and key hyperparameters.
+            # Uses the parameters dict as the single source of truth for bg_loss_weight.
+            job_id = os.environ.get("SLURM_JOB_ID", "local")
+            job_name = os.environ.get("SLURM_JOB_NAME", "run")
+            run_name = f"{job_id}_{job_name}_bg{parameters.get('bg_loss_weight')}"
+            wandb.init(entity=wandb_entity, project=wandb_project, config=parameters, tags=wandb_tags, name=run_name)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(f"using device {device}, starting at " + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)

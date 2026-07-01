@@ -31,8 +31,9 @@
   },
   "variables": {
     "met_variables": [
-      "x_wind", "y_wind", "upward_air_velocity", "air_temperature"
-    ],
+        "x_wind", "y_wind", "upward_air_velocity", "air_temperature",
+        "air_pressure", "atmosphere_boundary_layer_thickness", "surface_air_pressure"
+      ],
     "met_levels": [3, 9, 15, 21, 30, 42, 51],
     "static_variables": [
       "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords",
@@ -92,7 +93,7 @@
   "epochs": {
     "training": 150,
     "visualize": 10,
-    "patience": 100,
+    "patience": 150,
     "model_save": 50
   },
   "loss_functions": {
@@ -102,6 +103,6 @@
     "bg_criterion": "torch.nn.MSELoss",
     "bg_criterion_test": "torch.nn.MSELoss",
     "bg_criterion_params": {},
-    "bg_loss_weight": 0.5
+    "bg_loss_weight": 0.0
   }
 }

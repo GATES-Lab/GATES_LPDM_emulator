@@ -5,7 +5,7 @@
 #SBATCH --mem=480GB
 #SBATCH --gres=gpu:1
 #SBATCH --job-name=dual_full
-#SBATCH --output=dual_full_%j.out
+#SBATCH --output=output_logs/dual_full_%j.out
 #SBATCH --time=96:00:00
 #SBATCH --account=chem007981
 #SBATCH --qos=normal
@@ -20,10 +20,6 @@ cd /user/work/yl18410/new_graphnet/graphnet_LPDM_emulator
 export PYTHONUNBUFFERED=1
 export PYTHONFAULTHANDLER=1
 
-# --- W&B setup ---------------------------------------------------------------
-# Construct a descriptive W&B run name: jobName_jobID
-export WANDB_NAME="${SLURM_JOB_ID}_${SLURM_JOB_NAME}"
-export WANDB_NOTES="5 CPU, shuffle"
 
 echo "python: $(which python)"
 
