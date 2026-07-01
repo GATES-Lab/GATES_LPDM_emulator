@@ -257,6 +257,7 @@ def train_and_save_model(parameters, model_save_dir):
         wandb_project = parameters.get("wandb", {}).get("project", None)
         wandb_entity = parameters.get("wandb", {}).get("entity", None)
         wandb_tags = parameters.get("wandb", {}).get("tags", [])
+        wandb_group = parameters.get("wandb", {}).get("group", None)
         if wandb_project is None or wandb_entity is None:
             print("Warning: use_wandb is True but no wandb.project/entity specified. W&B disabled.")
             use_wandb = False
@@ -267,7 +268,7 @@ def train_and_save_model(parameters, model_save_dir):
             job_id = os.environ.get("SLURM_JOB_ID", "local")
             job_name = os.environ.get("SLURM_JOB_NAME", "run")
             run_name = f"{job_id}_{job_name}_bg{parameters.get('bg_loss_weight')}"
-            wandb.init(entity=wandb_entity, project=wandb_project, config=parameters, tags=wandb_tags, name=run_name)
+            wandb.init(entity=wandb_entity, project=wandb_project, config=parameters, tags=wandb_tags, name=run_name, group=wandb_group)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(f"using device {device}, starting at " + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
