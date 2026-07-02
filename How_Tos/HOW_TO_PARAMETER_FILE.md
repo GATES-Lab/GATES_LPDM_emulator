@@ -336,8 +336,6 @@ Configures training and evaluation loss functions.
 | `criterion_params` | Keyword arguments for the train loss function. |
 | `criterion_test` | Loss function used for evaluation/test metrics. Typically a simpler unweighted MSE. |
 | `criterion_test_params` | Additional keyword arguments for the test loss function. |
-
-For a specific loss function:
 | `criterion_params.weight_label` | The data field used to derive per-pixel loss weights (e.g. the original unscaled footprint). |
 | `criterion_params.transform_fn` | The transform function to apply to the `weight_label`. function  `scale_and_shift` scales the data by parameter `w` and shifts it (adds) parameter `a`|
 
