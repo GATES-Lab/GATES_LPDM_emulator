@@ -43,16 +43,23 @@ from .training_helperfuns import EarlyStopping #save_wandb_artifact,
 from .training_dataclasses import ModelContext
 
 def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbose=True):
-    """
-    Loads training and test datasets for the GATES model using the LoadSquareSatelliteData class.
+    """Load a satellite dataset and its met inputs for the GATES model.
 
     Args:
-        data_parameters (dict): A dictionary containing parameters for loading the data, expected to have 'train_load_data' and 'test_load_data' keys.
-        datapath_args (dict): A dictionary of additional arguments required for data loading, such as file paths.
-        verbose (bool): If True, prints verbose output during data loading.
+        data_parameters (dict): Parameters forwarded to ``LoadSquareSatelliteData``
+            for loading a single year/month of data.
+        input_variables (dict): Variable extraction settings forwarded to
+            ``get_square_satellite_inputs_v2``.
+        datapath_args (dict, optional): Additional arguments required for data
+            loading, such as file paths; merged into ``data_parameters`` (with
+            "met_args" merged specially if present in both). Defaults to {}.
+        verbose (bool, optional): If True, prints verbose output during data loading.
+            Defaults to True.
 
     Returns:
-        tuple: A tuple containing the training dataset and test dataset objects.
+        tuple:
+            - data (LoadSquareSatelliteData): The loaded data object.
+            - inputs (xr.DataArray): Met inputs of shape (fp_time, lat, lon, variable_name).
     """
     ## if the met args dict is in both data_parameters and datapath_args, merge
     if "met_args" in data_parameters and "met_args" in datapath_args:
@@ -69,21 +76,33 @@ def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbos
     return data, inputs
 
 def _normalise_month(m):
-    """Convert int or str month to zero-padded two-character string, e.g. 1 -> '01'."""
+    """Convert int or str month to zero-padded two-character string, e.g. 1 -> '01'.
+
+    Args:
+        m (int or str): Month to normalise.
+
+    Returns:
+        str: Zero-padded two-character month string.
+    """
     return f"{int(m):02d}"
 
 
 def _resolve_years_months(data_parameters):
-    """
-    Extract year/years and month/months from data_parameters.
+    """Extract year/years and month/months from data_parameters.
 
-    Accepts:
-        year  : int | str           — single year
-        years : list[int | str]     — multiple years
-        month : int | str | None    — single month, or None meaning all 12
-        months: list[int | str]     — explicit list of months
+    Args:
+        data_parameters (dict): Recognised keys:
 
-    Returns (years_list, months_list) with months as zero-padded strings.
+            - year (int or str): Single year.
+            - years (list[int or str]): Multiple years (alternative to ``year``).
+            - month (int, str, or None): Single month, or None meaning all 12.
+            - months (list[int or str]): Explicit list of months (alternative to ``month``).
+
+    Returns:
+        tuple: ``(years_list, months_list)`` with months as zero-padded strings.
+
+    Raises:
+        ValueError: If ``data_parameters`` contains neither "year" nor "years".
     """
     if "years" in data_parameters:
         years = data_parameters["years"]
@@ -105,25 +124,48 @@ def _resolve_years_months(data_parameters):
     return years, months
 
 def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=None, latlon_tuples=None, input_names=None, dynamic_earthdistance=False):
-    """
-    Prepare the input dictionary to pass to the GraphSatelliteForecaster relating to the mesh edges attributes. 
+    """Prepare the input dictionary to pass to GraphSatelliteForecaster relating to the mesh edges attributes.
+
     Args:
-    - dynamic_wind (bool): Whether to include dynamic wind-based edges in the graph. If True, the function will look for wind feature tuples in input_names based on wind_tuples.
-    - dynamic_latlon (bool): Whether to include dynamic lat/lon-based edges in the graph. If True, the function will look for lat/lon feature tuples in input_names based on latlon_tuples.
-    - wind_tuples (list of tuples): Optional list of tuples specifying the names and positions of wind features in input_names. Each tuple should be (feature_name, feature_dim, time_lag). If None, defaults to [("x_wind", 3, 0), ("y_wind", 3, 0)].
-    - latlon_tuples (list of tuples): Optional list of tuples specifying the names and positions of lat/lon features in input_names. Each tuple should be (feature_name, feature_dim, time_lag). If None, defaults to [("lat_coords", 0, 0), ("lon_coords", 0, 0)].
-    - input_names (list of str): List of feature names corresponding to the input variables, used to identify the indices of wind and lat/lon features based on the provided tuples.
-    - dynamic_earthdistance (bool): Whether to compute dynamic earth distance edges based on lat/lon coordinates. Requires dynamic_latlon to be True (if dynamic_latlon is False, dynamic_earthdistance will be set to False and a warning will be printed)
+        dynamic_wind (bool, optional): Whether to include dynamic wind-based edges in
+            the graph. If True, looks for wind feature tuples in ``input_names``
+            based on ``wind_tuples``. Defaults to True.
+        dynamic_latlon (bool, optional): Whether to include dynamic lat/lon-based
+            edges in the graph. If True, looks for lat/lon feature tuples in
+            ``input_names`` based on ``latlon_tuples``. Defaults to False.
+        wind_tuples (list[tuple], optional): List of tuples specifying the names and
+            positions of wind features in ``input_names``. Each tuple should be
+            ``(feature_name, feature_dim, time_lag)``. If None, defaults to
+            ``[("x_wind", 3, 0), ("y_wind", 3, 0)]``. Defaults to None.
+        latlon_tuples (list[tuple], optional): List of tuples specifying the names
+            and positions of lat/lon features in ``input_names``. Each tuple should
+            be ``(feature_name, feature_dim, time_lag)``. If None, defaults to
+            ``[("lat_coords", 0, 0), ("lon_coords", 0, 0)]``. Defaults to None.
+        input_names (list[str], optional): Feature names corresponding to the input
+            variables, used to identify the indices of wind and lat/lon features
+            based on the provided tuples. Required if ``dynamic_wind`` and/or
+            ``dynamic_latlon`` is enabled. Defaults to None.
+        dynamic_earthdistance (bool, optional): Whether to compute dynamic earth
+            distance edges based on lat/lon coordinates. Requires ``dynamic_latlon``
+            to be True (if ``dynamic_latlon`` is False, this is set to False and a
+            warning is printed). Defaults to False.
 
     Returns:
-    - dynamic_edge_params (dict): A dictionary containing the parameters to be passed to the GraphSatelliteForecaster for configuring dynamic edges. Example:
-        {
-            "wind_mesh_edges": True,
-            "wind_indices": [3, 4],
-            "latlon_mesh_edges": True,
-            "latlon_indices": [0, 1],
-            "dynamic_earthdistance": True
-        }
+        dict: Parameters to pass to ``GraphSatelliteForecaster`` for configuring
+        dynamic edges, e.g.::
+
+            {
+                "wind_mesh_edges": True,
+                "wind_indices": [3, 4],
+                "latlon_mesh_edges": True,
+                "latlon_indices": [0, 1],
+                "dynamic_earthdistance": True
+            }
+
+    Raises:
+        ValueError: If ``input_names`` is None while ``dynamic_wind`` and/or
+            ``dynamic_latlon`` is enabled, or if the number of resolved lat/lon
+            indices is not exactly 2.
     """
     
     if (dynamic_wind or dynamic_latlon) and input_names is None:
@@ -302,12 +344,18 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
 
 
 def _get_scaler(scaler_name, scaler_module=None):
-    """
-    Dynamically retrieves a scaler class from a specified module based on its name.
+    """Dynamically retrieve a scaler class from a specified module based on its name.
 
     Args:
-        scaler_name (str): The name of the scaler class to retrieve (e.g., "StandardScaler").
-        scaler_module (module): The module from which to retrieve the scaler class. If None, defaults to gates_datasets 
+        scaler_name (str): The name of the scaler class to retrieve (e.g., "XarrayScaler").
+        scaler_module (module, optional): The module from which to retrieve the
+            scaler class. If None, defaults to ``gates.data.datasets``. Defaults to None.
+
+    Returns:
+        type: The scaler class.
+
+    Raises:
+        ValueError: If ``scaler_name`` is not found in ``scaler_module``.
     """
     if scaler_module is None:
         scaler_module = gates_datasets
@@ -319,6 +367,17 @@ def _get_scaler(scaler_name, scaler_module=None):
     
 
 def setup_input_dataset(parameters, train_inputs):
+    """Build and fit an InputsDataset (scaler wrapper) for the training inputs.
+
+    Args:
+        parameters (dict): Training parameters; uses ``parameters["input_scaler"]``
+            (with an optional "scaler" key naming the scaler class) and
+            ``parameters["verbose"]``.
+        train_inputs (xr.DataArray): Training inputs to fit/wrap.
+
+    Returns:
+        gates.data.datasets.InputsDataset: Fitted input dataset wrapper.
+    """
     train_inputs = train_inputs.astype('float32')
 
     input_scaler_params = parameters.get("input_scaler", {})
@@ -336,6 +395,17 @@ def setup_input_dataset(parameters, train_inputs):
     return input_dataset
 
 def setup_fp_dataset(parameters, train_fps):
+    """Build and fit a FootprintDataset (scaler wrapper) for the training footprints.
+
+    Args:
+        parameters (dict): Training parameters; uses ``parameters["fp_scaler"]``
+            (with an optional "scaler" key naming the scaler class) and
+            ``parameters["dataloader"]["nans_to_zeros"]`` (whether to add a NaN mask).
+        train_fps (xr.DataArray or xr.Dataset): Training footprints to fit/wrap.
+
+    Returns:
+        gates.data.datasets.FootprintDataset: Fitted footprint dataset wrapper.
+    """
     fp_scaler_params = parameters.get("fp_scaler", {})
     if fp_scaler_params:
         if "scaler" in fp_scaler_params:
@@ -353,7 +423,28 @@ def setup_fp_dataset(parameters, train_fps):
     return fp_dataset
 
 def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, test_fps):
+    """Scale inputs/footprints and build the train and test PyTorch dataloaders.
 
+    Args:
+        parameters (dict): Training parameters; uses ``input_scaler``, ``fp_scaler``,
+            ``dataloader`` (with ``batch_size``, ``test_batch_size``,
+            ``dataloader_params``, ``nans_to_zeros``), and ``verbose``.
+        train_inputs (xr.DataArray): Training met inputs.
+        train_fps (xr.DataArray or xr.Dataset): Training footprints.
+        test_inputs (xr.DataArray): Test met inputs.
+        test_fps (xr.DataArray or xr.Dataset): Test footprints.
+
+    Returns:
+        tuple:
+            - train_loader (torch.utils.data.DataLoader): Training dataloader.
+            - test_loader (torch.utils.data.DataLoader): Test dataloader.
+            - fp_labels (list): Footprint variable labels.
+            - test_scaled_fp (xr.DataArray or xr.Dataset): Scaled (and trimmed) test footprints.
+            - scalers (dict): ``{"inputs_scaler", "input_names", "fp_scaler"}``.
+
+    Raises:
+        ValueError: If the footprint labels differ between the train and test sets.
+    """
     if parameters.get("verbose", False):
         print(parameters.get("input_scaler"))
     input_dataset = setup_input_dataset(parameters, train_inputs)
@@ -400,8 +491,12 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
 
 
 def initialise_losses():
-    """
-    Return a dictionary to store losses and metrics during training and evaluation. 
+    """Build an empty dictionary to store losses and metrics during training and evaluation.
+
+    Returns:
+        dict: Dictionary with keys "train", "test", "test_criterion",
+        "metrics_transformed", "metrics_original", and "metrics_fluxes_static",
+        each initialised to empty lists/dicts ready to be appended to.
     """
     metrics_dict = {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
     flux_metrics_dict = {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
@@ -420,11 +515,22 @@ def initialise_losses():
     return losses
 
 def calculate_losses(losses, test_outputs_xr):
-    """
-    Calculate evaluation metrics for the test outputs and store them in the losses dictionary.
+    """Calculate evaluation metrics for the test outputs and store them in the losses dictionary.
+
     Args:
-    - losses (dict): A dictionary to store losses and metrics during training and evaluation. Generate it with initialise_losses().
-    - test_outputs_xr (xarray.Dataset): An xarray Dataset containing the original and predicted footprints for the test set, as well as any relevant masks (e.g., fp_nan_mask) if needed for ignoring certain values in the metric calculations.
+        losses (dict): Dictionary to store losses and metrics during training and
+            evaluation. Generate it with ``initialise_losses()``.
+        test_outputs_xr (xr.Dataset): Dataset containing the original and predicted
+            footprints for the test set (``fp_original``, ``fp_pred``,
+            ``fp_transformed``, ``fp_transformed_pred``), as well as any relevant
+            masks (e.g. ``fp_nan_mask``) if needed for ignoring certain values in the
+            metric calculations.
+
+    Returns:
+        tuple:
+            - losses (dict): Copy of ``losses`` with the new metrics appended.
+            - computed_metrics (dict): ``{"eval_metrics", "transformed_eval_metrics", "static_mf_eval_metrics"}``
+              for this call only.
     """
 
     losses = losses.copy()  # make a copy of the losses dict to avoid modifying the original
@@ -474,6 +580,26 @@ def evaluate_outputs(test_outpts, true_fp, fp_mask):
 )"""
 
 def setup_GATES_model(parameters, training_ctx, paths_ctx):
+    """Build the GraphSatelliteForecaster model, losses, optimizer, and early stopping for training.
+
+    Args:
+        parameters (dict): Training parameters; uses ``learning_rate``,
+            ``model_parameters``, ``loss_functions`` (with ``criterion``,
+            ``criterion_test``, and optional ``criterion_params``/
+            ``criterion_test_params``), ``dataloader.nans_to_zeros``, ``epochs``
+            (with ``patience``, ``training``, ``visualize``, ``model_save``),
+            ``verbose``, ``use_wandb``, and ``model_name``.
+        training_ctx (TrainingContext): Training context; uses ``grid``,
+            ``n_variables``, ``dynamic_edges_params``, ``fp_labels``, and ``device``.
+        paths_ctx (PathContext): Path context; uses ``model_path`` and ``model_name``
+            to build the early-stopping checkpoint path.
+
+    Returns:
+        tuple:
+            - model (GraphSatelliteForecaster): The (possibly CUDA-moved) model.
+            - model_ctx (ModelContext): Bundled model/training objects (optimizer,
+              criterion, criterion_test, early_stopping, epoch settings, etc.).
+    """
     lr = parameters["learning_rate"]
 
     model = GraphSatelliteForecaster(training_ctx.grid, whole_world=False, feature_dim=training_ctx.n_variables, **parameters["model_parameters"], **training_ctx.dynamic_edges_params)
@@ -522,6 +648,16 @@ import os
 from dask.distributed import Client, LocalCluster
 
 def make_cluster():
+    """Start a local Dask cluster sized from SLURM environment variables, if enough CPUs are available.
+
+    Reads ``SLURM_CPUS_PER_TASK`` and ``SLURM_MEM_PER_NODE`` to size the cluster,
+    reserving 2 CPUs and using 80% of memory split across workers. Skips creating a
+    cluster (falling back to the synchronous scheduler) if fewer than 4 CPUs are available.
+
+    Returns:
+        tuple: ``(client, cluster)`` — a ``dask.distributed.Client`` and
+        ``LocalCluster``, or ``(None, None)`` if fewer than 4 CPUs are available.
+    """
     n_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
     mem_gb = int(os.environ.get("SLURM_MEM_PER_NODE", 8000)) / 1024  # MB → GB
 

@@ -1,6 +1,11 @@
 import numpy as np
 
 def _import_plotting_libs():
+    """Lazily import matplotlib/cartopy into module globals ``plt``, ``cartopy``, ``ccrs``, ``cfeature``.
+
+    Deferred so that importing this module doesn't require matplotlib/cartopy
+    unless plotting is actually used.
+    """
     global plt, cartopy, ccrs, cfeature
     import matplotlib.pyplot as plt
     import cartopy
@@ -10,22 +15,51 @@ def _import_plotting_libs():
 
 ### plotting
 def plot_footprint_ax(ax_true, ax_pred, prediction_ds, plotting_labels=["fp_original", "fp_pred"], vmin=None, vmax=None, thres=0, contour=False, share_minmax=False, cbar=True,nlevels=None, title=False, return_minmax=False, print_stats=False, log=True):
-    """
-    Plot the true and predicted footprints on the given axes.
-    Parameters:
-    - ax_true: Matplotlib axis for the true footprint.
-    - ax_pred: Matplotlib axis for the predicted footprint.
-    - prediction_ds: xarray Dataset containing the true and predicted footprints, along with coordinates. It must have length 1 along the time dimension, and contain the variables specified in plotting_labels.
-    - plotting_labels: List of two strings specifying the variable names in prediction_ds for the true and predicted footprints, respectively. Defaults to ["fp_original", "fp_pred"].
-    - vmin, vmax: Color scale limits for the plots. If share_minmax is True, these limits will be applied to both plots. If None, they will be determined from the data.
-    - thres: Threshold below which footprint values will be masked (set to NaN) in the second contour plot. Defaults to 0.
-    - contour: If True, use contourf to plot the footprints. If False, use imshow. Defaults to False.
-    - share_minmax: If True, use the same vmin and vmax for both true and predicted plots. Defaults to False.
-    - cbar: If True, return the colorbar object for the predicted plot. Defaults to True.
-    - nlevels: Number of contour levels or list of levels to use if contour is True. If None, levels will be automatically determined.
-    - title: If True, set the title of the true plot to the timestamp of the footprint. Defaults to False.
-    - return_minmax: If True, return the vmin and vmax used for the plots. Defaults to False.
-    - log: If True, plot the log10 of the footprint values. Defaults to True. If plotting footprints in the transformed space, it should be False, and the color scale limits should be set accordingly (e.g. vmin=0, vmax=3 for normalized footprints).
+    """Plot the true and predicted footprints on the given axes.
+
+    Args:
+        ax_true (matplotlib.axes.Axes): Axis (with a cartopy projection) for the
+            true footprint.
+        ax_pred (matplotlib.axes.Axes): Axis (with a cartopy projection) for the
+            predicted footprint.
+        prediction_ds (xr.Dataset): Dataset containing the true and predicted
+            footprints, along with coordinates. It must have length 1 along the time
+            dimension, and contain the variables specified in ``plotting_labels``.
+        plotting_labels (list[str], optional): Two strings specifying the variable
+            names in ``prediction_ds`` for the true and predicted footprints,
+            respectively. Defaults to ["fp_original", "fp_pred"].
+        vmin (float, optional): Color scale lower limit for the plots. If
+            ``share_minmax`` is True, applied to both plots. If None, determined
+            from the data. Defaults to None.
+        vmax (float, optional): Color scale upper limit for the plots. If
+            ``share_minmax`` is True, applied to both plots. If None, determined
+            from the data. Defaults to None.
+        thres (float, optional): Threshold below which footprint values will be
+            masked (set to NaN) in the second (foreground) contour/image layer.
+            Defaults to 0.
+        contour (bool, optional): If True, use ``contourf`` to plot the footprints.
+            If False, use ``imshow``. Defaults to False.
+        share_minmax (bool, optional): If True, use the same vmin/vmax for both true
+            and predicted plots. Defaults to False.
+        cbar (bool, optional): If True, return the colorbar-source object (the last
+            plotted artist) for the predicted plot. Defaults to True.
+        nlevels (int or list, optional): Number of contour levels or list of levels
+            to use if ``contour`` is True. If None, levels will be automatically
+            determined. Defaults to None.
+        title (bool, optional): If True, set the title of the true plot to the
+            timestamp of the footprint. Defaults to False.
+        return_minmax (bool, optional): If True, return the vmin/vmax used for the
+            plots (instead of the colorbar-source object). Defaults to False.
+        print_stats (bool, optional): <FILL IN> — currently unused in the function body.
+        log (bool, optional): If True, plot the log10 of the footprint values. If
+            plotting footprints in the transformed space, it should be False, and
+            the color scale limits should be set accordingly (e.g. vmin=0, vmax=3
+            for normalized footprints). Defaults to True.
+
+    Returns:
+        tuple or matplotlib artist or None: ``(vmin, vmax)`` if ``return_minmax`` is
+        True; otherwise the last plotted artist (for use as a colorbar source) if
+        ``cbar`` is True; otherwise None.
     """
     _import_plotting_libs()
 
@@ -109,13 +143,43 @@ def plot_footprint_ax(ax_true, ax_pred, prediction_ds, plotting_labels=["fp_orig
 
 
 def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeseries=False, plot_fluxes=False, print_stats=False, contour=False, thres=0, ylim_timeseries=45, levels=None, vmin_vmax=None, which_dataspace="original"):
-    """
-    Plot the true and predicted footprints for multiple time steps, along with optional timeseries and flux plots.
-    Parameters:
-    - prediction_ds: xarray Dataset containing the true and predicted footprints, along with coordinates.
-    - idxs_list: List of integer indices along the time dimension of prediction_ds for which to plot the footprints.
-    - fig_title : Optional string for the overall figure title.
-    - plot_timeseries: If True, include a row of timeseries plots showing the footprint [ still in implkementation]
+    """Plot the true and predicted footprints for multiple time steps, along with optional timeseries and flux plots.
+
+    Args:
+        prediction_ds (xr.Dataset): Dataset containing the true and predicted
+            footprints, along with coordinates.
+        idxs_list (list[int]): Indices along the time dimension of ``prediction_ds``
+            for which to plot the footprints.
+        fig_title (str, optional): Overall figure title. Defaults to None.
+        plot_timeseries (bool, optional): If True, include a row of timeseries plots
+            showing the footprint (still in implementation — the plotting call
+            itself is currently commented out). Defaults to False.
+        plot_fluxes (bool, optional): If True, include two rows of flux-related
+            plots (currently commented out in the function body, so only the axes
+            and labels are created). Defaults to False.
+        print_stats (bool, optional): If True, reserves a (zero-height) row for
+            stats text (currently not populated in the function body).
+            Defaults to False.
+        contour (bool, optional): Forwarded to ``plot_footprint_ax``; if True, use
+            ``contourf`` to plot the footprints, else ``imshow``. Defaults to False.
+        thres (float, optional): Forwarded to ``plot_footprint_ax`` as the
+            foreground-masking threshold. Defaults to 0.
+        ylim_timeseries (float, optional): <FILL IN> — accepted but not currently
+            used in the function body (the timeseries plotting call is commented
+            out). Defaults to 45.
+        levels (list, optional): Contour levels forwarded to ``plot_footprint_ax``.
+            If None, defaults to ``[-4, -3.5, -3, -2.5, -2, -1.5]`` when
+            ``which_dataspace`` is "original" or "thresholded". Defaults to None.
+        vmin_vmax (tuple, optional): ``(vmin, vmax)`` color scale limits forwarded to
+            ``plot_footprint_ax``. If None, defaults to (-4, -2) for "original"/
+            "thresholded" dataspace, or (None, None) for "transformed". Defaults to None.
+        which_dataspace (str, optional): One of "original", "thresholded", or
+            "transformed"; selects which variables (and whether to log-transform)
+            are plotted. Defaults to "original".
+
+    Raises:
+        ValueError: If ``which_dataspace="thresholded"`` but ``prediction_ds`` has no
+            "fp_pred_thres" variable.
     """
     _import_plotting_libs()
     

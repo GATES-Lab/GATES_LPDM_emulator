@@ -16,7 +16,7 @@ from .graph_net_block import GraphSatelliteProcessor
 
 
 class SatelliteProcessor(torch.nn.Module):
-    """Processor for latent graphD"""
+    """Processor for the latent graph."""
 
     def __init__(
         self,
@@ -27,23 +27,33 @@ class SatelliteProcessor(torch.nn.Module):
         hidden_dim_processor_edge: int = 256,
         hidden_layers_processor_node: int = 2,
         hidden_layers_processor_edge: int = 2,
-        mlp_norm_type: str = "LayerNorm",   
-        dropout: float=0, 
+        mlp_norm_type: str = "LayerNorm",
+        dropout: float=0,
         scatter: str="mean",disaggregated=False, attention=False,attention_mask=None
     ):
-        """
-        Latent graph processor
+        """Initialize the latent graph processor.
 
         Args:
-            input_dim: Input dimension for the node
-            edge_dim: Edge input dimension
-            num_blocks: Number of message passing blocks
-            hidden_dim_processor_node: Hidden dimension of the node processors
-            hidden_dim_processor_edge: Hidden dimension of the edge processors
-            hidden_layers_processor_node: Number of hidden layers in the node processors
-            hidden_layers_processor_edge: Number of hidden layers in the edge processors
-            mlp_norm_type: Type of norm for the MLPs
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            input_dim (int, optional): Input dimension for the node. Defaults to 256.
+            edge_dim (int, optional): Edge input dimension. Defaults to 256.
+            num_blocks (int, optional): Number of message passing blocks. Defaults to 9.
+            hidden_dim_processor_node (int, optional): Hidden dimension of the node
+                processors. Defaults to 256.
+            hidden_dim_processor_edge (int, optional): Hidden dimension of the edge
+                processors. Defaults to 256.
+            hidden_layers_processor_node (int, optional): Number of hidden layers in
+                the node processors. Defaults to 2.
+            hidden_layers_processor_edge (int, optional): Number of hidden layers in
+                the edge processors. Defaults to 2.
+            mlp_norm_type (str, optional): Type of norm for the MLPs, one of
+                "LayerNorm", "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm",
+                or None. Defaults to "LayerNorm".
+            dropout (float, optional): Dropout probability. Defaults to 0.
+            scatter (str, optional): Scatter reduction to use for message passing
+                (e.g. "mean"). Defaults to "mean".
+            disaggregated (bool, optional): <FILL IN>. Defaults to False.
+            attention (bool, optional): <FILL IN>. Defaults to False.
+            attention_mask (optional): <FILL IN>. Defaults to None.
         """
         super().__init__()
         # Build the default graph
@@ -62,16 +72,16 @@ class SatelliteProcessor(torch.nn.Module):
         )
 
     def forward(self, x: torch.Tensor, edge_index, edge_attr, batch=None) -> torch.Tensor:
-        """
-        Adds features to the encoding graph
+        """Add features to the encoding graph by running the message-passing blocks.
 
         Args:
-            x: Torch tensor containing node features
-            edge_index: Connectivity of graph, of shape [2, Num edges] in COO format
-            edge_attr: Edge attribues in [Num edges, Features] shape
+            x (torch.Tensor): Node features.
+            edge_index: Connectivity of graph, of shape [2, Num edges] in COO format.
+            edge_attr: Edge attributes in [Num edges, Features] shape.
+            batch (optional): <FILL IN>. Defaults to None.
 
         Returns:
-            torch Tensor containing the values of the nodes of the graph
+            torch.Tensor: Values of the nodes of the graph.
         """
         #print("processor", batch)
         #print(x.size(), edge_index.size())

@@ -20,7 +20,7 @@ import numpy as np
 
 
 class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
-    """GATES - Graph based footprint emulator """
+    """GATES - Graph based footprint emulator."""
 
     def __init__(
         self,
@@ -55,30 +55,91 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         latlon_indices=None,
         dynamic_earthdistance=False
     ):
-        """
-        GATES uses a GNN in an encode-process-decode architecture to output footprint values
-        The original model architecture was based of Keisler's weather forecasting setup (https://arxiv.org/pdf/2202.07575.pdf)
+        """Initialize GATES.
+
+        GATES uses a GNN in an encode-process-decode architecture to output footprint
+        values. The original model architecture was based on Keisler's weather
+        forecasting setup (https://arxiv.org/pdf/2202.07575.pdf).
 
         Args:
-            lat_lons: List of latitude and longitudes for the grid
-            whole_world = Use base graph for the whole world or only nodes that contain lat/lons
-            NOTE: probably should change to all nodes within defined region
-            resolution: Resolution of the H3 grid, prefer even resolutions, as
-                odd ones have octogons and heptagons as well
-            feature_dim: Input feature size
-            output_dim: Optional, output feature size, useful if want only subset of variables in output
-            node_dim: Node hidden dimension
-            edge_dim: Edge hidden dimension
-            num_blocks: Number of message passing blocks in the Processor
-            hidden_dim_processor_node: Hidden dimension of the node processors
-            hidden_dim_processor_edge: Hidden dimension of the edge processors
-            hidden_layers_processor_node: Number of hidden layers in the node processors
-            hidden_layers_processor_edge: Number of hidden layers in the edge processors
-            hidden_dim_decoder:Number of hidden dimensions in the decoder
-            hidden_layers_decoder: Number of layers in the decoder
-            norm_type: Type of norm for the MLPs
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
-            use_checkpointing: Use gradient checkpointing to reduce model memory
+            lat_lons (list): List of latitude and longitudes for the grid.
+            whole_world (bool, optional): Use base graph for the whole world or only
+                nodes that contain lat/lons. NOTE: probably should change to all
+                nodes within defined region. Defaults to False.
+            resolution (int, optional): Resolution of the H3 grid, prefer even
+                resolutions, as odd ones have octagons and heptagons as well.
+                Defaults to 2.
+            feature_dim (int, optional): Input feature size. Defaults to 78.
+            output_dim (int, optional): Output feature size, useful if you want only
+                a subset of variables in the output. If None, defaults to
+                ``feature_dim``. Defaults to None.
+            node_dim (int, optional): Node hidden dimension. Defaults to 256.
+            edge_dim (int, optional): Edge hidden dimension. Defaults to 256.
+            num_blocks (int, optional): Number of message passing blocks in the
+                Processor. Defaults to 9.
+            hidden_dim_processor_node (int, optional): Hidden dimension of the node
+                processors. Defaults to 256.
+            hidden_dim_processor_edge (int, optional): Hidden dimension of the edge
+                processors. Defaults to 256.
+            hidden_layers_processor_node (int, optional): Number of hidden layers in
+                the node processors. Defaults to 2.
+            hidden_layers_processor_edge (int, optional): Number of hidden layers in
+                the edge processors. Defaults to 2.
+            hidden_dim_decoder (int, optional): Number of hidden dimensions in the
+                decoder. Defaults to 128.
+            hidden_layers_decoder (int, optional): Number of layers in the decoder.
+                Defaults to 2.
+            residuals (bool, optional): If True, attaches the original inputs for
+                each latlon node to the decoder's mesh-node inputs. Defaults to False.
+            norm_type (str, optional): Type of norm for the MLPs, one of
+                "LayerNorm", "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm",
+                or None. Defaults to "LayerNorm".
+            use_checkpointing (bool, optional): Use gradient checkpointing to reduce
+                model memory. Defaults to False.
+            dropout (float, optional): Dropout probability. Defaults to 0.
+            encode_edges (bool, optional): If False, skips the edge encoder and uses
+                a fixed edge dimension of 2 for the processor instead. Defaults to True.
+            encode_nodes (bool, optional): If False, skips the node encoder and uses
+                ``feature_dim`` as the processor's node dimension instead. Defaults to True.
+            n_decoder_neighbours (int, optional): Number of closest mesh nodes each
+                latlon point is connected to in the decoder; forwarded to
+                ``SatelliteDecoder`` as ``n_neighbours``. Defaults to 3.
+            decoder_final_layer (optional): Final activation for the decoder;
+                forwarded to ``SatelliteDecoder`` as ``final_activation``. Defaults to None.
+            higher_mesh_res (int, optional): Forwarded to the encoder as ``higher_res``. Defaults to 0.
+            idx_latlon (list, optional): Grid (row, col) index for each entry in
+                ``lat_lons``; forwarded to the encoder and decoder. Defaults to None.
+            concat_decoder_neighbours (bool, optional): Forwarded to
+                ``SatelliteDecoder`` as ``concat_neighbours``. Defaults to False.
+            concat_decoder_neighbours_2 (bool, optional): Forwarded to
+                ``SatelliteDecoder`` as ``concat_neighbours_2``. Defaults to False.
+            better_meshnodes (bool, optional): Forwarded to the encoder; if True,
+                ``node_dim`` is increased by 2 to account for the extra mesh-node
+                features. Defaults to False.
+            scatter (str, optional): Scatter reduction forwarded to
+                ``SatelliteProcessor``. Defaults to "mean".
+            disaggregated (bool, optional): Forwarded to ``SatelliteProcessor``. Defaults to False.
+            batchsize (int, optional): <FILL IN> — accepted but not currently used
+                anywhere in this constructor. Defaults to 5.
+            attention (bool, optional): Forwarded to the encoder and processor.
+                Defaults to False.
+            release_coords (str, optional): Forwarded to the encoder. Defaults to "default".
+            release_edges (bool, optional): Forwarded to the encoder. Defaults to False.
+            decoder_append_latlon (bool, optional): Forwarded to ``SatelliteDecoder``
+                as ``append_latlon``. Defaults to False.
+            concat_enc_neighbours (bool, optional): Forwarded to the encoder. Defaults to False.
+            initial_enc (bool, optional): Forwarded to the encoder. Defaults to False.
+            wind_mesh_edges (bool, optional): Whether to use dynamic wind-based mesh
+                edges; forwarded to the encoder. See
+                ``gates.training.training.setup_dynamic_edges``. Defaults to False.
+            wind_indices (list, optional): Feature indices for wind-based dynamic
+                edges; forwarded to the encoder. Defaults to None.
+            latlon_mesh_edges (bool, optional): Whether to use dynamic lat/lon-based
+                mesh edges; forwarded to the encoder. Defaults to False.
+            latlon_indices (list, optional): Feature indices for lat/lon-based
+                dynamic edges; forwarded to the encoder. Defaults to None.
+            dynamic_earthdistance (bool, optional): Whether to compute dynamic earth
+                distance edges; forwarded to the encoder. Defaults to False.
         """
         
         super().__init__()
@@ -148,14 +209,13 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         )
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        """
-        Compute the new state of the forecast
+        """Run the encode-process-decode pipeline to compute the forecast.
 
         Args:
-            features: The input features, aligned with the order of lat_lons_heights
+            features (torch.Tensor): The input features, aligned with the order of ``lat_lons``.
 
         Returns:
-            The next state in the forecast
+            torch.Tensor: The forecast output, decoded back onto the lat/lon graph.
         """
         #print("run encoder")
         #print("getting encoder inputs")
