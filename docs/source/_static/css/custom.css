@@ -1,0 +1,14 @@
+/* Override pydata-sphinx-theme's palette to match the GATES logo.
+   Reference: https://pydata-sphinx-theme.readthedocs.io/en/stable/user_guide/styling.html */
+
+html[data-theme="light"] {
+    --pst-color-primary: #D57B67; /*#0B5FA5;   /* links, active nav items */
+    --pst-color-secondary: #772014; /* #0B5FA5; /* hover states, secondary accents */
+    --pst-color-accent: #D57B67;
+}
+
+html[data-theme="dark"] {
+    --pst-color-primary: #EAAF95;
+    --pst-color-secondary: #D57B67;
+    --pst-color-accent: #EAAF95;
+}
