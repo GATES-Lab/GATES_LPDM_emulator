@@ -103,7 +103,7 @@ def main():
         print("\n" + "=" * 70)
         print(f"Running experiment [{i}]: {name or '<unnamed>'}  ->  model_name={params['model_name']}")
         print("=" * 70)
-        train_and_save_model(params, model_save_dir=model_saving_dir)
+        train_and_save_model(params, model_save_dir=model_saving_dir, wandb_name=name)
 
     print("\nAll selected experiments finished.")
 

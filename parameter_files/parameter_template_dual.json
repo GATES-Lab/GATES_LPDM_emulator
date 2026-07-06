@@ -98,9 +98,9 @@
     "model_save": 50
   },
   "loss_functions": {
-    "fp_criterion": "gates_losses.MSELoss",
-    "fp_criterion_test": "gates_losses.MSELoss",
-    "fp_criterion_params": {},
+    "fp_criterion": "gates_losses.PixelWeightedMSELoss",
+    "fp_criterion_test": "gates_losses.PixelWeightedMSELoss",
+    "fp_criterion_params": {"weight_label": "fp_original", "transform_fn": "scale_and_shift", "w": 1000, "a": 0.5},
     "bg_criterion": "torch.nn.MSELoss",
     "bg_criterion_test": "torch.nn.MSELoss",
     "bg_criterion_params": {},

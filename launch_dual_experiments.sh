@@ -1,38 +1,37 @@
 #!/bin/bash
-#SBATCH --job-name=dual_exp
-#SBATCH --output=logs/%A_%a_dual_exp.out
-#SBATCH --gres=gpu:1
-#SBATCH --partition=gpu
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
-#SBATCH --time=02:00:00
-#SBATCH --array=0-3
+#SBATCH --cpus-per-task=5
+#SBATCH --partition=gpu
+#SBATCH --mem=480GB
+#SBATCH --gres=gpu:1
+#SBATCH --job-name=dual_exp
+#SBATCH --output=output_logs/dual_exp_%j.out
+#SBATCH --time=96:00:00
+#SBATCH --account=chem007981
+#SBATCH --qos=normal
+#SBATCH --exclude=bp1-gpu030,bp1-gpu035
 
-# One SLURM array task per experiment. The --array range must match the number of
-# experiments in the experiments file (0..N-1). Each task runs exactly one experiment,
-# selected via SLURM_ARRAY_TASK_ID inside run_dual_experiments.py.
+# All experiments run sequentially in this single job (no --index, so
+# run_dual_experiments.py iterates over every experiment in the file in order).
 #
-# To run all experiments sequentially in a single job instead, drop the #SBATCH --array
-# line above and replace the python call with:
-#     python -u run_dual_experiments.py parameter_template_dual.json experiments_dual_example.json
+# To run them in parallel instead (one SLURM array task per experiment), add:
+#     #SBATCH --array=0-3
+# and pass --index "${SLURM_ARRAY_TASK_ID}" to the python call below.
 
-echo "Running on host: $(hostname)"
-export CUDA_VISIBLE_DEVICES=${SLURM_JOB_GPUS:-0}
-echo "array task id: ${SLURM_ARRAY_TASK_ID}"
-echo "=== Job started at $(date) ==="
+echo "activate env"
+source ~/initConda.sh
+conda activate /user/work/yl18410/miniconda3/envs/gates_env
 
-module load gcc python openmpi py-pip
+cd /user/work/yl18410/new_graphnet/graphnet_LPDM_emulator
 
-source "${SLURM_SUBMIT_DIR}/my_gates_env/bin/activate"
-export PYTHONPATH="${SLURM_SUBMIT_DIR}/my_gates_env/lib/python3.12/site-packages:${PYTHONPATH}"
-export PYTHONNOUSERSITE=1
-export PATH="${HOME}/.local/bin:${PATH}"
+export PYTHONUNBUFFERED=1
+export PYTHONFAULTHANDLER=1
 
-# --- W&B setup ---------------------------------------------------------------
-export WANDB_NAME="${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}_${SLURM_JOB_NAME}"
+echo "python: $(which python)"
 
-echo "running dual experiment ${SLURM_ARRAY_TASK_ID}..."
-python -u run_dual_experiments.py parameter_template_dual.json experiments_dual_example.json --index "${SLURM_ARRAY_TASK_ID}"
+# --- Experiments ------------------------------------------------------------
+echo "running all dual experiments sequentially..."
+python -u run_dual_experiments.py parameter_template_dual.json experiments_dual_bg_sweep.json
+echo "TRAIN_EXIT_CODE=$?"
 
 echo "=== Job finished at $(date) ==="

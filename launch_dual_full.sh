@@ -26,7 +26,7 @@ echo "python: $(which python)"
 
 # --- Training ---------------------------------------------------------------
 echo "training..."
-python -u train_dual_model.py parameter_template_dual.json
+python -u train_dual_model.py parameter_template_dual_small.json
 echo "TRAIN_EXIT_CODE=$?"
 
 echo "=== Job finished at $(date) ==="

@@ -16,6 +16,7 @@ import sys
 import copy
 import argparse
 import random
+from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
 
@@ -234,11 +235,98 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
 
 # ---------------------------------------------------------------
+# Shared raw-data loading
+# ---------------------------------------------------------------
+
+# The raw (un-normalised, un-scaled) arrays produced by the expensive load step. Every
+# per-experiment run derives its own class selection, normalisation, scalers and dataloaders
+# from these, so a single bundle can be shared across experiments that use the same
+# data-loading configuration (see run_dual_experiments_shared_data.py).
+DualDataBundle = namedtuple("DualDataBundle", [
+    "train_fp_data", "train_inputs", "train_bgs", "train_aux_cams_data",
+    "test_fp_data", "test_inputs", "test_bgs", "test_aux_cams_data",
+])
+
+
+def resolve_background_params(parameters):
+    """Merge ``background_setup`` onto the defaults and return the resolved dict.
+
+    Kept as one place so both the loader and the trainer agree on detrend / auxiliary-BC
+    settings (these must match for a shared data bundle to be valid).
+    """
+    default_bg_params = {"detrend": True, "use_auxiliary_bc": True, "auxilary_bc_levels": [4, 5, 6, 7]}
+    background_params = default_bg_params.copy()
+    background_params.update(parameters.get("background_setup", {}))
+    return background_params
+
+
+def load_dual_data(parameters, verbose=True):
+    """Load the raw footprint/met/background data for a dual-head run.
+
+    This is the expensive step (``load_GATES_data_with_bg`` for both train and test). It is
+    factored out of :func:`train_and_save_model` so a driver can load the data once and reuse it
+    across many experiments that share the same data-loading configuration — i.e. the same
+    ``train_load_data``, ``test_load_data``, ``variables`` and ``background_setup`` (see
+    ``run_dual_experiments_shared_data.py``).
+
+    Returns a :class:`DualDataBundle` of the raw arrays. Downstream steps (class selection,
+    normalisation, scalers, dataloaders) are *not* done here, so each experiment still builds its
+    own transforms from these shared arrays.
+    """
+    train_load_data_params = copy.deepcopy(parameters["train_load_data"])
+    test_load_data_params = copy.deepcopy(parameters["train_load_data"])
+    test_load_data_params.update(parameters["test_load_data"])
+    input_variables = parameters["variables"]
+    # resolve_datapath_args only reads `parameters`; a throwaway PathContext creates no dirs.
+    datapath_args = PathContext(
+        model_save_dir=".", model_name="_dataload", model_path=Path(".")
+    ).resolve_datapath_args(parameters)
+
+    background_params = resolve_background_params(parameters)
+
+    print("Loading shared met, fp AND BACKGROUND data (train + test)...")
+    client, cluster = gates_training.make_cluster()
+
+    train_fp_data, train_inputs, train_bgs, train_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
+        train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose,
+        load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"],
+        use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"],
+    )
+    print("Successfully loaded training data with", len(train_fp_data.time), "time samples")
+
+    test_fp_data, test_inputs, test_bgs, test_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
+        test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose,
+        load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"],
+        use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"],
+    )
+    print("Successfully loaded test data with", len(test_fp_data.time), "time samples")
+
+    if cluster is not None:
+        cluster.close()
+        client.close()
+
+    return DualDataBundle(
+        train_fp_data, train_inputs, train_bgs, train_aux_cams_data,
+        test_fp_data, test_inputs, test_bgs, test_aux_cams_data,
+    )
+
+
+# ---------------------------------------------------------------
 # Top-level training entry point
 # ---------------------------------------------------------------
 
-def train_and_save_model(parameters, model_save_dir):
-    """Top-level entry point for a full dual-head training run."""
+def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundle=None):
+    """Top-level entry point for a full dual-head training run.
+
+    ``wandb_name`` optionally sets the W&B run name (e.g. the experiment name
+    when driven by run_dual_experiments.py). If omitted, a name is built from
+    the SLURM job info and this run's bg_loss_weight.
+
+    ``data_bundle`` optionally supplies a pre-loaded :class:`DualDataBundle` (from
+    :func:`load_dual_data`) so several experiments can reuse one expensive load. When omitted the
+    data is loaded here as before. The caller is responsible for ensuring the bundle was loaded
+    with a matching data-loading configuration.
+    """
     use_wandb = parameters.get('use_wandb', True)
     cfg = gates.config.get_config()
     verbose = parameters.get("verbose", True)
@@ -263,30 +351,24 @@ def train_and_save_model(parameters, model_save_dir):
             use_wandb = False
             parameters["use_wandb"] = False
         if use_wandb:
-            # Build a descriptive run name from the SLURM job info and key hyperparameters.
-            # Uses the parameters dict as the single source of truth for bg_loss_weight.
+            # Build a descriptive run name from the SLURM job info. For an
+            # experiment run the caller supplies wandb_name (the experiment
+            # name); otherwise fall back to this run's bg_loss_weight.
             job_id = os.environ.get("SLURM_JOB_ID", "local")
             job_name = os.environ.get("SLURM_JOB_NAME", "run")
-            run_name = f"{job_id}_{job_name}_bg{parameters.get('bg_loss_weight')}"
+            if wandb_name:
+                suffix = wandb_name
+            else:
+                bg_loss_weight = parameters.get("loss_functions", {}).get("bg_loss_weight")
+                suffix = f"bg{bg_loss_weight}"
+            run_name = f"{job_id}_{job_name}_{suffix}"
             wandb.init(entity=wandb_entity, project=wandb_project, config=parameters, tags=wandb_tags, name=run_name, group=wandb_group)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(f"using device {device}, starting at " + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
-    # Nawid - get the parameters
-    train_load_data_params = copy.deepcopy(parameters["train_load_data"])
-    test_load_data_params = copy.deepcopy(parameters["train_load_data"])
-    test_load_data_params.update(parameters["test_load_data"])
-    input_variables = parameters["variables"]
-    # Nawid - get all the arguments of the data path
-    datapath_args = paths_ctx.resolve_datapath_args(parameters)
 
-    print("Loading met, fp AND BACKGROUND data for model", model_name)
-    client, cluster = gates_training.make_cluster()
-    # Nawid - get background information
-    background_setup = parameters.get("background_setup", {})
-    default_bg_params = {"detrend": True, "use_auxiliary_bc": True, "auxilary_bc_levels": [4, 5, 6, 7]}
-    background_params = default_bg_params.copy()
-    background_params.update(background_setup)
+    # Nawid - get background information (must match what load_dual_data used)
+    background_params = resolve_background_params(parameters)
     parameters["background_setup"] = background_params
 
     num_classes = parameters["model_parameters"].get("num_classes", 1)
@@ -295,19 +377,14 @@ def train_and_save_model(parameters, model_save_dir):
         num_classes = 1
         parameters["model_parameters"]["num_classes"] = 1
 
-    train_fp_data, train_inputs, train_bgs, train_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
-        train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose,
-        load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"],
-        use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"],
-    )
-    print("Successfully loaded training data with", len(train_fp_data.time), "time samples")
-
-    test_fp_data, test_inputs, test_bgs, test_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
-        test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose,
-        load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"],
-        use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"],
-    )
-    print("Successfully loaded test data with", len(test_fp_data.time), "time samples")
+    # Load the raw data, or reuse a bundle already loaded once for a set of experiments.
+    if data_bundle is None:
+        print("Loading met, fp AND BACKGROUND data for model", model_name)
+        data_bundle = load_dual_data(parameters, verbose=verbose)
+    else:
+        print("Reusing pre-loaded shared data bundle for model", model_name)
+    (train_fp_data, train_inputs, train_bgs, train_aux_cams_data,
+     test_fp_data, test_inputs, test_bgs, test_aux_cams_data) = data_bundle
 
     # Select the background output variables (DataArray with a num_classes dim)
     if num_classes == 1:
@@ -322,10 +399,6 @@ def train_and_save_model(parameters, model_save_dir):
     # to_dataarray adds a leading 'variable' dim; move it to the end as the class dim (time, num_classes)
     train_bgs = train_bgs.transpose("time", "variable")
     test_bgs = test_bgs.transpose("time", "variable")
-
-    if cluster is not None:
-        cluster.close()
-        client.close()
 
     use_auxiliary_bc = background_params["use_auxiliary_bc"]
     if use_auxiliary_bc:
