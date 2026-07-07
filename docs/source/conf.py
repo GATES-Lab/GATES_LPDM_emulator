@@ -73,4 +73,11 @@ html_theme_options = {
         "image_light": "_static/logo.png",
         "image_dark": "_static/logo.png",
     },
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/GATES-Lab/GATES_LPDM_emulator/tree/unify_training",
+            "icon": "fa-brands fa-github",
+        },
+    ],
 }
