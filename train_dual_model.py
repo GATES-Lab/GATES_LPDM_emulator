@@ -217,7 +217,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
         if epoch % model_ctx.epochs_visualise == 0:
             img_save_path = save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
-            if epoch % (3 * model_ctx.epochs_visualise) == 0 and model_ctx.use_wandb:
+            if model_ctx.use_wandb:
                 wandb.log({f"fps_epoch_{epoch}": wandb.Image(img_save_path)}, step=epoch)
 
         if epoch % model_ctx.epochs_save == 0:

@@ -5,9 +5,9 @@
   "parallel_loading": true,
   "load_into_memory": true,
   "train_load_data": {
-    "years": ["2012"],
+    "years": ["2014","2015"],
     "months": ["01","02","03","04","05","06","07","08","09","10","11","12"],
-    "freq": 10,
+    "freq": 3,
     "region": "BRAZIL",
     "size": 50,
     "met_args": {
@@ -20,7 +20,7 @@
     "crop_met": false
   },
   "test_load_data": {
-    "years": ["2014"],
+    "years": ["2017"],
     "months": ["01","02","03","04","05","06","07","08","09","10","11","12"],
     "freq": 10
   },
@@ -51,7 +51,7 @@
     "scaler_params": {}
   },
   "fp_scaler": {
-    "scaler": "LogAndShiftMeanFpScaler",
+    "scaler": "LogAndShiftFpScaler",
     "scaler_params": {}
   },
   "dataloader": {
@@ -92,15 +92,16 @@
     "tags": ["Brazil", "gpu", "dual"]
   },
   "epochs": {
-    "training": 150,
-    "visualize": 10,
-    "patience": 150,
+    "training": 250,
+    "visualize": 25,
+    "patience": 250,
     "model_save": 50
   },
   "loss_functions": {
     "fp_criterion": "gates_losses.PixelWeightedMSELoss",
-    "fp_criterion_test": "gates_losses.PixelWeightedMSELoss",
+    "fp_criterion_test": "gates_losses.MSELoss",
     "fp_criterion_params": {"weight_label": "fp_original", "transform_fn": "scale_and_shift", "w": 1000, "a": 0.5},
+    "fp_criterion_test_params": {},
     "bg_criterion": "torch.nn.MSELoss",
     "bg_criterion_test": "torch.nn.MSELoss",
     "bg_criterion_params": {},

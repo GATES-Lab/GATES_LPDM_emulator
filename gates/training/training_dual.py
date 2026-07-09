@@ -163,8 +163,11 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
     fp_loss_fn = eval(loss_cfg["fp_criterion"])
     fp_loss_fn_test = eval(loss_cfg.get("fp_criterion_test", loss_cfg["fp_criterion"]))
     fp_params = loss_cfg.get("fp_criterion_params", {})
+    # The test criterion can be a different loss (e.g. plain MSE) that does not accept the
+    # training loss's params, so allow its own params and fall back to fp_params if unset.
+    fp_test_params = loss_cfg.get("fp_criterion_test_params", fp_params)
     fp_criterion = fp_loss_fn(fp_labels=training_ctx.fp_labels, nan_mask_label=nan_mask_label, **fp_params)
-    fp_criterion_test = fp_loss_fn_test(fp_labels=training_ctx.fp_labels, nan_mask_label=nan_mask_label, **fp_params)
+    fp_criterion_test = fp_loss_fn_test(fp_labels=training_ctx.fp_labels, nan_mask_label=nan_mask_label, **fp_test_params)
 
     bg_loss_fn = eval(loss_cfg["bg_criterion"])
     bg_loss_fn_test = eval(loss_cfg.get("bg_criterion_test", loss_cfg["bg_criterion"]))
