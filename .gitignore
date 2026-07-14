@@ -4,6 +4,7 @@ __pycache__/
 *.pkl
 *.npy
 *.out
+*.log
 *.nc
 *.err
 *.png
@@ -16,4 +17,5 @@ CLAUDE.md
 principles.md
 my_gates_env/
 training_output/
+output_logs/
 
