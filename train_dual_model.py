@@ -14,6 +14,8 @@ export); the background head additionally reports a denormalised MAE.
 import os
 import sys
 import copy
+import json
+import time
 import argparse
 import random
 from collections import namedtuple
@@ -34,6 +36,7 @@ import gates.training.training as gates_training
 import gates.training.training_background as gates_training_background
 import gates.training.training_dual as gates_training_dual
 from gates.data.load_data import get_grid
+from gates.data.load_data_helper_funs import summarize_loaded_data
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
 from gates.training.training_helperfuns import (
@@ -238,14 +241,16 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 # Shared raw-data loading
 # ---------------------------------------------------------------
 
-# The raw (un-normalised, un-scaled) arrays produced by the expensive load step. Every
+# The raw (un-normalised, un-scaled) arrays produced by the expensive load step, plus a
+# JSON-serialisable ``summary`` describing what was loaded (see build_data_summary). Every
 # per-experiment run derives its own class selection, normalisation, scalers and dataloaders
 # from these, so a single bundle can be shared across experiments that use the same
 # data-loading configuration (see run_dual_experiments_shared_data.py).
 DualDataBundle = namedtuple("DualDataBundle", [
     "train_fp_data", "train_inputs", "train_bgs", "train_aux_cams_data",
     "test_fp_data", "test_inputs", "test_bgs", "test_aux_cams_data",
-])
+    "summary",
+], defaults=(None,))
 
 
 def resolve_background_params(parameters):
@@ -260,6 +265,27 @@ def resolve_background_params(parameters):
     return background_params
 
 
+def build_data_summary(parameters, background_params, load_minutes, train_arrays, test_arrays):
+    """Assemble the JSON-serialisable summary attached to a :class:`DualDataBundle`.
+
+    ``train_arrays`` / ``test_arrays`` are the ``(fp_data, inputs, bgs, aux_cams_data)``
+    tuples returned by ``load_GATES_data_with_bg``. Value statistics (NaN counts, min /
+    max / mean / std) read every array element, so by default they are only computed for
+    data that is already in memory; set ``"data_summary_stats"`` to true/false in the
+    parameter file to force or disable them.
+    """
+    compute_stats = parameters.get("data_summary_stats", None)
+    return {
+        "loaded_at": datetime.now().isoformat(timespec="seconds"),
+        "load_into_memory": bool(parameters.get("load_into_memory", False)),
+        "load_minutes": load_minutes,
+        "value_stats": {True: "forced", False: "disabled"}.get(compute_stats, "auto (in-memory data only)"),
+        "background_setup": background_params,
+        "train": summarize_loaded_data(*train_arrays, compute_stats=compute_stats),
+        "test": summarize_loaded_data(*test_arrays, compute_stats=compute_stats),
+    }
+
+
 def load_dual_data(parameters, verbose=True):
     """Load the raw footprint/met/background data for a dual-head run.
 
@@ -272,6 +298,11 @@ def load_dual_data(parameters, verbose=True):
     Returns a :class:`DualDataBundle` of the raw arrays. Downstream steps (class selection,
     normalisation, scalers, dataloaders) are *not* done here, so each experiment still builds its
     own transforms from these shared arrays.
+
+    The bundle's ``summary`` field describes what was loaded (sample counts, time ranges,
+    shapes, load times and — for in-memory data — NaN counts and value statistics; see
+    :func:`build_data_summary`). Every run that consumes the bundle records this summary in
+    its W&B config and as a ``data_summary_*.json`` next to its other outputs.
     """
     train_load_data_params = copy.deepcopy(parameters["train_load_data"])
     test_load_data_params = copy.deepcopy(parameters["train_load_data"])
@@ -287,19 +318,34 @@ def load_dual_data(parameters, verbose=True):
     print("Loading shared met, fp AND BACKGROUND data (train + test)...")
     client, cluster = gates_training.make_cluster()
 
+    train_start = time.perf_counter()
     train_fp_data, train_inputs, train_bgs, train_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
         train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose,
         load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"],
         use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"],
     )
+    train_load_minutes = (time.perf_counter() - train_start) / 60
     print("Successfully loaded training data with", len(train_fp_data.time), "time samples")
 
+    test_start = time.perf_counter()
     test_fp_data, test_inputs, test_bgs, test_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
         test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose,
         load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"],
         use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"],
     )
+    test_load_minutes = (time.perf_counter() - test_start) / 60
     print("Successfully loaded test data with", len(test_fp_data.time), "time samples")
+
+    # Built while the dask cluster is still up, in case forced value statistics need it.
+    data_summary = build_data_summary(
+        parameters, background_params,
+        {"train": round(train_load_minutes, 2), "test": round(test_load_minutes, 2)},
+        (train_fp_data, train_inputs, train_bgs, train_aux_cams_data),
+        (test_fp_data, test_inputs, test_bgs, test_aux_cams_data),
+    )
+    if verbose:
+        print("Data summary:")
+        print(json.dumps(data_summary, indent=2))
 
     if cluster is not None:
         cluster.close()
@@ -308,6 +354,7 @@ def load_dual_data(parameters, verbose=True):
     return DualDataBundle(
         train_fp_data, train_inputs, train_bgs, train_aux_cams_data,
         test_fp_data, test_inputs, test_bgs, test_aux_cams_data,
+        summary=data_summary,
     )
 
 
@@ -326,6 +373,10 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     :func:`load_dual_data`) so several experiments can reuse one expensive load. When omitted the
     data is loaded here as before. The caller is responsible for ensuring the bundle was loaded
     with a matching data-loading configuration.
+
+    Either way, the bundle's data summary is recorded per run: in the W&B config (under
+    ``data_summary``, queryable in the UI) and as ``data_summary_<model_name>.json`` in the
+    training outputs directory.
     """
     use_wandb = parameters.get('use_wandb', True)
     cfg = gates.config.get_config()
@@ -384,7 +435,14 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     else:
         print("Reusing pre-loaded shared data bundle for model", model_name)
     (train_fp_data, train_inputs, train_bgs, train_aux_cams_data,
-     test_fp_data, test_inputs, test_bgs, test_aux_cams_data) = data_bundle
+     test_fp_data, test_inputs, test_bgs, test_aux_cams_data, data_summary) = data_bundle
+
+    if data_summary is not None:
+        save_object(data_summary, "data_summary", paths_ctx.training_outputs_path, model_name,
+                    file_type="json", description=f"Summary of the raw data used by model {model_name}",
+                    use_wandb=use_wandb)
+        if use_wandb:
+            wandb.config.update({"data_summary": data_summary})
 
     # Select the background output variables (DataArray with a num_classes dim)
     if num_classes == 1:

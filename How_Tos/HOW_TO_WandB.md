@@ -71,6 +71,23 @@ artifact.add_file("path/to/checkpoint.pt")
 wandb.log_artifact(artifact)
 ```
 
+### Data-Loading Summary (dual model)
+For dual-model runs, `load_dual_data()` builds a summary of the raw data it actually loaded —
+sample counts, time ranges, array dims/sizes, load times, the resolved `background_setup`,
+and (for in-memory data) NaN counts and min/max/mean/std per component. Because the data can
+be loaded **once** and shared across several experiments (`run_dual_experiments_shared_data.py`),
+this summary is computed at load time and then recorded separately by **every** run that
+consumes the bundle:
+
+- in the run's **Config** tab under `data_summary` (filter/group runs by it in the UI), and
+- as `data_summary_<model_name>.json` in the run's `training_outputs/` directory
+  (also logged as an artifact when W&B is enabled).
+
+Value statistics read every array element, so by default they are only computed when the data
+is already in memory (`load_into_memory: true`). Override this with the optional top-level
+parameter-file key `"data_summary_stats"`: set it to `true` to force statistics even for lazy
+(dask-backed) data, or to `false` to record metadata only (dims, sizes, time ranges).
+
 ---
 
 ## 5. Viewing Your Results

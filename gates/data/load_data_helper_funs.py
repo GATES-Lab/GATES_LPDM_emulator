@@ -223,7 +223,104 @@ def get_static_variables_functions():
                                 _domain_binary_release,
                                 "domain_distance_release":
                                 _domain_distance_release,
-    }    
-            
+    }
+
     return static_variables_functions
+
+
+# ---------------------------------------------------------------
+# Summaries of loaded data (run transparency: saved to disk / W&B config)
+# ---------------------------------------------------------------
+
+def _is_lazy(xr_obj):
+    """True if the xarray object is dask-backed, i.e. reading values triggers compute/IO."""
+    return bool(getattr(xr_obj, "chunks", None))
+
+
+def _time_as_string(value):
+    """Render a single time coordinate value as an ISO string (falls back to str())."""
+    try:
+        return np.datetime_as_string(np.datetime64(value), unit="s")
+    except Exception:
+        return str(value)
+
+
+def _value_stats(da):
+    """NaN count and basic statistics of a DataArray as plain Python numbers.
+
+    Reads every value of the array, so only call this when that is acceptable
+    (in-memory data, or explicitly requested for lazy data).
+    """
+    return {
+        "nan_count": int(da.isnull().sum()),
+        "min": float(da.min()),
+        "max": float(da.max()),
+        "mean": float(da.mean()),
+        "std": float(da.std()),
+    }
+
+
+def _describe_component(xr_obj, compute_stats=None):
+    """JSON-serialisable description of one Dataset/DataArray (None passes through).
+
+    Dims, dtypes and sizes come from metadata only. Value statistics are added when
+    ``compute_stats`` is True, or when it is None (auto) and the data is already in
+    memory; lazy data is never read unless explicitly requested. Non-numeric
+    variables never get statistics.
+    """
+    if xr_obj is None:
+        return None
+    lazy = _is_lazy(xr_obj)
+    with_stats = compute_stats is True or (compute_stats is None and not lazy)
+    description = {
+        "type": type(xr_obj).__name__,
+        "dims": {str(dim): int(size) for dim, size in xr_obj.sizes.items()},
+        "size_mb": round(float(xr_obj.nbytes) / 1e6, 3),
+        "lazy": lazy,
+    }
+    if isinstance(xr_obj, xr.Dataset):
+        description["data_vars"] = {str(name): str(var.dtype) for name, var in xr_obj.data_vars.items()}
+        if with_stats:
+            description["stats"] = {
+                str(name): _value_stats(xr_obj[name]) for name in xr_obj.data_vars
+                if np.issubdtype(xr_obj[name].dtype, np.number)
+            }
+    else:
+        description["dtype"] = str(xr_obj.dtype)
+        if with_stats and np.issubdtype(xr_obj.dtype, np.number):
+            description["stats"] = _value_stats(xr_obj)
+    if "stats" not in description:
+        description["stats"] = "not computed"
+    return description
+
+
+def summarize_loaded_data(fp_data, inputs, bgs, aux_data, compute_stats=None):
+    """Build a JSON-serialisable summary of one loaded (train or test) data split.
+
+    This is the transparency record of what a loader actually produced, taken at the
+    boundary where data enters the model. It is safe to ``json.dump`` and to push into
+    a W&B run config.
+
+    Args:
+        fp_data (xr.Dataset): Footprints, dims (time, lat, lon).
+        inputs (xr.DataArray): Met inputs, dims (fp_time, lat, lon, variable).
+        bgs (xr.Dataset): Background corrections, dims (time,).
+        aux_data (xr.Dataset or None): Auxiliary CAMS boundary data.
+        compute_stats (bool or None): True computes NaN counts / min / max / mean / std
+            for every component (forces a full read of lazy data); False records
+            metadata only; None (default) computes statistics only for components that
+            are already in memory.
+
+    Returns:
+        dict: Nested dict of plain Python types.
+    """
+    time_values = fp_data.time.values
+    return {
+        "n_times": int(time_values.size),
+        "time_range": [_time_as_string(time_values.min()), _time_as_string(time_values.max())],
+        "footprints": _describe_component(fp_data, compute_stats),
+        "met_inputs": _describe_component(inputs, compute_stats),
+        "backgrounds": _describe_component(bgs, compute_stats),
+        "aux_cams": _describe_component(aux_data, compute_stats),
+    }
 
