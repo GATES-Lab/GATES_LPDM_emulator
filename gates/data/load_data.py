@@ -317,20 +317,70 @@ class LoadBaseSatelliteData:
 
 
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True, sample_dim="time"):
 
         self.dataset_format = "base"
-        self.data_type="satellite"
+        self._common_init(
+            year, region=region, month=month, domain=domain,
+            freq=freq, freq_offset=freq_offset, sampling_mode=sampling_mode,
+            fp_datadir=fp_datadir, fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format,
+            met_args=met_args, topog_args=topog_args, cfg=cfg,
+            verbose=verbose, parallel_loading=parallel_loading, sample_dim=sample_dim,
+        )
 
+        #### load footprint (fp) data
+        if verbose: print("---- LOADING FOOTPRINTS")
+        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem)
+
+        self.met_processed = False
+
+        
+        self.padding=None
+
+        if load_everything:
+            self.met_file = self.load_meteorology(**self.met_args)
+            self.topog_file, self.landcover_file = self.load_topog(**self.topog_args)
+
+        
+        if verbose: print("---- All done!")
+
+    def _common_init(self, year, region="BRAZIL", month=None, domain=None,
+                     freq=1, freq_offset=0, sampling_mode="regular",
+                     fp_datadir=None, fp_zarr_datadir=None, fp_format="auto",
+                     met_args={}, topog_args={}, cfg=None,
+                     verbose=False, parallel_loading=False,
+                     sample_dim="time", data_type="satellite"):
+        """
+        Shared setup for all footprint loaders. Resolves the config object,
+        region/domain, year/month/date, footprint/met/topog paths and the
+        subsampling parameters, and records the per-sample index dimension in
+        ``self.sample_dim``.
+
+        No data is loaded here: each loader (base, square, receptor) runs its own
+        footprint/met/topog loading and processing sequence after calling this,
+        because the order and steps differ between them.
+
+        sample_dim : str
+            Name of the dimension that identifies individual footprints
+            (datapoints). "time" for the classic satellite data, where each
+            timestamp is one footprint; "sample_id" for receptor data, where
+            footprints are flattened over (time, receptor) into a unique integer
+            index. Physical footprint time, receptor id, etc. ride along this
+            dimension as coordinates, so ``fp_data_full.time`` stays available in
+            both cases.
+        """
+        self.data_type = data_type
+        self.sample_dim = sample_dim
+        self.verbose = verbose
         self.parallel_loading = parallel_loading
 
+        # config is only needed when a path or the domain has to be looked up
         needs_cfg = (
-             domain is None
-             or (fp_datadir is None and fp_zarr_datadir is None)
-             or "met_datadir" not in met_args
-             or "topog_path" not in topog_args
-         )
-
+            domain is None
+            or (fp_datadir is None and fp_zarr_datadir is None)
+            or "met_datadir" not in met_args
+            or "topog_path" not in topog_args
+        )
         if cfg is None:
             if needs_cfg:
                 try:
@@ -349,39 +399,28 @@ class LoadBaseSatelliteData:
         if domain is None:
             self.domain = self._get_domain(region, self.cfg)
         else:
-            self.domain=domain
+            self.domain = domain
 
-        self.year = year
-        self.date = self.year
-        self.verbose=verbose
+        # year/month/date: accept an int, a 4-digit year, a YYYYMM string, or a
+        # multi-year glob such as "201[4-5]" (kept as a string for the file search)
+        self.date = year
+        if len(str(year)) > 4 and "[" not in str(year):
+            self.year = int(str(year)[:4])
+        elif "[" in str(year):
+            self.year = str(year)
+        else:
+            self.year = int(year)
 
         if month is not None:
             if not isinstance(month, str):
                 month = str(month).zfill(2)
             self.month = month
-            self.date = str(self.year)+month
-        
+            self.date = str(self.year) + month
+
         # prepare the paths to load the data, using the config values as default and superceded by any arguments passed to the function
         self._resolve_paths(self.cfg, fp_datadir=fp_datadir, fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format, met_args=met_args, topog_args=topog_args)
 
-
-        self.subsample_parameters = {"freq":freq, "sampling_mode":sampling_mode, "freq_offset":freq_offset}
-
-        #### load footprint (fp) data
-        if verbose: print("---- LOADING FOOTPRINTS")
-        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem)
-
-        self.met_processed = False
-
-        
-        self.padding=None
-
-        if load_everything:
-            self.met_file = self.load_meteorology(**self.met_args)
-            self.topog_file, self.landcover_file = self.load_topog(**self.topog_args)
-
-        
-        if verbose: print("---- All done!")
+        self.subsample_parameters = {"freq": freq, "sampling_mode": sampling_mode, "freq_offset": freq_offset}
 
     def _resolve_paths(self, cfg, fp_datadir=None, fp_zarr_datadir=None, fp_format="auto", met_args={}, topog_args={}):
         """
@@ -717,12 +756,16 @@ class LoadBaseSatelliteData:
 
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
 
+        # reshape into the per-sample layout (a no-op unless a subclass, e.g.
+        # LoadReceptorData, flattens (time, receptor) into a unique sample_id)
+        self.fp_data_full = self._prepare_samples(self.fp_data_full)
+
         ## reduce data frequency with regular sampling 9eg keep only 1 in every 3 timesteps
         # uses the sampling_mode and freq parameters
         self._subsample_frequency(**self.subsample_parameters)
 
         #print(self.fp_data_full)
-        if self.verbose: print(f"Loading {len(self.fp_data_full.time.values)} footprints")
+        if self.verbose: print(f"Loading {self.fp_data_full.sizes[self.sample_dim]} footprints")
         if load_fps_in_mem:
             self.fp_data_full.fp.load()
             print("loaded fp variable into mem")
@@ -733,19 +776,32 @@ class LoadBaseSatelliteData:
 
         
     
+    def _prepare_samples(self, fp_data_full):
+        """
+        Hook to reshape freshly-loaded footprints into the per-sample layout used by
+        the rest of the pipeline (one footprint per element of ``self.sample_dim``).
+        The base and square satellite loaders already have one footprint per
+        timestamp (sample_dim="time"), so this returns the data unchanged;
+        LoadReceptorData overrides it to flatten (time, receptor) into a unique
+        ``sample_id`` index via _make_sample_id.
+        """
+        return fp_data_full
+
     def _subsample_frequency(self, freq=1, sampling_mode="regular",freq_offset=0):
         """
-        Subsample the footprint data by selecting every freq-th timestamp from the original dataset, starting from the timestamp specified by freq_offset (if sampling_mode is "regular"), or by randomly selecting N/freq timestamps from the original dataset (if sampling_mode is "random"). If freq=1, no subsampling is done and all footprints are loaded. 
+        Subsample the footprint data by selecting every freq-th sample from the original dataset, starting from the sample specified by freq_offset (if sampling_mode is "regular"), or by randomly selecting N/freq samples from the original dataset (if sampling_mode is "random"). If freq=1, no subsampling is done and all footprints are loaded. Operates along self.sample_dim ("time" for the classic data, "sample_id" for receptor data).
         """
-        # subsample the footprint data according to a particular sampling mode
-        self.original_fp_time_length = len(self.fp_data_full.time.values)
+        # subsample the footprint data according to a particular sampling mode,
+        # along the per-sample index dimension (time, or sample_id for receptor data)
+        sample_values = self.fp_data_full[self.sample_dim].values
+        self.original_fp_time_length = len(sample_values)
         if freq>1 and sampling_mode=="regular":
             print(f"reduced the number of datapoints by frequency {freq}")
-            self.fp_data_full = self.fp_data_full.sel(time=self.fp_data_full.time.values[freq_offset::freq])
+            self.fp_data_full = self.fp_data_full.sel({self.sample_dim: sample_values[freq_offset::freq]})
         
         elif freq>1 and sampling_mode=="random":
             print(f"reduced the number of datapoints by frequency {freq}, chosen at random")
-            self.fp_data_full = self.fp_data_full.sel(time=np.random.choice(self.fp_data_full.time.values, size=np.shape(self.fp_data_full.time.values[::freq]), replace=False))
+            self.fp_data_full = self.fp_data_full.sel({self.sample_dim: np.random.choice(sample_values, size=np.shape(sample_values[::freq]), replace=False)})
         else:
             if self.verbose: print("no sampling was done because you didnt pass a valid sampling mode, or freq=1")
 
@@ -1028,69 +1084,22 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True, sample_dim="time"):
 
         print(dask.__version__)
 
         self.dataset_format = "square"
-        self.data_type = "satellite"
-
-        self.parallel_loading = parallel_loading
-
-        needs_cfg = (
-             domain is None
-             or (fp_datadir is None and fp_zarr_datadir is None)
-             or "met_datadir" not in met_args
-             or "topog_path" not in topog_args
-         )
-
-        if cfg is None:
-            if needs_cfg:
-                try:
-                    self.cfg = get_config()
-                except Exception as e:
-                    raise FileNotFoundError(f"{e}\nTo avoid needing the config file, pass all necessary paths as arguments when initializing the class. Check the function inputs for details.")
-            else:
-                self.cfg = None
-        elif isinstance(cfg, gates.config.Config):
-            self.cfg = cfg
-        else:
-            raise ValueError("cfg should be either None or a gates.config.Config instance. If None, the config will be loaded from the config file. Check your input!")
-    
-        #### check domains
-        self.region = region
-        if domain is None:
-            self.domain = self._get_domain(region, self.cfg)
-        else:
-            self.domain=domain
-
         self.size = size
-
         self.fill_outofdomain_with = fill_outofdomain_with
         self.delete_outofdomain = delete_outofdomain
 
-        self.date = year
-        ### todo need to implement multiple years! 
-        if len(str(year)) >4 and "[" not in str(year):
-            self.year = int(str(year)[:4])
-        elif "[" in str(year):
-            self.year = str(year)
-        else:
-            self.year = int(year)
-
-        self.verbose=verbose
-
-
-        if month is not None:
-            if not isinstance(month, str):
-                month = str(month).zfill(2)
-            self.month = month
-            self.date = str(self.year)+month
-
-        # prepare the paths to load the data, using the config values as default and superceded by any arguments passed to the function
-        self._resolve_paths(self.cfg, fp_datadir=fp_datadir, fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format, met_args=met_args, topog_args=topog_args)
-
-        self.subsample_parameters = {"freq":freq, "sampling_mode":sampling_mode, "freq_offset":freq_offset}
+        self._common_init(
+            year, region=region, month=month, domain=domain,
+            freq=freq, freq_offset=freq_offset, sampling_mode=sampling_mode,
+            fp_datadir=fp_datadir, fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format,
+            met_args=met_args, topog_args=topog_args, cfg=cfg,
+            verbose=verbose, parallel_loading=parallel_loading, sample_dim=sample_dim,
+        )
         
         #### load footprint (fp) data, subsample, crop
         if verbose: print("---- LOADING FOOTPRINTS") 
@@ -1123,7 +1132,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         If the square to extract escapes the footprint domain, the padded space is filled with nans or zeros or deleted according to the fill_outofdomain_with and delete_outofdomain parameters.
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        self.fp_xr, self.fp_data_full, self.release_idxs, padded_domain_coords = cut_satellite_data(self.fp_data_full, self.size, fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, load=not lazy_load) 
+        self.fp_xr, self.fp_data_full, self.release_idxs, padded_domain_coords = cut_satellite_data(self.fp_data_full, self.size, fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, load=not lazy_load, sample_dim=self.sample_dim)
         ## for now!
         self.padded_domain_coords = padded_domain_coords
 
@@ -1316,6 +1325,52 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
 
         fig.suptitle("Mean footprint, centered around release point")
         plt.show()
+
+
+class LoadReceptorData(LoadSquareSatelliteData):
+    """
+    Load receptor-format footprints and cut them to a square around each receptor's
+    release point, in the same layout produced by LoadSquareSatelliteData.
+
+    The satellite footprints have one release per timestamp, so ``time`` uniquely
+    labels each datapoint. Receptor footprints instead come as yearly Zarr stores
+    with dimensions (time, receptor, lat, lon): the same set of receptors is
+    recorded at many timesteps, so a datapoint is a (time, receptor) pair. On load
+    these are flattened into a single ``sample_id`` index (see _make_sample_id), and
+    ``sample_dim="sample_id"`` is used throughout the pipeline in place of "time".
+    The physical footprint time is preserved as a ``time`` coordinate along
+    ``sample_id``.
+
+    Only the footprint reshaping differs; the square cropping and the rest of the
+    machinery are inherited and driven by ``self.sample_dim``. This is done by
+    overriding the ``_prepare_samples`` hook rather than the whole
+    ``_load_footprints`` method, so the shared loading/subsampling logic (zarr
+    opening, month slicing, frequency subsampling) is reused as-is.
+
+    Footprint paths: pass ``fp_zarr_datadir`` pointing at the receptor Zarr stores
+    (a glob resolving to one or more *_YYYY.zarr stores that open together along
+    time), or rely on the config's ``fp_zarr_datadir``. If the receptor stores
+    follow a different naming convention to the satellite Zarr, override
+    ``_resolve_paths``. Other arguments match LoadSquareSatelliteData.
+
+    NOTE: meteorology, flux and the input/dataloader machinery are not yet
+    sample_dim-aware, so load_everything defaults to False — only the footprints are
+    loaded and cropped for now.
+    """
+    def __init__(self, year, region="BRAZIL", month=None, domain=None, size=10,
+                 fp_zarr_datadir=None, fp_format="zarr", sample_dim="sample_id",
+                 load_everything=False, **kwargs):
+        super().__init__(
+            year, region=region, month=month, domain=domain, size=size,
+            fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format,
+            sample_dim=sample_dim, load_everything=load_everything, **kwargs,
+        )
+
+    def _prepare_samples(self, fp_data_full):
+        """Flatten (time, receptor) footprints into a unique sample_id index; see _make_sample_id."""
+        if self.verbose:
+            print("----- Flattening (time, receptor) footprints into sample_id index")
+        return _make_sample_id(fp_data_full)
 
 
 def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
@@ -1526,8 +1581,35 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
     return cropped, nan_idxs
 
 
+def _make_sample_id(fp_full):
+    """
+    Flatten a receptor-format footprint dataset (dims time, receptor, lat, lon)
+    into one indexed by a single ``sample_id`` dimension, so every (time, receptor)
+    pair becomes one footprint/datapoint with a unique integer id (1..N).
+
+    ``time`` and ``receptor`` are kept as coordinates along ``sample_id`` (so the
+    physical footprint time stays available as ``fp_full.time``). ``release_lat``/
+    ``release_lon`` are stored per (time, receptor) — e.g. shape (1, 40) for a
+    single timestamp and 40 receptors — so they flatten straight to
+    ``release_lat(sample_id)``, one release location per sample, which is what the
+    cropping code expects.
+    """
+    if "receptor" not in fp_full.dims:
+        raise ValueError(
+            "_make_sample_id expects a 'receptor' dimension to flatten; got dims "
+            f"{tuple(fp_full.dims)}. Is this receptor-format footprint data?"
+        )
+
+    fp_full = fp_full.sortby(["time", "receptor"])
+    fp_full = fp_full.stack(sample_id=("time", "receptor"))
+    fp_full = fp_full.reset_index("sample_id")
+    fp_full = fp_full.assign_coords(
+        sample_id=("sample_id", np.arange(1, fp_full.sizes["sample_id"] + 1)))
+    return fp_full
+
+
 def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=False,
-                           load=False, verbose=True):
+                           load=False, verbose=True, sample_dim="time"):
     """
     Cuts footprints to a size x size square centred on each release point, returning
     an xarray Dataset with artificial lat/lon coordinates 0..size and the actual
@@ -1566,7 +1648,7 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
         if len(oob) > 0:
             if verbose:
                 print(f"Dropping {len(oob)} footprints that escape the domain when cut to size {size}")
-            fp_full = fp_full.drop_sel(time=fp_full.time.values[oob])
+            fp_full = fp_full.drop_sel({sample_dim: fp_full[sample_dim].values[oob]})
             release_idxs = _get_release_idxs(fp_full)
 
     before_padding_coords = (fp_full.lat.values.copy(), fp_full.lon.values.copy())
@@ -1579,8 +1661,8 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
     lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
 
-    lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": fp_full.time})
-    lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": fp_full.time})
+    lat_da = xr.DataArray(lat_indices, dims=[sample_dim, "lat"], coords={sample_dim: fp_full[sample_dim]})
+    lon_da = xr.DataArray(lon_indices, dims=[sample_dim, "lon"], coords={sample_dim: fp_full[sample_dim]})
 
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         cropped_fp = fp_full.isel(lat=lat_da, lon=lon_da)
@@ -1590,16 +1672,16 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
         .assign_coords(lat=np.arange(size), lon=np.arange(size))
         .assign({
             "lat_coords": xr.DataArray(
-                domain_lats[lat_indices], dims=["time", "lat"],
-                coords={"time": cropped_fp.time}),
+                domain_lats[lat_indices], dims=[sample_dim, "lat"],
+                coords={sample_dim: cropped_fp[sample_dim]}),
             "lon_coords": xr.DataArray(
-                domain_lons[lon_indices], dims=["time", "lon"],
-                coords={"time": cropped_fp.time}),
+                domain_lons[lon_indices], dims=[sample_dim, "lon"],
+                coords={sample_dim: cropped_fp[sample_dim]}),
         })
     )
 
     cropped_fp = cropped_fp[["fp", "lat_coords", "lon_coords", "release_lat", "release_lon"]]
-    cropped_fp = cropped_fp.transpose("time", "lat", "lon")
+    cropped_fp = cropped_fp.transpose(sample_dim, "lat", "lon")
     #cropped_fp = cropped_fp.chunk({"time": 100, "lat": -1, "lon": -1})
 
     fp_full = fp_full.sel(lat=slice(before_padding_coords[0][0], before_padding_coords[0][-1]),
