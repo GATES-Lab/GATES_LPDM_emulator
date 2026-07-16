@@ -622,8 +622,9 @@ class LoadBaseSatelliteData:
 
         """
         topog_file = _rename_latlon(topog_file)
+        topog_file = _wrap_longitudes(topog_file)
         
-        # Check domain overlap after renaming
+        # Check domain overlap after renaming and wrapping
         self._check_domain_overlap(self.fp_data_full, topog_file, "footprint", "topography")
         
         topog_file = topog_file.interp(lat=lat_values, lon=lon_values)
