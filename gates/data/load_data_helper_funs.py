@@ -71,7 +71,7 @@ def select_met_levels(met, levels=None):
 def select_met_variables(met, variables=None):
     protected_variables = ["fp_time", "lat_coords", "lon_coords"]
     protected_coords = ["levels", "time", "time_delta", "lat", "lon"]
-    if variables is not None:
+    if variables is not None and len(variables)>0:
         for v in variables:
             if v not in met.data_vars and v != "wind_speed" and v != "wind_angle":
                 print("variable ", v, " not found in met file")

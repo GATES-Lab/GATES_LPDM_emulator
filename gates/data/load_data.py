@@ -21,7 +21,7 @@ import time
 import cartopy.crs as ccrs
 import cartopy
 
-from .load_data_helper_funs import *
+from .load_data_helper_funs import haversine, select_met_levels,select_met_variables,get_static_variables_functions
 
 from gates.config import get_config
 
@@ -48,29 +48,104 @@ def _wrap_longitudes(ds):
     return ds.sortby(lon_name)
 
 
+def detect_fp_format(fp_datadir):
+    """
+    Return the footprint format ("zarr" or "nc") implied by a path or glob pattern.
+    Anything that does not end in .zarr is treated as NetCDF, so patterns using
+    other NetCDF suffixes keep working.
+    """
+    return "zarr" if str(fp_datadir).endswith(".zarr") else "nc"
+
+
 def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop_variables_except=None, bad_files_list=None):
     """
-    Load footprints from datadir, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
-    note that the list of problematic files is currently updated manually!
+    Load footprints from datadir, in either NetCDF or Zarr format. The format is
+    taken from the suffix of fp_datadir: a pattern ending in .zarr is loaded as
+    yearly Zarr stores, anything else as monthly NetCDF files.
 
     Args:
-        - fp_datadir (str or Path): string or path pointing to the directory with footprints to load, 
-        including special characters (eg "/path/to/footprints/*.nc", or "/path/to/footprints/*2020*.nc")
-        Note that fp_datadir is passed directly to glob, so it needs to specify filetype (i.e. finish with .nc)
+        - fp_datadir (str or Path): string or path pointing to the directory with footprints to load,
+        including special characters (eg "/path/to/footprints/*.nc", or "/path/to/footprints/*2020*.nc",
+        or "/path/to/footprints/*2020*.zarr")
+        Note that fp_datadir is passed directly to glob, so it needs to specify filetype (i.e. finish with .nc or .zarr)
         - verbose: if True, prints out the steps throughout the data loading process
-        - chunk: if True, loads the data with dask chunking, which can help with memory issues but can cause some problems with certain files. 
-        - parallel_loading: if True, uses dask to load the files in parallel, which can speed up loading but can cause some problems with certain files. Parallel loading can only be used if chunk=True.
+        - chunk: if True, loads the data with dask chunking, which can help with memory issues but can cause some problems with certain files. NetCDF only.
+        - parallel_loading: if True, uses dask to load the files in parallel, which can speed up loading but can cause some problems with certain files. Parallel loading can only be used if chunk=True. NetCDF only.
         - drop_variables_except: if specified, only keeps the listed variables in the dataset.
-        - bad_files_list: if specified, a list of files that are known to be problematic and should be skipped. If None, fetches list from config. Pass an empty list to not skip any files.
+        - bad_files_list: if specified, a list of files that are known to be problematic and should be skipped. If None, fetches list from config. Pass an empty list to not skip any files. NetCDF only.
     Returns:
         - fp_data_full: xarray dataset with the footprints specified in the fp_datadir, opened correctly
-    
+    """
+    fp_format = detect_fp_format(fp_datadir)
+
+    if fp_format == "zarr":
+        if not chunk or parallel_loading or bad_files_list:
+            warnings.warn(
+                "chunk, parallel_loading and bad_files_list only apply to NetCDF footprints "
+                "and are ignored when loading Zarr stores: the stores are written with their "
+                "own chunks, and the bad-file workarounds are applied at conversion time."
+            )
+        fp_data_full = _load_fps_zarr(fp_datadir, verbose=verbose)
+    else:
+        fp_data_full = _load_fps_netcdf(
+            fp_datadir, verbose=verbose, chunk=chunk,
+            parallel_loading=parallel_loading, bad_files_list=bad_files_list,
+        )
+
+    if drop_variables_except is not None:
+        vars_to_drop = [var for var in fp_data_full.data_vars if var not in drop_variables_except]
+        fp_data_full = fp_data_full.drop_vars(vars_to_drop)
+
+    return fp_data_full
+
+
+def _load_fps_zarr(fp_datadir, verbose=False):
+    """
+    Load footprints from one or more yearly Zarr stores, concatenating along time.
+    ``fp_datadir`` is a glob pattern (e.g. *BRAZIL*SOUTHAMERICA_2016*.zarr) resolved
+    to a list of stores; usually a single year, but a year pattern such as "201[4-5]"
+    resolves to several stores opened together.
+
+    The Zarr stores are written by convert_fps_to_zarr(), which already renames
+    latitude/longitude -> lat/lon, sorts and de-duplicates timestamps, and applies
+    the bad-file workarounds. So none of the NetCDF-era preprocessing is needed here.
+    """
+    fp_datadir = Path(fp_datadir)
+
+    if not os.path.exists(fp_datadir.parents[0]):
+        raise ValueError(f"Specified directory does not exist:\n {fp_datadir}")
+
+    fp_stores = sorted(glob.glob(str(fp_datadir)))
+    if len(fp_stores) == 0:
+        raise ValueError(
+            f"No matching Zarr stores found in the specified directory:\n {fp_datadir} \n"
+            "Check that the path is correct and that there are stores matching the pattern."
+        )
+
+    if verbose: print(f"Loading footprints from {len(fp_stores)} zarr store(s): {fp_stores}")
+
+    return xr.open_mfdataset(
+        fp_stores,
+        engine="zarr",
+        concat_dim="time",
+        combine="nested",
+        consolidated=True,
+    )
+
+
+def _load_fps_netcdf(fp_datadir, verbose=False, chunk=True, parallel_loading=False, bad_files_list=None):
+    """
+    Load footprints from monthly NetCDF files, using workaround if problematic files are encountered. Will throw an error if ANY of the specified files is problematic and NOT on the bad_files list
+    note that the list of problematic files is currently updated manually!
+
+    See load_fps() for the arguments.
+
     Potential Improvements:
-        - Add capability to ignore any files that couldn't be opened, and return only the successful files 
+        - Add capability to ignore any files that couldn't be opened, and return only the successful files
     """
     fp_datadir = Path(fp_datadir)
     print("WITH CHUNKING -")
-    try:           
+    try:
         if chunk:
             #time_chunk = 25
             #chunk_args = {"chunks" : {"time": time_chunk}, "parallel": True}
@@ -146,10 +221,6 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
     fp_data_full = _rename_latlon(fp_data_full)
     fp_data_full = fp_data_full.sortby('time')
 
-    if drop_variables_except is not None:
-        vars_to_drop = [var for var in fp_data_full.data_vars if var not in drop_variables_except]
-        fp_data_full = fp_data_full.drop(vars_to_drop)
-
     return fp_data_full
 
 
@@ -210,9 +281,11 @@ class LoadBaseSatelliteData:
     -  load_everything: bool, if True, loads all data (footprints, meteorology and topography) at once when initializing the class. If False, only loads footprints, and meteorology and topography can be loaded later with the load_meteorology() and load_topog() functions. Default is False 
 
     Paths:
-        The paths to the files are by default loaded from the config file, where the file structure is expected to be path/to/footprints/domain/region_*domain*_yearmonth.nc for the footprints, and path/to/meteorology/domain/domain_Met_yearmonth.nc for the meteorology. 
+        The paths to the files are by default loaded from the config file, where the file structure is expected to be path/to/footprints/domain/region_*domain*_yearmonth.nc for the NetCDF footprints, path/to/footprints_zarr/domain/region_*domain*_year.zarr for the Zarr footprints, and path/to/meteorology/domain/domain_Met_year.zarr for the meteorology.
         The config paths are superceded by passing the paths as arguments, as strings or path objects:
-        - fp_datadir for the footprints, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
+        - fp_datadir for the NetCDF footprints, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
+        - fp_zarr_datadir for the Zarr footprints, which should point to the folder containing the yearly stores with format example_name_year.zarr (eg brazil_2016.zarr), so that the year can be automatically added.
+        - fp_format: "auto" (default), "zarr" or "nc". "auto" looks for Zarr stores first and falls back to NetCDF, so both formats can coexist and Zarr wins for a year available in both. Passing only one of fp_datadir/fp_zarr_datadir also selects that format. "zarr" or "nc" force a format.
         - met_args = {"met_datadir": "path/to/meteorology/domain/domain_Met_"}, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
         - topog_args = {"topog_path": "path/to/topography/file.nc", "landcover_path": "path/to/landcover/file.nc"}, which should point to the specific files for topography and landcover. These files will be interpolated to the same resolution and domain as the footprints, so they can be from a different source and with a different original resolution.
 
@@ -244,16 +317,16 @@ class LoadBaseSatelliteData:
 
 
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True):
-        
-        self.dataset_format = "base" 
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True):
+
+        self.dataset_format = "base"
         self.data_type="satellite"
 
         self.parallel_loading = parallel_loading
 
         needs_cfg = (
              domain is None
-             or fp_datadir is None
+             or (fp_datadir is None and fp_zarr_datadir is None)
              or "met_datadir" not in met_args
              or "topog_path" not in topog_args
          )
@@ -289,14 +362,14 @@ class LoadBaseSatelliteData:
             self.date = str(self.year)+month
         
         # prepare the paths to load the data, using the config values as default and superceded by any arguments passed to the function
-        self._resolve_paths(self.cfg, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args)
+        self._resolve_paths(self.cfg, fp_datadir=fp_datadir, fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format, met_args=met_args, topog_args=topog_args)
 
 
         self.subsample_parameters = {"freq":freq, "sampling_mode":sampling_mode, "freq_offset":freq_offset}
-        
-        #### load footprint (fp) data     
-        if verbose: print("---- LOADING FOOTPRINTS")  
-        self._load_footprints(self.fp_datadir)
+
+        #### load footprint (fp) data
+        if verbose: print("---- LOADING FOOTPRINTS")
+        self._load_footprints(self.fp_datadir, load_fps_in_mem=load_fps_in_mem)
 
         self.met_processed = False
 
@@ -310,18 +383,33 @@ class LoadBaseSatelliteData:
         
         if verbose: print("---- All done!")
 
-    def _resolve_paths(self, cfg, fp_datadir=None, met_args={}, topog_args={}):
+    def _resolve_paths(self, cfg, fp_datadir=None, fp_zarr_datadir=None, fp_format="auto", met_args={}, topog_args={}):
         """
-        Prepare the necessary loading paths. If paths are not passed as arguments, they will be constructed from the config file values. For the footprint and the meteorology paths, the config data is expected to point at a folder, which contains a folder for each domain, which in turn contains the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc). The function will construct the path to point directly to the files, including the date. 
-        
+        Prepare the necessary loading paths. If paths are not passed as arguments, they will be constructed from the config file values. For the footprint and the meteorology paths, the config data is expected to point at a folder, which contains a folder for each domain, which in turn contains the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc). The function will construct the path to point directly to the files, including the date.
+
         If paths are passed as arguments, they will be used directly (but the date will still be added automatically, so the files should have format example_name_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/example_name_")
 
-        The topography and landcover paths should point to a specific file, either through the config file or through the arguments. 
+        The topography and landcover paths should point to a specific file, either through the config file or through the arguments.
         """
-        if fp_datadir is None:
-            self.fp_datadir = Path(cfg.fp_datadir) / self.domain / f"*{self.region}*{self.domain}_{str(self.date)}*.nc"
-        else:
-            self.fp_datadir=Path(str(fp_datadir)+ f"*{str(self.date)}*.nc")
+        # Footprints come in two formats, which can coexist: monthly NetCDF files
+        # (*REGION*DOMAIN_YYYYMM.nc) under fp_datadir, and yearly Zarr stores
+        # (*REGION*DOMAIN_YYYY.zarr) under fp_zarr_datadir. The Zarr pattern is keyed
+        # on the year (not self.date, which includes the month) so a single month load
+        # still points at the whole-year store; the month slice happens in
+        # _load_footprints.
+        self.fp_datadir_nc = self._build_fp_pattern(
+            fp_datadir, getattr(cfg, "fp_datadir", None), self.date, ".nc")
+        self.fp_datadir_zarr = self._build_fp_pattern(
+            fp_zarr_datadir, getattr(cfg, "fp_zarr_datadir", None), self.year, ".zarr")
+
+        # an explicit path for only one format is a direct instruction to use it
+        if fp_format == "auto":
+            if fp_datadir is not None and fp_zarr_datadir is None:
+                fp_format = "nc"
+            elif fp_zarr_datadir is not None and fp_datadir is None:
+                fp_format = "zarr"
+
+        self.fp_format, self.fp_datadir = self._resolve_fp_format(fp_format)
 
         # Meteorology is stored as one Zarr store per year (DOMAIN_Met_YYYY.zarr),
         # keyed on the year (not self.date, which includes the month) so a single
@@ -345,8 +433,58 @@ class LoadBaseSatelliteData:
                 self.topog_args["landcover_path"] = None
             elif cfg.landcover_datadir is not None:
                 self.topog_args["landcover_path"] = Path(cfg.landcover_datadir)
-    
 
+    def _build_fp_pattern(self, passed_path, cfg_root, date, suffix):
+        """
+        Build the glob pattern for one footprint format. Uses passed_path if given,
+        appending the date and suffix unless the path already names a filetype,
+        otherwise builds cfg_root/DOMAIN/*REGION*DOMAIN_date*suffix.
+        Returns None if neither a path nor a config root is available for the format.
+        """
+        if passed_path is not None:
+            passed_path = str(passed_path)
+            if passed_path.endswith((".nc", ".zarr")):
+                return Path(passed_path)
+            return Path(passed_path + f"*{str(date)}*{suffix}")
+
+        if cfg_root is None:
+            return None
+
+        return Path(cfg_root) / self.domain / f"*{self.region}*{self.domain}_{str(date)}*{suffix}"
+
+    def _resolve_fp_format(self, fp_format):
+        """
+        Decide which footprint format to load, returning (format, glob pattern).
+
+        "auto" looks for Zarr stores first and falls back to NetCDF, so both formats
+        can coexist and Zarr wins for a year that is available in both. "zarr" or "nc"
+        force a format.
+        """
+        patterns = {"nc": self.fp_datadir_nc, "zarr": self.fp_datadir_zarr}
+
+        if fp_format not in ("auto", "nc", "zarr"):
+            raise ValueError(f"fp_format should be one of 'auto', 'nc' or 'zarr', got '{fp_format}'")
+
+        if fp_format != "auto":
+            if patterns[fp_format] is None:
+                arg_name = "fp_zarr_datadir" if fp_format == "zarr" else "fp_datadir"
+                raise ValueError(
+                    f"fp_format='{fp_format}' was requested, but no {fp_format} footprint path is "
+                    f"available. Pass {arg_name} as an argument, or set {arg_name} in the config file."
+                )
+            return fp_format, patterns[fp_format]
+
+        for candidate in ("zarr", "nc"):
+            if patterns[candidate] is not None and len(glob.glob(str(patterns[candidate]))) > 0:
+                if self.verbose: print(f"found {candidate} footprints matching {patterns[candidate]}")
+                return candidate, patterns[candidate]
+
+        tried = "\n".join(f"  {fmt}: {patterns[fmt]}" for fmt in ("zarr", "nc") if patterns[fmt] is not None)
+        raise ValueError(
+            f"No footprints found for region {self.region}, date {self.date}, in either format.\n"
+            f"Tried:\n{tried}\n"
+            "Check that the paths are correct and that there are files matching the patterns."
+        )
 
     def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True, parallel=False):
         """
@@ -566,6 +704,17 @@ class LoadBaseSatelliteData:
 
         self.fp_data_full = load_fps(fp_datadir, verbose=self.verbose, parallel_loading=self.parallel_loading, drop_variables_except=["fp", "release_lat", "release_lon"])
 
+        # Zarr stores are yearly, so a single-month load has to be sliced after opening.
+        # The NetCDF files are monthly, so there the month is already selected by the filename.
+        if self.fp_format == "zarr" and getattr(self, "month", None) is not None:
+            self.fp_data_full = self.fp_data_full.sel(
+                time=self.fp_data_full.time.dt.month == int(self.month))
+            if self.fp_data_full.time.size == 0:
+                raise ValueError(
+                    f"No footprints found for month {self.month} in the zarr store(s) matching "
+                    f"{fp_datadir}. Check that the month is covered by the store."
+                )
+
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
 
         ## reduce data frequency with regular sampling 9eg keep only 1 in every 3 timesteps
@@ -622,8 +771,9 @@ class LoadBaseSatelliteData:
 
         """
         topog_file = _rename_latlon(topog_file)
+        topog_file = _wrap_longitudes(topog_file)
         
-        # Check domain overlap after renaming
+        # Check domain overlap after renaming and wrapping
         self._check_domain_overlap(self.fp_data_full, topog_file, "footprint", "topography")
         
         topog_file = topog_file.interp(lat=lat_values, lon=lon_values)
@@ -847,9 +997,11 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         - size: size for footprint to be cut to, as an int. Resolution of the footprint is maintained, cut to a sizexsize square around the release point. 
     
     Paths:
-        The paths to the files are by default loaded from the config file, where the file structure is expected to be path/to/footprints/domain/region_*domain*_yearmonth.nc for the footprints, and path/to/meteorology/domain/domain_Met_yearmonth.nc for the meteorology. 
+        The paths to the files are by default loaded from the config file, where the file structure is expected to be path/to/footprints/domain/region_*domain*_yearmonth.nc for the NetCDF footprints, path/to/footprints_zarr/domain/region_*domain*_year.zarr for the Zarr footprints, and path/to/meteorology/domain/domain_Met_year.zarr for the meteorology.
         The config paths are superceded by passing the paths as arguments, as strings or path objects:
-        - fp_datadir for the footprints, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
+        - fp_datadir for the NetCDF footprints, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
+        - fp_zarr_datadir for the Zarr footprints, which should point to the folder containing the yearly stores with format example_name_year.zarr (eg brazil_2016.zarr), so that the year can be automatically added.
+        - fp_format: "auto" (default), "zarr" or "nc". "auto" looks for Zarr stores first and falls back to NetCDF, so both formats can coexist and Zarr wins for a year available in both. Passing only one of fp_datadir/fp_zarr_datadir also selects that format. "zarr" or "nc" force a format.
         - met_args = {"met_datadir": "path/to/meteorology/domain/domain_Met_"}, which should point to the folder containing the files for each month/year with format example_name_yearmonth.nc (eg brazil_201601.nc), so that the date can be automatically added.
         - topog_args = {"topog_path": "path/to/topography/file.nc", "landcover_path": "path/to/landcover/file.nc"}, which should point to the specific files for topography and landcover. These files will be interpolated to the same resolution and domain as the footprints, so they can be from a different source and with a different original resolution.
 
@@ -876,18 +1028,18 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
 
         print(dask.__version__)
 
-        self.dataset_format = "square" 
+        self.dataset_format = "square"
         self.data_type = "satellite"
 
         self.parallel_loading = parallel_loading
-        
+
         needs_cfg = (
              domain is None
-             or fp_datadir is None
+             or (fp_datadir is None and fp_zarr_datadir is None)
              or "met_datadir" not in met_args
              or "topog_path" not in topog_args
          )
@@ -936,7 +1088,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.date = str(self.year)+month
 
         # prepare the paths to load the data, using the config values as default and superceded by any arguments passed to the function
-        self._resolve_paths(self.cfg, fp_datadir=fp_datadir, met_args=met_args, topog_args=topog_args)
+        self._resolve_paths(self.cfg, fp_datadir=fp_datadir, fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format, met_args=met_args, topog_args=topog_args)
 
         self.subsample_parameters = {"freq":freq, "sampling_mode":sampling_mode, "freq_offset":freq_offset}
         

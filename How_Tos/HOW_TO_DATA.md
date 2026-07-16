@@ -12,6 +12,7 @@ The pipeline takes LPDM footprints + meteorology + static fields, cuts them to s
 |------|--------|--------------------------------|
 | **Footprints** | NetCDF `.nc`, one file per month | dims: `time`, `lat`, `lon`; vars: `fp`, `release_lat`, `release_lon` |
 | **Meteorology** | NetCDF `.nc`, one or more files per month | dims: `time`, `levels` (or `model_level_number`), `lat`/`latitude`, `lon`/`longitude` |
+| **Meteorology (WIP)** | Zarr, one store per year (migrating from monthly NetCDF — see [below](#meteorology-yearly-zarr-stores-migration-in-progress)) | dims: `time`, `levels`, `lat`, `lon` |
 | **Topography** | Single global NetCDF | dims: `lat`, `lon` |
 | **Land cover** | Single global NetCDF | dims: `lat`, `lon`, `pseudo_level` |
 
@@ -33,12 +34,34 @@ Other regions require passing `domain` explicitly.
 
 ---
 
+## Meteorology: yearly Zarr stores *(migration in progress)*
+
+Meteorology is moving from monthly NetCDF (`DOMAIN_Met_YYYYMM*.nc`) to **one Zarr store per year**. ([see PR here](https://github.com/GATES-Lab/GATES_LPDM_emulator/pull/15)) Footprints, topography and land cover are unchanged (still NetCDF).
+
+**Layout & naming**
+```
+<met_datadir>/DOMAIN/DOMAIN_Met_YYYY.zarr     # one store per year
+```
+`met_datadir` (the same config key as before) now points at the Zarr root.
+
+**What the store already contains** — the conversion bakes in, at write time,
+everything the loader used to redo on every load, so the Zarr is ready to use
+as-is:
+- dims already renamed: `latitude/longitude → lat/lon`, `model_level_number → levels`
+- unused UM variables dropped (`forecast_period`, `forecast_reference_time`,
+  `level_height_0`, `sigma_0`)
+- duplicate/unsorted timestamps and duplicate lat/lon removed
+- native chunks `{time:1, lat:-1, lon:-1, levels:3}` — tuned so a single timestep
+  (the dominant scattered-access pattern) is cheap to read
+
+---
+
 ## Pipeline Steps
 
 ### Step 1 — Load and cut data: `LoadSquareSatelliteData`
 
 ```python
-from model.data.load_data import LoadSquareSatelliteData
+from gates.data.load_data import LoadSquareSatelliteData
 
 data = LoadSquareSatelliteData(
     year=2016,
@@ -71,37 +94,44 @@ The xarrays have coordinates `[0,1,2,3 ..., size-1]`, with the release coordinat
 
 ---
 
-### Step 2 — Build the inputs array: `get_square_satellite_inputs`
+### Step 2 — Build the inputs array: `get_square_satellite_inputs_v2` *(v1 deprecated)*
+
+`get_square_satellite_inputs_v2` is the current default. The old `get_square_satellite_inputs` (v1) is deprecated — do not use it for new runs.
+
+Key differences from v1:
+- `met_variables` is a **flat list** of variable names (not a dict mapping names to levels).
+- `met_levels` is a **single shared list** of levels applied to all atmospheric variables — surface variables (those without a `levels` dimension in the met dataset) are detected automatically.
+- All `time_deltas` are processed in a single dask compute call, eliminating repeated I/O.
+- Adds `interp_to`: pass a pandas offset string (e.g. `"1h"`) to linearly interpolate met to rounded target times rather than snapping to the nearest timestamp.
 
 ```python
-from model.data.datasets import get_square_satellite_inputs
+from gates.data.datasets import get_square_satellite_inputs_v2
 
-met_variables = {
-    "x_wind": [15, 21],          # atmospheric variable: list of model levels to extract
-    "y_wind": [15, 21],
-    "atmosphere_boundary_layer_thickness": [], # a 2D variable, with no levels
-}
+met_variables = ["x_wind", "y_wind", "atmosphere_boundary_layer_thickness"]
+met_levels = [15, 21]   # shared across all atmospheric variables; surface vars detected automatically
 
-inputs, data = get_square_satellite_inputs(
+inputs, data = get_square_satellite_inputs_v2(
     data,
-    met_variables,
-    time_deltas=[6],                       # also extract met at t-6h 
-    static_variables=["topog", "lat_coords", "lon_coords"],  # optional static fields
+    met_variables=met_variables,
+    met_levels=met_levels,
+    time_deltas=[6],                                            # also extract met at t−6h
+    static_variables=["topog", "lat_coords", "lon_coords"],     # optional static fields
+    interp_to="1h",   # optional: interpolate met to 1h-rounded times (omit to snap to nearest)
 )
 ```
 
 This stacks all variables along a `variable_name` MultiIndex of tuples `(variable, level, time_delta)`. Static variables always have `level=0, time_delta=0`.
 
-Returns `inputs`, an xarray DataArray of shape `(fp_time, lat, lon, variable_name)`, and also returns the original data object - if any indeces could not be interpolated correctly to the requested time-deltas, these are dropped from the object too.
+Returns `inputs`, an xarray DataArray of shape `(fp_time, lat, lon, variable_name)`, and the updated data object — fp_time indices where met interpolation failed are dropped from both.
 
 Available `static_variables`: `topog`, `landcover`, `lat_coords`, `lon_coords`, and others — see `get_static_variables_functions()` in `load_data_helper_funs.py`.
 
 ---
 
-### Step 3 — Scale inputs: `InputsDataset` / `DefaultInputsScaler`
+### Step 3 — Scale inputs: `InputsDataset` / `DefaultInputsScaler` / `HandcraftedInputsScaler`
 
 ```python
-from model.data.datasets import InputsDataset
+from gates.data.datasets import InputsDataset
 
 inp_ds = InputsDataset(inputs, scaler_params={"fit_on_subsample": 0.2})
 inp_ds.fit()                          # fit on 20% of timesteps (faster)
@@ -114,12 +144,48 @@ scaled_inputs = inp_ds.transform(inputs)
 
 `fit_on_subsample` (0–1) controls what fraction of timesteps to use when fitting — useful for large datasets.
 
+Two `scaler_params` keys control which variables get which treatment:
+- `minmax_variables` — list of variable names to apply MinMax scaling instead of standard scaling (default includes `topog`, `land_cover`, coordinate fields).
+- `ignore_variables` — list of variable names to pass through unchanged (assigned a `GhostScaler` internally). Variables in both lists are treated as ignored, with a warning.
+
+```python
+# Example: use standard scaling for topog, skip coordinate variables entirely
+inp_ds = InputsDataset(
+    inputs,
+    scaler_params={
+        "minmax_variables": [],                              # no MinMax overrides
+        "ignore_variables": ["lat_coords", "lon_coords"],   # pass through unchanged
+    }
+)
+```
+
+**`HandcraftedInputsScaler`** — alternative to `DefaultInputsScaler` for when you want reproducible, externally validated statistics rather than computing them from the data. Pass a `stats_file` (path to a JSON file or a dict). Each variable entry has a `"type"` key (`"standard"`, `"minmax"`, or `"ghost"`) plus per-level statistics:
+
+```json
+{
+    "x_wind": {"type": "standard", "15": {"mean": 5.21, "std": 3.14}},
+    "topog":  {"type": "minmax",   "0":  {"min": -50.0, "max": 3200.0}},
+    "lat_coords": {"type": "ghost"}
+}
+```
+
+Level keys are strings (JSON requirement) and are cast to int internally. If a variable or level is missing from the stats file, a data-driven standard scaler is fitted instead. Example stats files are in `scaler_files/`.
+
+```python
+inp_ds = InputsDataset(inputs, scaler="HandcraftedInputsScaler",
+                       scaler_params={"stats_file": "scaler_files/my_stats.json"})
+inp_ds.fit()
+scaled_inputs = inp_ds.transform(inputs)
+```
+
+**`GhostScaler`** — passthrough (identity) scaler. Useful for ablation runs where you want a variable included in the input tensor but not transformed.
+
 ---
 
 ### Step 4 — Scale footprints: `FootprintDataset`
 
 ```python
-from model.data.datasets import FootprintDataset
+from gates.data.datasets import FootprintDataset
 
 fp_ds = FootprintDataset(data.fp_xr)
 scaled_fps = fp_ds.fit_transform()
@@ -144,7 +210,7 @@ Uses `xbatcher` to batch lazily — data is not all loaded into memory at once. 
 The shape of the `fp_batch` will depend on what footprint data was passed. Passing a DataArray will return batches of shape `(batch_size, lat, lon)`:
 
 ```python
-from model.data.datasets import make_dataloader
+from gates.data.datasets import make_dataloader
 
 train_loader, fp_labels = make_dataloader(
     scaled_inputs,
@@ -183,20 +249,20 @@ In a notebook (or for small tests) the above dataloader parameters are recommend
 ## Full Example
 
 ```python
-from model.data.load_data import LoadSquareSatelliteData
-from model.data.datasets import (get_square_satellite_inputs, InputsDataset,
+from gates.data.load_data import LoadSquareSatelliteData
+from gates.data.datasets import (get_square_satellite_inputs_v2, InputsDataset,
                                   FootprintDataset, make_dataloader)
 
 # 1. Load
 data = LoadSquareSatelliteData(year=2016, region="BRAZIL", month="01", size=10)
 
-# 2. Build inputs
-met_variables = {
-    "x_wind": [3,15], "y_wind": [3,15],
-    "upward_air_velocity": [15], "atmosphere_boundary_layer_thickness": [],
-}
-inputs, data = get_square_satellite_inputs(
-    data, met_variables,
+# 2. Build inputs (v2 API: flat list + shared met_levels)
+met_variables = ["x_wind", "y_wind", "upward_air_velocity", "atmosphere_boundary_layer_thickness"]
+met_levels = [3, 15]
+inputs, data = get_square_satellite_inputs_v2(
+    data,
+    met_variables=met_variables,
+    met_levels=met_levels,
     time_deltas=[6],
     static_variables=["topog", "lat_coords", "lon_coords"],
 )
