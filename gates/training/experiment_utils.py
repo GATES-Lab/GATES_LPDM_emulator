@@ -13,9 +13,24 @@ dotted keys for brevity, e.g.::
 
 Both forms above are equivalent in style; pick whichever is clearer. The experiment ``name`` is
 appended to ``model_name`` so each run is identifiable (the usual timestamp is still added on top).
+
+A second, more compact way to generate experiments is a ``__sweep__`` section embedded directly in
+the base parameter file (this is the style used by ``train_GATES_sweep.py``). It is expanded here
+into the same experiment-entry form so both drivers share one code path — see :func:`expand_sweep`
+and :func:`sweep_to_experiments`.
 """
 
 import copy
+from itertools import product
+
+
+# Overriding any of these per experiment/sweep combination changes what data should be loaded, so a
+# shared data bundle (loaded once and reused across runs) would no longer be valid for that run.
+# Shared-data drivers reject sweeps/experiments that touch these keys.
+DATA_LOADING_KEYS = {
+    "train_load_data", "test_load_data", "variables", "background_setup",
+    "data_dirs", "load_into_memory",
+}
 
 
 def expand_dotted_keys(d):
@@ -99,3 +114,82 @@ def load_experiments(experiments_obj):
     if not experiments:
         raise ValueError("no experiments found in the experiments file")
     return experiments
+
+
+# --- Sweep support (the "__sweep__" section style used by train_GATES_sweep.py) ----------------
+
+def format_value(v):
+    """Format a single value compactly for use in file/run/model names."""
+    if isinstance(v, bool):
+        return str(v).lower()
+    if isinstance(v, float):
+        return f"{v:.2g}"
+    if isinstance(v, (list, dict)):
+        return "complex"
+    return str(v)
+
+
+def make_suffix(combo):
+    """Build a readable suffix string from a ``{dot_key: value}`` combo dict.
+
+    Uses the last segment of each key path unless two keys share the same last segment, in which
+    case the full dotted path (with dots turned into dashes) is used to keep the suffix unambiguous.
+    """
+    short_keys = [kp.split(".")[-1] for kp in combo]
+    use_full = len(set(short_keys)) < len(short_keys)
+    parts = []
+    for key_path, value in combo.items():
+        label = key_path.replace(".", "-") if use_full else key_path.split(".")[-1]
+        parts.append(f"{label}-{format_value(value)}")
+    return "_".join(parts)
+
+
+def expand_sweep(sweep_spec):
+    """Expand a ``__sweep__`` specification into a list of ``{dot_key: value}`` combo dicts.
+
+    Two forms are accepted (mirroring ``train_GATES_sweep.py``):
+
+    * **Cartesian product** — a dict of ``{dot_key: [values]}``. Every combination of the listed
+      values is produced.
+    * **Explicit combinations** — a list of ``{dot_key: value}`` dicts, used verbatim.
+
+    Dot-notation addresses nested keys at any depth (e.g. ``"model_parameters.num_blocks"``).
+    """
+    if isinstance(sweep_spec, list):
+        return [dict(combo) for combo in sweep_spec]
+    if isinstance(sweep_spec, dict):
+        keys = list(sweep_spec.keys())
+        values = [sweep_spec[k] for k in keys]
+        return [dict(zip(keys, vals)) for vals in product(*values)]
+    raise ValueError("'__sweep__' must be a dict of {key: [values]} or a list of {key: value} dicts")
+
+
+def sweep_to_experiments(sweep_spec):
+    """Turn a ``__sweep__`` spec into a list of experiment entries for :func:`build_experiment_params`.
+
+    Each combination becomes ``{"name": <id>_<suffix>, "overrides": combo, "sweep_id": i,
+    "sweep_combination": combo}``. The overrides use the combo's dotted keys directly, which
+    :func:`build_experiment_params` expands and deep-merges onto the base parameters. This lets the
+    ``__sweep__`` style and the explicit ``experiments`` style share one execution path.
+    """
+    combos = expand_sweep(sweep_spec)
+    experiments = []
+    for i, combo in enumerate(combos):
+        sweep_id = i + 1
+        experiments.append({
+            "name": f"sweep_{sweep_id:03d}_{make_suffix(combo)}",
+            "overrides": dict(combo),
+            "sweep_id": sweep_id,
+            "sweep_combination": dict(combo),
+        })
+    return experiments
+
+
+def data_loading_clashes(overrides):
+    """Return the set of top-level :data:`DATA_LOADING_KEYS` touched by an ``overrides`` dict.
+
+    ``overrides`` may use dotted or nested keys; both are expanded before checking. An empty set
+    means the overrides are safe to run against a shared (loaded-once) data bundle.
+    """
+    touched = set(expand_dotted_keys(overrides).keys())
+    return touched & DATA_LOADING_KEYS

@@ -1,0 +1,111 @@
+{
+  "model_name": "dual_fp_bg_test",
+  "model_type": "DualForecaster",
+  "verbose": true,
+  "parallel_loading": true,
+  "load_into_memory": true,
+  "train_load_data": {
+    "years": ["2015"],
+    "months": ["01"],
+    "freq": 10,
+    "region": "BRAZIL",
+    "size": 50,
+    "met_args": {
+      "met_levels": [3, 9, 15, 21, 30, 42, 51],
+      "met_variables": [
+        "x_wind", "y_wind", "upward_air_velocity", "air_temperature"
+      ]
+    },
+    "crop_met": false
+  },
+  "test_load_data": {
+    "years": ["2014"],
+    "months": ["01"],
+    "freq": 10
+  },
+  "background_setup": {
+    "detrend": true,
+    "use_auxiliary_bc": true,
+    "auxilary_bc_levels": [4, 5, 6, 7]
+  },
+  "variables": {
+    "met_variables": [
+        "x_wind", "y_wind", "upward_air_velocity", "air_temperature"
+      ],
+    "met_levels": [3, 9, 15, 21, 30, 42, 51],
+    "static_variables": [
+      "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords",
+      "lat_coords", "lon_coords", "x_coords", "y_coords", "topog",
+      "normalised_time_of_year", "normalised_day_of_year"
+    ],
+    "time_deltas": [6, 12],
+    "add_wind_direction": true,
+    "interp_to": "3h",
+    "load_into_memory": true
+  },
+  "input_scaler": {
+    "scaler": "DefaultInputsScaler",
+    "fit_on_subsample": 0.7,
+    "scaler_params": {}
+  },
+  "fp_scaler": {
+    "scaler": "LogAndShiftMeanFpScaler",
+    "scaler_params": {}
+  },
+  "dataloader": {
+    "batch_size": 5,
+    "test_batch_size": 5,
+    "nans_to_zeros": true,
+    "dataloader_params": {
+      "prefetch_factor": 2,
+      "num_workers": 2,
+      "persistent_workers": true,
+      "multiprocessing_context": "forkserver"
+    }
+  },
+  "model_parameters": {
+    "decoder": "conv",
+    "num_classes": 1,
+    "fp_output_dim": 1,
+    "num_blocks": 4,
+    "node_dim": 64,
+    "edge_dim": 64,
+    "hidden_layers_processor_node": 2,
+    "hidden_layers_processor_edge": 2,
+    "hidden_layers_decoder": 1,
+    "hidden_dim_processor_node": 16,
+    "hidden_dim_processor_edge": 16,
+    "hidden_dim_decoder": 16,
+    "resolution": 4,
+    "output_dim": 8,
+    "residuals": false,
+    "attention": false
+  },
+  "learning_rate": 5e-05,
+  "use_wandb": true,
+  "wandb": {
+    "project": "Dual-FP-BG-Training",
+    "entity": "gates-lab",
+    "group": "bg_loss_weight_sweep",
+    "tags": ["Brazil", "gpu", "dual"]
+  },
+  "epochs": {
+    "training": 150,
+    "visualize": 10,
+    "patience": 150,
+    "model_save": 50
+  },
+  "loss_functions": {
+    "fp_criterion": "gates_losses.PixelWeightedMSELoss",
+    "fp_criterion_test": "gates_losses.PixelWeightedMSELoss",
+    "fp_criterion_params": {"weight_label": "fp_original", "transform_fn": "scale_and_shift", "w": 1000, "a": 0.5},
+    "bg_criterion": "torch.nn.MSELoss",
+    "bg_criterion_test": "torch.nn.MSELoss",
+    "bg_criterion_params": {},
+    "bg_loss_weight": 0.0
+  },
+  "__sweep__": {
+    "loss_functions.bg_loss_weight": [0.0, 0.5, 1.0],
+    "learning_rate": [5e-05, 1e-04]
+  }
+}
