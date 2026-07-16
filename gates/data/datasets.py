@@ -1009,33 +1009,22 @@ def _cut_satellite_met_multi_delta(
             all_unique_times.update(met_time_index.values[ceil_idxs[~nan_mask]])
 
     # --- Phase 2b: select the union of required timestamps ---
-    # Chunk with time=-1 (one big time chunk) so that the vectorized isel below
-    # creates O(n_vars) tasks per delta instead of O(n_fp_times × n_vars).
-    # Trade-off: computing any batch loads all unique timestamps at once.
+    # The met is a yearly Zarr store natively chunked {time:1, lat:-1, lon:-1,
+    # levels:3}, which is ideal for this scattered per-timestamp selection — no
+    # rechunking needed. Trade-off: computing any batch loads all unique
+    # timestamps at once.
     all_unique_times_sorted = sorted(all_unique_times)
-    size_chunks = len(all_unique_times_sorted) // 10
-    size_chunks = max(size_chunks, 1)
-    size_chunks = min(100, size_chunks)
-    n_chunks = (len(all_unique_times_sorted)) // size_chunks
-    # calculate how many chunks will be needed, if each has size size_chunks
 
     if verbose:
         print(f"Selecting {len(all_unique_times_sorted)} unique met timestamps ")
         # print the first three
         print(f"First few unique timestamps: {all_unique_times_sorted[:3]} ...")
-        #      f"(across {len(time_deltas)} time_delta(s)) as {n_chunks} dask chunks of size {size_chunks}...")
 
-    chunk_kw = {"time": size_chunks, "lat": -1, "lon": -1}
-
-    if "levels" in met_source.dims:
-        chunk_kw["levels"] = -1
     with dask.config.set(**{'array.slicing.split_large_chunks': True}):
         met_loaded = met_source.sel(time=list(all_unique_times_sorted))
     if load_into_memory:
         print("Loading selected met data into memory...")
         met_loaded = met_loaded.compute()
-
-    #met_loaded = met_loaded.chunk(chunk_kw)
 
     # --- Phase 3: spatial structure — computed once, shared across all deltas ---
     ## the bug was here - but am now skipping over release_idxs, and just using the lat_coords and lon_coords generated when cropping the footprints
