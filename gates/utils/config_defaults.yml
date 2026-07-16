@@ -2,6 +2,8 @@ data_paths:
   local:
     base_data_path: "./data"
     fp_datadir: "/fp_archive"
+    # optional: yearly zarr footprint stores. remove or set to null if you only have NetCDF footprints
+    fp_zarr_datadir: "/fp_archive_zarr"
     met_datadir: "/met_archive"
     topog_datadir: "/ancillary_data/topog_file.nc"
     landcover_datadir: "/ancillary_data/landcover_file.nc"
@@ -9,6 +11,7 @@ data_paths:
   bp:
     base_data_path:  "/group/chem/acrg"
     fp_datadir: "/LPDM/fp_NAME_pre20210701/"
+    fp_zarr_datadir: null
     met_datadir: "/met_archive/UM/"
     topog_datadir: "/LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
     landcover_datadir: "/LPDM/topog_NAME/land_cover.nc"
@@ -16,6 +19,7 @@ data_paths:
   oracle:
     base_data_path: "./data"
     fp_datadir: "/fp_archive"
+    fp_zarr_datadir: null
     met_datadir: "/met_archive/"
     topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
     landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
@@ -23,6 +27,7 @@ data_paths:
   isambard_ai:
     base_data_path: "/projects/b5s/data"
     fp_datadir: "/fp_archive"
+    fp_zarr_datadir: null
     met_datadir: "/met_archive"
     topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
     landcover_datadir: "LPDM/topog_NAME/land_cover.nc"

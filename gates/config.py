@@ -77,7 +77,8 @@ class Config():
     Attributes:
     - root_dir: Path to the root directory of the project.
     - package_dir: Path to the gates package directory.
-    - fp_datadir: Path to the footprint data directory, constructed from the base_data_path and fp_datadir values in the config file.
+    - fp_datadir: Path to the NetCDF footprint data directory, constructed from the base_data_path and fp_datadir values in the config file.
+    - fp_zarr_datadir: Path to the Zarr footprint data directory, constructed from the base_data_path and fp_zarr_datadir values in the config file. Optional - None if the key is absent, in which case only NetCDF footprints can be loaded.
     - met_datadir: Path to the meteorological data directory, constructed from the base_data_path and met_datadir values in the config file.
     - topog_datadir and landcover_datadir: Paths to the topography and landcover data files, constructed from the base_data_path and respective datadir values in the config file.
     - domains: Dictionary of domain definitions, loaded from the config file.
@@ -118,6 +119,12 @@ class Config():
             raise ValueError(f"Config file is missing some of the expected keys: {minimum_config_keys}. Please check your config file at {root_dir / 'config.yml'}.")
         
         self.fp_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["fp_datadir"].lstrip("/\\")
+        # the zarr footprint root is optional: footprints can be NetCDF only, and
+        # both formats are supported side by side
+        if "fp_zarr_datadir" in self.data_paths and self.data_paths["fp_zarr_datadir"] is not None:
+            self.fp_zarr_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["fp_zarr_datadir"].lstrip("/\\")
+        else:
+            self.fp_zarr_datadir = None
         self.met_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["met_datadir"].lstrip("/\\")
         self.topog_datadir = Path(self.data_paths["base_data_path"]) / self.data_paths["topog_datadir"].lstrip("/\\")
         # the landcover file is optional
