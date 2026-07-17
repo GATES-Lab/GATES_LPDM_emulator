@@ -740,8 +740,8 @@ def make_fps_batcher(fps, batch_size=10, flatten=False):
     Build an xbatcher BatchGenerator for the footprint labels.
 
     Inputs:
-    - fps: xarray DataArray of size (time, lat, lon), or xarray Dataset containing
-      one or more footprint variables of size (time, lat, lon)
+    - fps: xarray DataArray of size (sample_id, lat, lon), or xarray Dataset containing
+      one or more footprint variables of size (sample_id, lat, lon)
     - batch_size: int, batch size
     - flatten: bool, whether to stack lat/lon into a single flat_lat_lon dimension
 
@@ -756,13 +756,13 @@ def make_fps_batcher(fps, batch_size=10, flatten=False):
             if fps[var].dtype != "float32" and fps[var].dtype != "int32":
                 fps[var] = fps[var].astype("float32", copy=False)
 
-        fps = fps.to_stacked_array(new_dim="variable_name", sample_dims=["time", "lat", "lon"], name="stacked_fps")
-        fps = fps.transpose("time", "lat", "lon", "variable_name")
-        fps = fps.chunk(time=batch_size, variable_name=-1)
+        fps = fps.to_stacked_array(new_dim="variable_name", sample_dims=["sample_id", "lat", "lon"], name="stacked_fps")
+        fps = fps.transpose("sample_id", "lat", "lon", "variable_name")
+        fps = fps.chunk(sample_id=batch_size, variable_name=-1)
     
         if flatten:
             fps = fps.stack(flat_lat_lon=["lat", "lon"])
-            fps = fps.transpose("time", "flat_lat_lon", "variable_name")
+            fps = fps.transpose("sample_id", "flat_lat_lon", "variable_name")
             input_dims = {"flat_lat_lon": len(fps.flat_lat_lon), "variable_name": len(fps.variable_name)}
         else:
             input_dims = {"lat": len(fps.lat), "lon": len(fps.lon), "variable_name": len(fps.variable_name)}
@@ -770,7 +770,7 @@ def make_fps_batcher(fps, batch_size=10, flatten=False):
 
     elif isinstance(fps, xr.DataArray):
         fps_labels = [fps.name if fps.name is not None else "fp"]
-        fps = fps.chunk(time=batch_size)
+        fps = fps.chunk(sample_id=batch_size)
         if fps.dtype != "float32":
             fps = fps.astype("float32", copy=False)
 
@@ -786,7 +786,7 @@ def make_fps_batcher(fps, batch_size=10, flatten=False):
     y_bgen = xb.BatchGenerator(
         fps,
         input_dims=input_dims,
-        batch_dims={'time': batch_size},
+        batch_dims={'sample_id': batch_size},
         preload_batch=False,
     )
     return y_bgen, fps_labels
@@ -800,18 +800,18 @@ def trim_to_batch_size(inputs, fps, batch_size):
     timepoints is divisible by batch_size.
 
     Inputs:
-    - inputs: xarray DataArray with a 'fp_time' dimension
-    - fps: xarray DataArray or Dataset with a 'time' dimension
+    - inputs: xarray DataArray with a 'sample_id' dimension
+    - fps: xarray DataArray or Dataset with a 'sample_id' dimension
     - batch_size: int
 
     Returns:
-    - inputs, fps trimmed along their respective time dimensions
+    - inputs, fps trimmed along their respective sample_id dimensions
     """
-    n = inputs.sizes["fp_time"]
+    n = inputs.sizes["sample_id"]
     remainder = n % batch_size
     if remainder != 0:
-        inputs = inputs.isel(fp_time=slice(None, n - remainder))
-        fps = fps.isel(time=slice(None, n - remainder))
+        inputs = inputs.isel(sample_id=slice(None, n - remainder))
+        fps = fps.isel(sample_id=slice(None, n - remainder))
     return inputs, fps
 
 
@@ -819,8 +819,8 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     """
     Build a PyTorch dataloader from input and footprint datasets using xbatcher.
 
-    The inputs must have dimensions (fp_time, lat, lon, variable_name). The footprints
-    must have matching ``time`` length and either be a DataArray with dims ``(time, lat, lon)``
+    The inputs must have dimensions (sample_id, lat, lon, variable_name). The footprints
+    must have matching ``sample_id`` length and either be a DataArray with dims ``(sample_id, lat, lon)``
     or a Dataset containing one or more footprint variables. When a Dataset is passed, the
     footprints are stacked along a new ``variable_name`` dimension and the returned labels are
     the stacked variable tuples; when a DataArray is passed, the returned labels contain the single footprint variable name.
@@ -829,10 +829,10 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     controls the permutation. ``dataloader_params`` is forwarded to ``torch.utils.data.DataLoader``.
 
     Inputs:
-    - inputs: xarray DataArray of size (fp_time, lat, lon, variable_name) from get_square_satellite_inputs or similar function
-    - fps: xarray datarray, or xarray Dataset with variable "fp_transformed" of size (time, lat, lon)
+    - inputs: xarray DataArray of size (sample_id, lat, lon, variable_name) from get_square_satellite_inputs or similar function
+    - fps: xarray datarray, or xarray Dataset with variable "fp_transformed" of size (sample_id, lat, lon)
     - batch_size: int, batch size for the dataloader
-    - randomize: bool, whether to shuffle the dataset along the time dimension. Recommended for training and not for testing
+    - randomize: bool, whether to shuffle the dataset along the sample_id dimension. Recommended for training and not for testing
     - random_seed: int, seed for reproducibility of the shuffling when randomize is True
     - dataloader_params: dict, additional parameters to pass to the PyTorch DataLoader
     - flatten: bool, whether to flatten the input tensors in the lat-lon dimension before passing them to the model
@@ -845,7 +845,7 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
 
     """
     # ensure that both have the right dimensions
-    if inputs.sizes["fp_time"] != fps.sizes["time"]:
+    if inputs.sizes["sample_id"] != fps.sizes["sample_id"]:
         raise ValueError("Incompatible dimensions between inputs and fps")
     if isinstance(fps, xr.Dataset):
         print(f"you passed a fps dataset with multiple variables: {list(fps.data_vars)}. All variables will be returned in the dataloader along a new dimension. ")
@@ -857,10 +857,10 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     if randomize:
         # set the random seed for reproducibility
         np.random.seed(random_seed)
-        # shuffle the data by permuting the fp_time dimension
-        permuted_time = np.random.permutation(inputs.fp_time)
-        inputs = inputs.sel(fp_time=permuted_time)
-        fps = fps.sel(time=permuted_time)
+        # shuffle the data by permuting the sample_id dimension
+        permuted_sample_id = np.random.permutation(inputs.sample_id)
+        inputs = inputs.sel(sample_id=permuted_sample_id)
+        fps = fps.sel(sample_id=permuted_sample_id)
 
     if len(inputs.lat) != len(fps.lat) or len(inputs.lon) != len(fps.lon):
          raise ValueError(
