@@ -83,24 +83,25 @@ def select_met_variables(met, variables=None):
     return met
 
 def _static_var_topog(topog_ds, coordinate_ds):
-    if "time" not in topog_ds.coords:
+    if "sample_id" not in topog_ds.dims:
         topog = topog_ds.topog.broadcast_like(coordinate_ds, exclude=["lat", "lon"])
         coordinate_ds = coordinate_ds.assign({"topog":topog})
-        
+
     else:
-        coordinate_ds = coordinate_ds.assign({"topog":topog_ds.topog.rename({"time":"fp_time"})})
+        # already cropped per sample by cut_topog_data, so the dims line up as-is
+        coordinate_ds = coordinate_ds.assign({"topog":topog_ds.topog})
 
     return coordinate_ds
 
 def _static_var_landcover(topog_ds, coordinate_ds):
-    coordinate_ds = coordinate_ds.assign({"landcover":topog_ds.landcover.rename({"time":"fp_time"})})
+    coordinate_ds = coordinate_ds.assign({"landcover":topog_ds.landcover})
     return coordinate_ds
 
 def _static_var_landcover_disaggregated(topog_ds, coordinate_ds):
     n_landcover_types=10
     # extract the ten types of landcover as separate 2D inputs
     for landcover_type in range(n_landcover_types):
-        coordinate_ds = coordinate_ds.assign({f"landcover_type_{landcover_type}":topog_ds.disaggregated_landcover.sel(landcover_level=landcover_type).rename({"time":"fp_time"})})
+        coordinate_ds = coordinate_ds.assign({f"landcover_type_{landcover_type}":topog_ds.disaggregated_landcover.sel(landcover_level=landcover_type)})
     if "landcover_level" in coordinate_ds.variables:
         coordinate_ds = coordinate_ds.drop_vars("landcover_level")
     return coordinate_ds
@@ -129,8 +130,8 @@ def _static_var_x_coords(coordinate_ds):
     # create a mesh with [0,0] at the release point, in the x coordinate (longitude)
     grid_coords = np.meshgrid(np.arange(coordinate_ds.lon.size)-int(coordinate_ds.lon.size/2), np.arange(coordinate_ds.lat.size) -int(coordinate_ds.lat.size/2))
 
-    coord = np.dstack([grid_coords[0]]*coordinate_ds.fp_time.size).transpose([2,0,1])
-    coordinate_ds = coordinate_ds.assign({"y_coords":(("fp_time", "lat", "lon"), coord)})
+    coord = np.dstack([grid_coords[0]]*coordinate_ds.sample_id.size).transpose([2,0,1])
+    coordinate_ds = coordinate_ds.assign({"y_coords":(("sample_id", "lat", "lon"), coord)})
 
     return coordinate_ds 
 
@@ -138,8 +139,8 @@ def _static_var_y_coords(coordinate_ds):
     # create a mesh with [0,0] at the release point, in the y coordinate (latitude)
     grid_coords = np.meshgrid(np.arange(coordinate_ds.lon.size)-int(coordinate_ds.lon.size/2), np.arange(coordinate_ds.lat.size) -int(coordinate_ds.lat.size/2))
 
-    coord = np.dstack([grid_coords[1]]*coordinate_ds.fp_time.size).transpose([2,0,1])
-    coordinate_ds = coordinate_ds.assign({"x_coords":(("fp_time", "lat", "lon"), coord)})
+    coord = np.dstack([grid_coords[1]]*coordinate_ds.sample_id.size).transpose([2,0,1])
+    coordinate_ds = coordinate_ds.assign({"x_coords":(("sample_id", "lat", "lon"), coord)})
 
     return coordinate_ds 
 
@@ -161,7 +162,7 @@ def _domain_distance_release(fp_data, coordinate_ds):
 
     distances = haversine(lat_grid_3d, lon_grid_3d, release_lat_3d, release_lon_3d)
 
-    coordinate_ds = coordinate_ds.assign({"distance_release":(("fp_time", "lat", "lon"), distances.transpose([2,0,1]))})
+    coordinate_ds = coordinate_ds.assign({"distance_release":(("sample_id", "lat", "lon"), distances.transpose([2,0,1]))})
 
     return coordinate_ds
 
@@ -192,7 +193,7 @@ def _domain_binary_release(fp_data, coordinate_ds):
 
     marker[lat_indices, lon_indices, np.arange(len(release_lat))] = 1
 
-    coordinate_ds = coordinate_ds.assign({"binary_release":(("fp_time", "lat", "lon"), marker.transpose([2,0,1]))})
+    coordinate_ds = coordinate_ds.assign({"binary_release":(("sample_id", "lat", "lon"), marker.transpose([2,0,1]))})
     
     return coordinate_ds
 
@@ -213,7 +214,7 @@ def _earth_distance_centre(fp_data, coordinate_ds):
 
     distances = haversine(lat_3d, lon_3d, release_lat_3d, release_lon_3d)  # (n_time, n_lat, n_lon)
 
-    coordinate_ds = coordinate_ds.assign({"earth_distance_centre":(("fp_time", "lat", "lon"), distances)})
+    coordinate_ds = coordinate_ds.assign({"earth_distance_centre":(("sample_id", "lat", "lon"), distances)})
 
     return coordinate_ds
 
@@ -225,8 +226,8 @@ def _binary_centre(coordinate_ds):
     centre = int(coordinate_ds.lat.size/2)
     grid = np.zeros((coordinate_ds.lat.size, coordinate_ds.lon.size)) -1
     grid[centre, centre] = 1
-    coord = np.dstack([grid]*coordinate_ds.fp_time.size).transpose([2,0,1])
-    coordinate_ds = coordinate_ds.assign({"binary_centre":(("fp_time", "lat", "lon"), coord)})
+    coord = np.dstack([grid]*coordinate_ds.sample_id.size).transpose([2,0,1])
+    coordinate_ds = coordinate_ds.assign({"binary_centre":(("sample_id", "lat", "lon"), coord)})
 
     return coordinate_ds
 
@@ -237,8 +238,8 @@ def _xy_distance_centre(coordinate_ds):
     grid_coords = np.meshgrid(np.arange(coordinate_ds.lat.size), np.arange(coordinate_ds.lon.size)) 
     distance = np.sqrt(np.abs(grid_coords[0]-centre)**2 + np.abs(grid_coords[1]-centre)**2)
 
-    coord = np.dstack([distance]*coordinate_ds.fp_time.size).transpose([2,0,1])
-    coordinate_ds = coordinate_ds.assign({"xy_distance_centre":(("fp_time", "lat", "lon"), coord)})
+    coord = np.dstack([distance]*coordinate_ds.sample_id.size).transpose([2,0,1])
+    coordinate_ds = coordinate_ds.assign({"xy_distance_centre":(("sample_id", "lat", "lon"), coord)})
 
     return coordinate_ds
 

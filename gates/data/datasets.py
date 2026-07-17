@@ -61,7 +61,7 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
         if len(filtered_vars) == 0:
             return None
         
-        data = ds[filtered_vars].transpose("fp_time", "lat", "lon", "levels", "time_delta")
+        data = ds[filtered_vars].transpose("sample_id", "lat", "lon", "levels", "time_delta")
 
         #data = xr.Dataset(filtered_vars).transpose("fp_time", "lat", "lon", "levels", "time_delta")
 
@@ -77,7 +77,7 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
             return None
 
         data = ds[valid_vars].assign_coords(levels=0).expand_dims("levels")
-        data = data.transpose("fp_time", "lat", "lon", "levels", "time_delta")
+        data = data.transpose("sample_id", "lat", "lon", "levels", "time_delta")
 
     elif var_type == "static":
         valid_vars = [v for v in var_names if v in ds.data_vars]
@@ -89,14 +89,14 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
             return None
 
         data = ds[valid_vars].assign_coords(levels=0, time_delta=0).expand_dims("levels").expand_dims("time_delta")
-        data = data.transpose("fp_time", "lat", "lon", "levels", "time_delta")
+        data = data.transpose("sample_id", "lat", "lon", "levels", "time_delta")
 
     else:
         raise ValueError(f"unknown var_type: {var_type}")
     
     stacked = data.to_stacked_array(
         new_dim="variable_name",
-        sample_dims=["fp_time", "lat", "lon"],
+        sample_dims=["sample_id", "lat", "lon"],
         name=f"stacked_{var_type}",
     )
 
@@ -232,10 +232,10 @@ class InputsDataset:
     Wrapper for an input ``xarray.DataArray`` that applies a scaler to the inputs.
 
     The scaler is fitted on the stored inputs when `fit` is called and can then be applied to compatible inputs via `transform`. When ``fit_on_subsample`` is
-    between 0 and 1, only a random subset of ``fp_time`` indices is used for fitting and the selected subset is exposed on ``subsampled_inputs``.
+    between 0 and 1, only a random subset of ``sample_id`` values is used for fitting and the selected subset is exposed on ``subsampled_inputs``.
 
     Inputs:
-    - inputs: xarray DataArray with dims (fp_time, lat, lon, variable_name) containing the input variables to be scaled
+    - inputs: xarray DataArray with dims (sample_id, lat, lon, variable_name) containing the input variables to be scaled
     - scaler: scaler class or string name of scaler class to use. If None, defaults to DefaultInputsScaler. See below for valid scalers.
     - fit_on_subsample: float between 0 and 1. that determines how many samples to use for fitting the scaler. If a float between 0 and 1, it is the fraction of samples to use. If 1, all samples are used. Default is 1.
     - scaler_params: dict of parameters to pass to the scaler when initializing it. For example, for DefaultInputsScaler, you can pass {"minmax_variables": ["topog", "land_cover"]} to specify which variables to apply minmax scaling to instead of standard scaling. 
@@ -267,13 +267,13 @@ class InputsDataset:
         if self.fit_on_subsample<=0 or type(self.fit_on_subsample) not in [int, float] or self.fit_on_subsample>1: 
             raise ValueError(f"fit_on_subsample should be a float between 0 and 1, but got {self.fit_on_subsample}. Please provide a valid value for fit_on_subsample.")
         elif self.fit_on_subsample<1:
-            times = pd.DatetimeIndex(self.inputs.fp_time.values)
-            n_samples = int(len(times)*self.fit_on_subsample)
+            sample_ids = self.inputs.sample_id.values
+            n_samples = int(len(sample_ids)*self.fit_on_subsample)
             if self.verbose: print(f"fit_on_subsample is {self.fit_on_subsample}, so only using {n_samples} samples to fit the scaler. samples chosen randomly")
 
-            selected_times = np.sort(np.random.choice(times, n_samples, replace=False))
+            selected_samples = np.sort(np.random.choice(sample_ids, n_samples, replace=False))
 
-            self.subsampled_inputs = self.inputs.sel(fp_time=selected_times) 
+            self.subsampled_inputs = self.inputs.sel(sample_id=selected_samples)
 
             self.scaler.fit(self.subsampled_inputs)
 
@@ -409,7 +409,7 @@ class DefaultInputsScaler:
 
         transformed = transformed.rename("stacked_transformed_inputs")
         transformed.attrs = {"transformer": "DefaultInputsScaler", "minmax_variables": self.minmax_variables, "generated_on": str(datetime.datetime.now())}
-        transformed = transformed.transpose("fp_time", "lat", "lon", "variable_name")
+        transformed = transformed.transpose("sample_id", "lat", "lon", "variable_name")
         return transformed
 
     def fit_transform(self, inputs: xr.DataArray) -> xr.DataArray:
@@ -490,7 +490,7 @@ class HandcraftedInputsScaler:
         transformed = transformed.assign_coords(mindex_coords)
         transformed = transformed.rename("stacked_transformed_inputs")
         transformed.attrs = {"transformer": "HandcraftedInputsScaler", "generated_on": str(datetime.datetime.now())}
-        transformed = transformed.transpose("fp_time", "lat", "lon", "variable_name")
+        transformed = transformed.transpose("sample_id", "lat", "lon", "variable_name")
         return transformed
 
     def fit_transform(self, inputs: xr.DataArray) -> xr.DataArray:
@@ -656,9 +656,13 @@ class FootprintDataset:
             if self.verbose: print("Added fp_nan_mask to the dataset, which indicates where the original fp had NaN values. The transformed_fp has been filled with zeros where the original fp had NaN values.")
 
 
-        # add coord linked to time index with idx
-        ds = ds.chunk({"time": 1})
-        ds = ds.assign_coords(idx=("time", list(range(len(ds.time)))))
+        # add coord linked to the sample index with idx
+        # NOTE: idx is now largely redundant with sample_id — it is 0-based and
+        # recomputed here (so it renumbers after samples are dropped), where sample_id
+        # is a stable 1-based id assigned at load. Nothing currently reads idx; it is
+        # kept only because train_GATES_model_multiregion.py and the tests expect it.
+        ds = ds.chunk({"sample_id": 1})
+        ds = ds.assign_coords(idx=("sample_id", list(range(len(ds.sample_id)))))
         
         self.transformed_fp = transformed_fp
 
@@ -698,7 +702,7 @@ def make_inputs_batcher(inputs, batch_size=10, flatten=False):
     Build an xbatcher BatchGenerator for the input meteorological fields.
 
     Inputs:
-    - inputs: xarray DataArray of size (fp_time, lat, lon, variable_name)
+    - inputs: xarray DataArray of size (sample_id, lat, lon, variable_name)
     - batch_size: int, batch size
     - flatten: bool, whether to stack lat/lon into a single flat_lat_lon dimension
 
@@ -706,18 +710,18 @@ def make_inputs_batcher(inputs, batch_size=10, flatten=False):
     - X_bgen: xbatcher BatchGenerator
     """
     if not isinstance(inputs, xr.DataArray):
-        raise ValueError("inputs must be an xarray DataArray with dims (fp_time, lat, lon, variable_name)")
-    if not all(dim in inputs.dims for dim in ["fp_time", "lat", "lon", "variable_name"]):
-        raise ValueError("inputs must have dimensions (fp_time, lat, lon, variable_name). Use the get_square_satellite_inputs function to extract inputs in the correct format.")
+        raise ValueError("inputs must be an xarray DataArray with dims (sample_id, lat, lon, variable_name)")
+    if not all(dim in inputs.dims for dim in ["sample_id", "lat", "lon", "variable_name"]):
+        raise ValueError("inputs must have dimensions (sample_id, lat, lon, variable_name). Use the get_square_satellite_inputs function to extract inputs in the correct format.")
     if inputs.dtype != "float32":
         inputs = inputs.astype("float32", copy=False)
 
-    inputs = inputs.chunk(fp_time=batch_size)
-    inputs = inputs.transpose("fp_time", "lat", "lon", "variable_name")
+    inputs = inputs.chunk(sample_id=batch_size)
+    inputs = inputs.transpose("sample_id", "lat", "lon", "variable_name")
 
     if flatten:
         inputs = inputs.stack(flat_lat_lon=["lat", "lon"])
-        inputs = inputs.transpose("fp_time", "flat_lat_lon", "variable_name")
+        inputs = inputs.transpose("sample_id", "flat_lat_lon", "variable_name")
         input_dims = {"flat_lat_lon": len(inputs.flat_lat_lon), "variable_name": len(inputs.variable_name)}
     else:
         input_dims = {"lat": len(inputs.lat), "lon": len(inputs.lon), "variable_name": len(inputs.variable_name)}
@@ -725,7 +729,7 @@ def make_inputs_batcher(inputs, batch_size=10, flatten=False):
     X_bgen = xb.BatchGenerator(
         inputs,
         input_dims=input_dims,
-        batch_dims={'fp_time': batch_size},
+        batch_dims={'sample_id': batch_size},
         preload_batch=False,
     )
     return X_bgen
@@ -940,17 +944,19 @@ def _cut_satellite_met_multi_delta(
     Returns
     -------
     results : dict[int, xr.Dataset]
-        {delta: cropped dataset} with dims ``(fp_time, lat, lon[, levels])``.
-        No ``time_delta`` dimension — caller handles the concat.
+        {delta: cropped dataset} with dims ``(sample_id, lat, lon[, levels])``, and
+        the footprint time kept as an ``fp_time`` coordinate (fp_time - delta = the
+        met time used). No ``time_delta`` dimension — caller handles the concat.
         Contains ``lat_coords`` and ``lon_coords`` (same values across deltas).
     nan_idxs_per_delta : dict[int, np.ndarray]
-        fp_time values that could not be interpolated for each delta.
+        sample_id values that could not be interpolated for each delta.
     """
     if metsize % 2 != 0:
         raise ValueError("metsize must be even")
     half = metsize // 2
 
-    fp_times = fp.time.values
+    fp_times = fp.time.values             # physical footprint time per sample (may repeat)
+    sample_vals = fp["sample_id"].values  # unique per-sample index
     tol = pd.Timedelta(closest_tolerance)
     met_time_index = met_source.indexes["time"]
 
@@ -970,8 +976,10 @@ def _cut_satellite_met_multi_delta(
             nan_mask = nearest == -1
             nearest_safe = np.where(~nan_mask, nearest, 0)
             nearest_timestamps = met_time_index.values[nearest_safe]
-            # nan_idxs reported in fp_time space (undo the delta shift)
-            nan_idxs = (target_times[nan_mask] + pd.Timedelta(f"{delta}h")).to_numpy()
+            # report failed matches as sample_id values (nan_mask is per-sample), so
+            # remove_indeces drops the right samples rather than every sample that
+            # happens to share a timestamp
+            nan_idxs = sample_vals[nan_mask]
 
             nearest_info[delta] = {
                 "lookup_times": nearest_timestamps,
@@ -987,7 +995,7 @@ def _cut_satellite_met_multi_delta(
             floor_idxs = met_time_index.get_indexer(interp_targets, method="ffill")
             ceil_idxs = met_time_index.get_indexer(interp_targets, method="bfill")
             nan_mask = (floor_idxs == -1) | (ceil_idxs == -1)
-            nan_idxs = (target_times[nan_mask] + pd.Timedelta(f"{delta}h")).to_numpy()
+            nan_idxs = sample_vals[nan_mask]
 
             # For nan positions use the first valid interp target as a safe fallback
             # (those rows are dropped later via all_nan_idxs in the caller).
@@ -1007,6 +1015,17 @@ def _cut_satellite_met_multi_delta(
             # Collect the bracket timestamps that will need to be loaded
             all_unique_times.update(met_time_index.values[floor_idxs[~nan_mask]])
             all_unique_times.update(met_time_index.values[ceil_idxs[~nan_mask]])
+
+    # if no sample matched for some delta there is no point loading or cropping the
+    # met — the footprints and the met do not overlap in time
+    for delta, info in nearest_info.items():
+        if info["nan_mask"].all():
+            raise ValueError(
+                "No temporal overlap between the footprints and the meteorology: no met data "
+                f"could be matched to any footprint at time_delta={delta}h.\n"
+                f"  footprints:  {pd.Timestamp(fp_times.min())} to {pd.Timestamp(fp_times.max())}\n"
+                f"  meteorology: {met_time_index.min()} to {met_time_index.max()}"
+            )
 
     # --- Phase 2b: select the union of required timestamps ---
     # The met is a yearly Zarr store natively chunked {time:1, lat:-1, lon:-1,
@@ -1072,17 +1091,25 @@ def _cut_satellite_met_multi_delta(
             for t in info["lookup_times"]
         ])
 
+        # picking one met row per sample turns the met time axis into a per-sample
+        # axis: make sample_id the index and keep the footprint's own time as fp_time
+        # (fp_time - time_delta = the met time used here)
         met_delta = met_for_crop.isel(time=pos)
-        met_delta = met_delta.assign_coords(time=fp_times)
+        met_delta = met_delta.rename({"time": "sample_id"})
+        met_delta = met_delta.assign_coords({
+            "sample_id": sample_vals,
+            "fp_time": ("sample_id", fp_times),
+        })
 
-        # Spatial crop 
-
+        # Spatial crop
         cropped = met_delta.sel(lat=lat_ds, lon=lon_ds, method="nearest")
         # store the lat and lon values in cropped as coordinates before reassigning the lat and lon coordinates to be the index values (0 to metsize-1)
-        cropped = cropped.assign_coords(lat_coords=(("time", "lat"), cropped.lat.values), lon_coords=(("time", "lon"), cropped.lon.values))
+        cropped = cropped.assign_coords(
+            lat_coords=(("sample_id", "lat"), cropped.lat.values),
+            lon_coords=(("sample_id", "lon"), cropped.lon.values),
+        )
 
         cropped = cropped.assign_coords(lat=np.arange(metsize), lon=np.arange(metsize))
-
 
         if add_wind_direction:
             try:
@@ -1091,10 +1118,6 @@ def _cut_satellite_met_multi_delta(
                     cropped["wind_speed"] = np.sqrt(cropped.x_wind**2 + cropped.y_wind**2)
             except Exception as e:
                 warnings.warn(f"Could not compute wind variables for delta={delta}: {e}")
-
-        # Swap time → fp_time (matching convention in rest of pipeline)
-        cropped = cropped.assign({"fp_time": ("time", fp_times)})
-        cropped = cropped.swap_dims({"time": "fp_time"}).drop_vars("time", errors="ignore")
 
         results[delta] = cropped
 
@@ -1151,10 +1174,11 @@ def get_square_satellite_inputs_v2(
     Returns
     -------
     concatenated_inputs : xr.DataArray
-        Shape ``(fp_time, lat, lon, variable_name)`` where ``variable_name`` is a
-        MultiIndex of ``(variable, level, time_delta)`` tuples.
+        Shape ``(sample_id, lat, lon, variable_name)`` where ``variable_name`` is a
+        MultiIndex of ``(variable, level, time_delta)`` tuples. The footprint time is
+        kept as an ``fp_time`` coordinate along ``sample_id``.
     data : LoadSquareSatelliteData
-        Updated object — fp_time indices with failed met interpolation are removed.
+        Updated object — samples with failed met interpolation are removed.
     """
     assert hasattr(data, "dataset_format"), "Not a SatelliteData object"
     #assert data.met_processed is True, "Load and cut the meteorology first"
@@ -1215,11 +1239,11 @@ def get_square_satellite_inputs_v2(
 
 
 
-    # Collect all nan indices across deltas
+    # Collect all nan sample_ids across deltas
     all_nan_idxs = (
         np.unique(np.concatenate([np.atleast_1d(v) for v in nan_idxs_per_delta.values()]))
         if any(len(v) > 0 for v in nan_idxs_per_delta.values())
-        else np.array([], dtype="datetime64[ns]")
+        else np.array([])
     )
 
     # Extract lat/lon coords before adding time_delta dim (same across all deltas)
@@ -1245,7 +1269,7 @@ def get_square_satellite_inputs_v2(
     for v in full_met.data_vars:
         full_met[v] = full_met[v].astype("float32", copy=False)
 
-    full_met = full_met.transpose("fp_time", "lat", "lon", ..., "time_delta")
+    full_met = full_met.transpose("sample_id", "lat", "lon", ..., "time_delta")
 
     # Detect which variables have levels vs surface (after wind vars have been added)
     _skip = {"lat_coords", "lon_coords"}
@@ -1266,7 +1290,7 @@ def get_square_satellite_inputs_v2(
             surface_variables_needed.append(v)
 
     if len(all_nan_idxs) > 0:
-        full_met = full_met.drop_sel(fp_time=all_nan_idxs)
+        full_met = full_met.drop_sel(sample_id=all_nan_idxs)
         warnings.warn(
             f"removing {len(all_nan_idxs)} indices due to problems with "
             "interpolating meteorology for the passed time_deltas"

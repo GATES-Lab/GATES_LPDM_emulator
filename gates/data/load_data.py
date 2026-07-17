@@ -317,7 +317,7 @@ class LoadBaseSatelliteData:
 
 
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True, sample_dim="time"):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True):
 
         self.dataset_format = "base"
         self._common_init(
@@ -325,7 +325,7 @@ class LoadBaseSatelliteData:
             freq=freq, freq_offset=freq_offset, sampling_mode=sampling_mode,
             fp_datadir=fp_datadir, fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format,
             met_args=met_args, topog_args=topog_args, cfg=cfg,
-            verbose=verbose, parallel_loading=parallel_loading, sample_dim=sample_dim,
+            verbose=verbose, parallel_loading=parallel_loading,
         )
 
         #### load footprint (fp) data
@@ -349,28 +349,18 @@ class LoadBaseSatelliteData:
                      fp_datadir=None, fp_zarr_datadir=None, fp_format="auto",
                      met_args={}, topog_args={}, cfg=None,
                      verbose=False, parallel_loading=False,
-                     sample_dim="time", data_type="satellite"):
+                     data_type="satellite"):
         """
         Shared setup for all footprint loaders. Resolves the config object,
         region/domain, year/month/date, footprint/met/topog paths and the
-        subsampling parameters, and records the per-sample index dimension in
-        ``self.sample_dim``.
+        subsampling parameters.
 
         No data is loaded here: each loader (base, square, receptor) runs its own
         footprint/met/topog loading and processing sequence after calling this,
-        because the order and steps differ between them.
-
-        sample_dim : str
-            Name of the dimension that identifies individual footprints
-            (datapoints). "time" for the classic satellite data, where each
-            timestamp is one footprint; "sample_id" for receptor data, where
-            footprints are flattened over (time, receptor) into a unique integer
-            index. Physical footprint time, receptor id, etc. ride along this
-            dimension as coordinates, so ``fp_data_full.time`` stays available in
-            both cases.
+        because the order and steps differ between them. The footprints are put onto
+        the canonical ``sample_id`` layout later, in _prepare_samples.
         """
         self.data_type = data_type
-        self.sample_dim = sample_dim
         self.verbose = verbose
         self.parallel_loading = parallel_loading
 
@@ -756,8 +746,8 @@ class LoadBaseSatelliteData:
 
         self.fp_data_full = self.fp_data_full.drop_duplicates(dim="time")
 
-        # reshape into the per-sample layout (a no-op unless a subclass, e.g.
-        # LoadReceptorData, flattens (time, receptor) into a unique sample_id)
+        # reshape onto the canonical sample_id layout (satellite: relabel the time
+        # axis; receptor subclass: flatten (time, receptor)) — see _prepare_samples
         self.fp_data_full = self._prepare_samples(self.fp_data_full)
 
         ## reduce data frequency with regular sampling 9eg keep only 1 in every 3 timesteps
@@ -765,7 +755,7 @@ class LoadBaseSatelliteData:
         self._subsample_frequency(**self.subsample_parameters)
 
         #print(self.fp_data_full)
-        if self.verbose: print(f"Loading {self.fp_data_full.sizes[self.sample_dim]} footprints")
+        if self.verbose: print(f"Loading {self.fp_data_full.sizes['sample_id']} footprints")
         if load_fps_in_mem:
             self.fp_data_full.fp.load()
             print("loaded fp variable into mem")
@@ -778,30 +768,28 @@ class LoadBaseSatelliteData:
     
     def _prepare_samples(self, fp_data_full):
         """
-        Hook to reshape freshly-loaded footprints into the per-sample layout used by
-        the rest of the pipeline (one footprint per element of ``self.sample_dim``).
-        The base and square satellite loaders already have one footprint per
-        timestamp (sample_dim="time"), so this returns the data unchanged;
-        LoadReceptorData overrides it to flatten (time, receptor) into a unique
-        ``sample_id`` index via _make_sample_id.
+        Reshape freshly-loaded footprints onto the canonical per-sample layout: a
+        unique integer ``sample_id`` index. Satellite data has one footprint per
+        timestamp, so this just relabels the time axis (keeping time as a searchable
+        coordinate); LoadReceptorData overrides it to flatten (time, receptor).
         """
-        return fp_data_full
+        return _relabel_time_to_sample_id(fp_data_full)
 
     def _subsample_frequency(self, freq=1, sampling_mode="regular",freq_offset=0):
         """
-        Subsample the footprint data by selecting every freq-th sample from the original dataset, starting from the sample specified by freq_offset (if sampling_mode is "regular"), or by randomly selecting N/freq samples from the original dataset (if sampling_mode is "random"). If freq=1, no subsampling is done and all footprints are loaded. Operates along self.sample_dim ("time" for the classic data, "sample_id" for receptor data).
+        Subsample the footprint data by selecting every freq-th sample from the original dataset, starting from the sample specified by freq_offset (if sampling_mode is "regular"), or by randomly selecting N/freq samples from the original dataset (if sampling_mode is "random"). If freq=1, no subsampling is done and all footprints are loaded. Operates along the sample_id index.
         """
         # subsample the footprint data according to a particular sampling mode,
-        # along the per-sample index dimension (time, or sample_id for receptor data)
-        sample_values = self.fp_data_full[self.sample_dim].values
+        # along the sample_id index
+        sample_values = self.fp_data_full["sample_id"].values
         self.original_fp_time_length = len(sample_values)
         if freq>1 and sampling_mode=="regular":
             print(f"reduced the number of datapoints by frequency {freq}")
-            self.fp_data_full = self.fp_data_full.sel({self.sample_dim: sample_values[freq_offset::freq]})
-        
+            self.fp_data_full = self.fp_data_full.sel(sample_id=sample_values[freq_offset::freq])
+
         elif freq>1 and sampling_mode=="random":
             print(f"reduced the number of datapoints by frequency {freq}, chosen at random")
-            self.fp_data_full = self.fp_data_full.sel({self.sample_dim: np.random.choice(sample_values, size=np.shape(sample_values[::freq]), replace=False)})
+            self.fp_data_full = self.fp_data_full.sel(sample_id=np.random.choice(sample_values, size=np.shape(sample_values[::freq]), replace=False))
         else:
             if self.verbose: print("no sampling was done because you didnt pass a valid sampling mode, or freq=1")
 
@@ -1084,7 +1072,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     topog_args:
         see load_topog()
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True, sample_dim="time"):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, fp_zarr_datadir = None, fp_format="auto", load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
 
         print(dask.__version__)
 
@@ -1098,7 +1086,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             freq=freq, freq_offset=freq_offset, sampling_mode=sampling_mode,
             fp_datadir=fp_datadir, fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format,
             met_args=met_args, topog_args=topog_args, cfg=cfg,
-            verbose=verbose, parallel_loading=parallel_loading, sample_dim=sample_dim,
+            verbose=verbose, parallel_loading=parallel_loading,
         )
         
         #### load footprint (fp) data, subsample, crop
@@ -1132,7 +1120,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         If the square to extract escapes the footprint domain, the padded space is filled with nans or zeros or deleted according to the fill_outofdomain_with and delete_outofdomain parameters.
         """
         if self.verbose: print(f"----- Cutting footprints to square of size {self.size}") 
-        self.fp_xr, self.fp_data_full, self.release_idxs, padded_domain_coords = cut_satellite_data(self.fp_data_full, self.size, fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, load=not lazy_load, sample_dim=self.sample_dim)
+        self.fp_xr, self.fp_data_full, self.release_idxs, padded_domain_coords = cut_satellite_data(self.fp_data_full, self.size, fill_bads_with=self.fill_outofdomain_with, delete_outofdomain = self.delete_outofdomain, verbose=self.verbose, load=not lazy_load)
         ## for now!
         self.padded_domain_coords = padded_domain_coords
 
@@ -1147,10 +1135,18 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         #    pad_mode = "nans"
         #if self.fill_outofdomain_with=="zeros":
 
-        self.met = cut_satellite_met(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True)
+        self.met, nan_idxs = cut_satellite_met(self.met_file, self.fp_data_full, metsize=self.size, time_delta=0, pad_mode=pad_mode, load=not lazy_load, add_wind_direction=True, return_nan_idxs=True)
+
+        # samples whose met time could not be matched (met_timestamps is NaT) would
+        # otherwise silently carry the met of the first timestamp, so drop them from
+        # every object at once — self.met is assigned above so it is dropped too
+        if len(nan_idxs) > 0:
+            warnings.warn(
+                f"dropping {len(nan_idxs)} samples with no meteorology within the matching tolerance")
+            self.remove_indeces(nan_idxs)
 
         if rechunk>0:
-            self.met.chunk({"time":rechunk})
+            self.met.chunk({"sample_id":rechunk})
         
         self.met_processed = True
         return self.met
@@ -1181,21 +1177,29 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
 
     def remove_indeces(self, nan_idxs):
         """
-        removes any set of TIMESTAMPS passed as nan_idxs from all the objects in the dataset
-        """
-        self.fp_data_full = self.fp_data_full.drop_sel(time=nan_idxs)
-        if hasattr(self, "fp_xr"):
-            self.fp_xr = self.fp_xr.drop_sel(time=nan_idxs)
-        if hasattr(self, "met"): 
-            self.met = self.met.drop_sel(time=nan_idxs)
-        if hasattr(self, "topog"):
-            self.topog = self.topog.drop_sel(time=nan_idxs)
-        if hasattr(self, "fluxes"):
-            self.fluxes = self.fluxes.drop_sel(time=nan_idxs)
+        removes any set of samples passed as nan_idxs from all the objects in the dataset
 
-        if self.verbose: print(f"Length after removing indeces: {self.fp_data_full.time.size}")
+        nan_idxs can be sample_id values, or timestamps — in which case every sample at
+        those times is removed (for receptor data, all the receptors sharing the timestamp)
+        """
+        sample_ids = np.asarray(nan_idxs)
+        if np.issubdtype(sample_ids.dtype, np.datetime64):
+            times = self.fp_data_full["time"].values
+            sample_ids = self.fp_data_full["sample_id"].values[np.isin(times, sample_ids)]
+
+        self.fp_data_full = self.fp_data_full.drop_sel(sample_id=sample_ids)
+        if hasattr(self, "fp_xr"):
+            self.fp_xr = self.fp_xr.drop_sel(sample_id=sample_ids)
+        if hasattr(self, "met"):
+            self.met = self.met.drop_sel(sample_id=sample_ids)
+        if hasattr(self, "topog"):
+            self.topog = self.topog.drop_sel(sample_id=sample_ids)
+        if hasattr(self, "fluxes"):
+            self.fluxes = self.fluxes.drop_sel(sample_id=sample_ids)
+
+        if self.verbose: print(f"Length after removing indeces: {self.fp_data_full.sample_id.size}")
         # if the len is zero, raise an error
-        if self.fp_data_full.time.size == 0:
+        if self.fp_data_full.sample_id.size == 0:
             raise ValueError("All data has been removed after removing nans, cannot continue!")
     """
     def _remove_fp_nans(self):
@@ -1336,14 +1340,14 @@ class LoadReceptorData(LoadSquareSatelliteData):
     labels each datapoint. Receptor footprints instead come as yearly Zarr stores
     with dimensions (time, receptor, lat, lon): the same set of receptors is
     recorded at many timesteps, so a datapoint is a (time, receptor) pair. On load
-    these are flattened into a single ``sample_id`` index (see _make_sample_id), and
-    ``sample_dim="sample_id"`` is used throughout the pipeline in place of "time".
-    The physical footprint time is preserved as a ``time`` coordinate along
-    ``sample_id``.
+    these are flattened into a single ``sample_id`` index (see
+    _stack_receptors_to_sample_id). The physical footprint time and receptor id are
+    preserved as coordinates along ``sample_id`` — add an index on the object you
+    are inspecting (``ds.set_xindex("time")``) to select on them.
 
     Only the footprint reshaping differs; the square cropping and the rest of the
-    machinery are inherited and driven by ``self.sample_dim``. This is done by
-    overriding the ``_prepare_samples`` hook rather than the whole
+    machinery are inherited and operate on the shared ``sample_id`` index. This is
+    done by overriding the ``_prepare_samples`` hook rather than the whole
     ``_load_footprints`` method, so the shared loading/subsampling logic (zarr
     opening, month slicing, frequency subsampling) is reused as-is.
 
@@ -1353,24 +1357,26 @@ class LoadReceptorData(LoadSquareSatelliteData):
     follow a different naming convention to the satellite Zarr, override
     ``_resolve_paths``. Other arguments match LoadSquareSatelliteData.
 
-    NOTE: meteorology, flux and the input/dataloader machinery are not yet
-    sample_dim-aware, so load_everything defaults to False — only the footprints are
-    loaded and cropped for now.
+    Pass load_everything=True to also load and crop the meteorology and topography
+    onto the same (sample_id, lat, lon) grid as fp_xr.
+
+    NOTE: flux and the input/dataloader machinery are not yet updated for the
+    sample_id layout, so load_everything defaults to False.
     """
     def __init__(self, year, region="BRAZIL", month=None, domain=None, size=10,
-                 fp_zarr_datadir=None, fp_format="zarr", sample_dim="sample_id",
+                 fp_zarr_datadir=None, fp_format="zarr",
                  load_everything=False, **kwargs):
         super().__init__(
             year, region=region, month=month, domain=domain, size=size,
             fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format,
-            sample_dim=sample_dim, load_everything=load_everything, **kwargs,
+            load_everything=load_everything, **kwargs,
         )
 
     def _prepare_samples(self, fp_data_full):
-        """Flatten (time, receptor) footprints into a unique sample_id index; see _make_sample_id."""
+        """Flatten (time, receptor) footprints into a unique sample_id index; see _stack_receptors_to_sample_id."""
         if self.verbose:
             print("----- Flattening (time, receptor) footprints into sample_id index")
-        return _make_sample_id(fp_data_full)
+        return _stack_receptors_to_sample_id(fp_data_full)
 
 
 def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
@@ -1581,23 +1587,44 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
     return cropped, nan_idxs
 
 
-def _make_sample_id(fp_full):
+def _relabel_time_to_sample_id(fp_full):
     """
-    Flatten a receptor-format footprint dataset (dims time, receptor, lat, lon)
-    into one indexed by a single ``sample_id`` dimension, so every (time, receptor)
-    pair becomes one footprint/datapoint with a unique integer id (1..N).
+    Put satellite-format footprints (one footprint per timestamp, dims time, lat,
+    lon) onto the canonical sample layout: a unique integer ``sample_id`` index,
+    with the timestamps kept as a ``time`` coordinate along it. release_lat/
+    release_lon come along as (sample_id,) coordinates.
 
-    ``time`` and ``receptor`` are kept as coordinates along ``sample_id`` (so the
-    physical footprint time stays available as ``fp_full.time``). ``release_lat``/
-    ``release_lon`` are stored per (time, receptor) — e.g. shape (1, 40) for a
-    single timestamp and 40 receptors — so they flatten straight to
-    ``release_lat(sample_id)``, one release location per sample, which is what the
-    cropping code expects.
+    ``time`` is a plain coordinate, not an index — a secondary index on the sample
+    dimension breaks xarray's alignment in the cropping/batching steps. To query by
+    time, add the index on the object you are inspecting: ``ds.set_xindex("time")``.
+    """
+    fp_full = fp_full.sortby("time")
+    times = fp_full["time"].values
+    fp_full = fp_full.rename({"time": "sample_id"})
+    fp_full = fp_full.assign_coords(
+        sample_id=np.arange(1, len(times) + 1),
+        time=("sample_id", times),
+    )
+    return fp_full
+
+
+def _stack_receptors_to_sample_id(fp_full):
+    """
+    Flatten receptor-format footprints (dims time, receptor, lat, lon) onto the
+    canonical sample layout: a unique integer ``sample_id`` index, with ``time`` and
+    ``receptor`` kept as coordinates along it. release_lat/release_lon are stored
+    per (time, receptor) — e.g. shape (1, 40) for one timestamp and 40 receptors —
+    so they flatten straight to (sample_id,), one release location per sample.
+
+    ``time``/``receptor`` are plain coordinates, not indexes — a secondary index on
+    the sample dimension breaks xarray's alignment in the cropping/batching steps.
+    To query by them, add the index on the object you are inspecting:
+    ``ds.set_xindex("time")`` / ``ds.set_xindex("receptor")``.
     """
     if "receptor" not in fp_full.dims:
         raise ValueError(
-            "_make_sample_id expects a 'receptor' dimension to flatten; got dims "
-            f"{tuple(fp_full.dims)}. Is this receptor-format footprint data?"
+            "_stack_receptors_to_sample_id expects a 'receptor' dimension to flatten; "
+            f"got dims {tuple(fp_full.dims)}. Is this receptor-format footprint data?"
         )
 
     fp_full = fp_full.sortby(["time", "receptor"])
@@ -1609,7 +1636,7 @@ def _make_sample_id(fp_full):
 
 
 def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=False,
-                           load=False, verbose=True, sample_dim="time"):
+                           load=False, verbose=True):
     """
     Cuts footprints to a size x size square centred on each release point, returning
     an xarray Dataset with artificial lat/lon coordinates 0..size and the actual
@@ -1648,7 +1675,7 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
         if len(oob) > 0:
             if verbose:
                 print(f"Dropping {len(oob)} footprints that escape the domain when cut to size {size}")
-            fp_full = fp_full.drop_sel({sample_dim: fp_full[sample_dim].values[oob]})
+            fp_full = fp_full.drop_sel(sample_id=fp_full["sample_id"].values[oob])
             release_idxs = _get_release_idxs(fp_full)
 
     before_padding_coords = (fp_full.lat.values.copy(), fp_full.lon.values.copy())
@@ -1661,8 +1688,8 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
     lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
 
-    lat_da = xr.DataArray(lat_indices, dims=[sample_dim, "lat"], coords={sample_dim: fp_full[sample_dim]})
-    lon_da = xr.DataArray(lon_indices, dims=[sample_dim, "lon"], coords={sample_dim: fp_full[sample_dim]})
+    lat_da = xr.DataArray(lat_indices, dims=["sample_id", "lat"], coords={"sample_id": fp_full["sample_id"]})
+    lon_da = xr.DataArray(lon_indices, dims=["sample_id", "lon"], coords={"sample_id": fp_full["sample_id"]})
 
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         cropped_fp = fp_full.isel(lat=lat_da, lon=lon_da)
@@ -1672,16 +1699,16 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
         .assign_coords(lat=np.arange(size), lon=np.arange(size))
         .assign({
             "lat_coords": xr.DataArray(
-                domain_lats[lat_indices], dims=[sample_dim, "lat"],
-                coords={sample_dim: cropped_fp[sample_dim]}),
+                domain_lats[lat_indices], dims=["sample_id", "lat"],
+                coords={"sample_id": cropped_fp["sample_id"]}),
             "lon_coords": xr.DataArray(
-                domain_lons[lon_indices], dims=[sample_dim, "lon"],
-                coords={sample_dim: cropped_fp[sample_dim]}),
+                domain_lons[lon_indices], dims=["sample_id", "lon"],
+                coords={"sample_id": cropped_fp["sample_id"]}),
         })
     )
 
     cropped_fp = cropped_fp[["fp", "lat_coords", "lon_coords", "release_lat", "release_lon"]]
-    cropped_fp = cropped_fp.transpose(sample_dim, "lat", "lon")
+    cropped_fp = cropped_fp.transpose("sample_id", "lat", "lon")
     #cropped_fp = cropped_fp.chunk({"time": 100, "lat": -1, "lon": -1})
 
     fp_full = fp_full.sel(lat=slice(before_padding_coords[0][0], before_padding_coords[0][-1]),
@@ -1698,13 +1725,15 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
 
 def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_tolerance="4h"):
     """
-    Reindexes/interpolates met to footprint times (or time-shifted versions).
-    Returns (met_interpolated, nan_idxs).
+    Reindexes/interpolates met onto the footprint samples (at fp_time - time_delta).
+    Returns (met_on_samples, nan_idxs).
 
-    Adds 'fp_time' variable (original footprint observation times) and, when interp_method='closest', 'met_timestamps' (the actual met timestamp used for each footprint, NaT where no match was found within closest_tolerance).
+    The returned met is indexed by 'sample_id' to match the footprints, carrying 'fp_time' (the original footprint observation time, so that fp_time - time_delta is the met time used here) and, when interp_method='closest', 'met_timestamps' (the actual met timestamp used for each sample, NaT where no match was found within closest_tolerance) as coordinates along it. nan_idxs holds the sample_id values that had no match within the tolerance.
     """
     fp_original_times = fp.time.values
-    nan_idxs = []
+    sample_vals = fp["sample_id"].values
+    nan_mask = np.zeros(len(sample_vals), dtype=bool)
+    met_timestamps = None
     tol = pd.Timedelta(closest_tolerance)
 
     target_times = (fp_original_times if time_delta == 0
@@ -1713,8 +1742,8 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
     if interp_method == "closest":
         nearest = met.indexes["time"].get_indexer(
             pd.DatetimeIndex(target_times), method="nearest", tolerance=tol)
-        nan_idxs = pd.DatetimeIndex(target_times)[nearest == -1]
-        nearest_safe = np.where(nearest != -1, nearest, 0)
+        nan_mask = nearest == -1
+        nearest_safe = np.where(~nan_mask, nearest, 0)
         nearest_timestamps = met.indexes["time"].values[nearest_safe]
         unique_met_times, inverse_idx = np.unique(
             nearest_timestamps, return_inverse=True
@@ -1732,23 +1761,25 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
         print("computing met unique!")
         #met_unique = met_unique.compute()
         met = met_unique.isel(time=inverse_idx)
-        met = met.assign_coords(time=target_times)
-        nearest_timestamps_full = pd.DatetimeIndex(
-            np.where(nearest != -1, nearest_timestamps, pd.NaT)
+        met_timestamps = pd.DatetimeIndex(
+            np.where(~nan_mask, nearest_timestamps, pd.NaT)
         )
-        print(met)
-        met["met_timestamps"] = ("time", nearest_timestamps_full)
-        #v1 reindex
-        #nearest_timestamps = pd.DatetimeIndex(
-        #    np.where(nearest != -1, met.indexes["time"].values[nearest_safe], pd.NaT))
-        #met = met.reindex(time=target_times, method="nearest", tolerance=tol, fill_value=np.nan)
-        #met["met_timestamps"] = ("time", nearest_timestamps)
     else:
         met = met.interp(time=target_times, method=interp_method)
 
-    met = met.assign({"fp_time": (("time",), fp_original_times)})
-    # convert nan_idxs to the original fp time values for clarity by adding the time_delta back, and then to numpy array for easier use later
-    nan_idxs = (pd.to_datetime(nan_idxs) + pd.Timedelta(f"{time_delta}h")).to_numpy()
+    # the met time axis now holds one entry per footprint sample, in fp order: make
+    # sample_id the index and keep the footprint's own time as fp_time
+    met = met.rename({"time": "sample_id"})
+    met = met.assign_coords({
+        "sample_id": sample_vals,
+        "fp_time": ("sample_id", fp_original_times),
+    })
+    if met_timestamps is not None:
+        met = met.assign_coords(met_timestamps=("sample_id", met_timestamps))
+
+    # failed matches are reported as sample_id values, so that remove_indeces drops
+    # the right samples rather than every sample sharing a timestamp
+    nan_idxs = sample_vals[nan_mask]
 
     return met, nan_idxs
 
@@ -1834,11 +1865,11 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
 
     Uses xarray and dask to produce one coherent lazy dask graph.
 
-    lat_coords and lon_coords are stored as (time, lat) / (time, lon) variables
+    The result is indexed by 'sample_id' to match the footprints, with the footprint time kept as an 'fp_time' coordinate (fp_time - time_delta = the met time used). lat_coords and lon_coords are stored as (sample_id, lat) / (sample_id, lon) variables
 
     Parameters:
     - met: xarray dataset with meteorological data, with dimensions including 'time', 'lat', 'lon', and possibly 'levels'. Should have variables for the relevant meteorological fields
-    - fp: xarray dataset with footprint data, with dimensions including 'time', and variables 'release_lat' and 'release_lon' for the release locations of each footprint
+    - fp: xarray dataset with footprint data, indexed by 'sample_id', with a 'time' coordinate and variables 'release_lat' and 'release_lon' for the release locations of each footprint
     - metsize: int, the size of the square to cut around each release point. Must be even to ensure the release point is centered.
     - time_delta: int, hours to shift the footprint times backwards for interpolation. Default is 0 (no shift).
     - relevant_levels: list, the levels of atmospheric variables to extract. If None, uses all levels in met.
@@ -1869,8 +1900,20 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
         met = met.astype("float32")
 
     assert time_delta >= 0, "time_delta must be zero or positive"
+    met_times = met.indexes["time"]
     met, nan_idxs = _interp_met_to_fp_times(
         met, fp, time_delta, interp_method, closest_tolerance)
+
+    # if nothing matched there is no point cropping — the footprints and the met do
+    # not overlap in time
+    if len(nan_idxs) == fp.sizes["sample_id"]:
+        raise ValueError(
+            "No temporal overlap between the footprints and the meteorology: no met data "
+            f"could be matched to any footprint at time_delta={time_delta}h.\n"
+            f"  footprints:  {pd.Timestamp(fp.time.values.min())} to {pd.Timestamp(fp.time.values.max())}\n"
+            f"  meteorology: {met_times.min()} to {met_times.max()}"
+        )
+
     met = met.assign_coords({"time_delta": ("time_delta", [time_delta])})
 
     domain_lats = met.lat.values.copy()
@@ -1890,8 +1933,8 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(metsize)[None, :]
     lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(metsize)[None, :]
 
-    lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": met.time})
-    lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": met.time})
+    lat_da = xr.DataArray(lat_indices, dims=["sample_id", "lat"], coords={"sample_id": met["sample_id"]})
+    lon_da = xr.DataArray(lon_indices, dims=["sample_id", "lon"], coords={"sample_id": met["sample_id"]})
 
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         cropped_met = met.isel(lat=lat_da, lon=lon_da)
@@ -1901,11 +1944,11 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
         .assign_coords(lat=np.arange(metsize), lon=np.arange(metsize))
         .assign({
             "lat_coords": xr.DataArray(
-                domain_lats[lat_indices], dims=["time", "lat"],
-                coords={"time": cropped_met.time}),
+                domain_lats[lat_indices], dims=["sample_id", "lat"],
+                coords={"sample_id": cropped_met["sample_id"]}),
             "lon_coords": xr.DataArray(
-                domain_lons[lon_indices], dims=["time", "lon"],
-                coords={"time": cropped_met.time}),
+                domain_lons[lon_indices], dims=["sample_id", "lon"],
+                coords={"sample_id": cropped_met["sample_id"]}),
         })
     )
 
@@ -1998,14 +2041,14 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
     """
     Crops topography and landcover to a size x size square centred on each
     footprint's release point.  Returns an xarray Dataset with dimensions
-    (time, lat, lon) and variables:
-        - topog: surface altitude, shape (time, lat, lon)
-        - landcover: integer landcover type, shape (time, lat, lon)
-        - disaggregated_landcover: (time, lat, lon, landcover_level) with
+    (sample_id, lat, lon) and variables:
+        - topog: surface altitude, shape (sample_id, lat, lon)
+        - landcover: integer landcover type, shape (sample_id, lat, lon)
+        - disaggregated_landcover: (sample_id, lat, lon, landcover_level) with
           land_binary_mask inverted (sea=1, land=0) in level 0 and 9 fractional
           landcover types in levels 1–9
     lat and lon are artificial coordinates 0..size; actual geographic coordinates
-    are stored in lat_coords (time, lat) and lon_coords (time, lon) variables.
+    are stored in lat_coords (sample_id, lat) and lon_coords (sample_id, lon) variables.
 
     Parameters
     ----------
@@ -2044,10 +2087,10 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
     lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
 
-    lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": fp.time})
-    lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": fp.time})
+    lat_da = xr.DataArray(lat_indices, dims=["sample_id", "lat"], coords={"sample_id": fp["sample_id"]})
+    lon_da = xr.DataArray(lon_indices, dims=["sample_id", "lon"], coords={"sample_id": fp["sample_id"]})
 
-    # isel on static (lat, lon) arrays — DataArray indexers introduce the time dim
+    # isel on static (lat, lon) arrays — DataArray indexers introduce the sample_id dim
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         topog_crop  = topog_file.surface_altitude.isel(lat=lat_da, lon=lon_da)
         if landcover_file is not None:
@@ -2069,9 +2112,9 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
         result = xr.Dataset({
         "topog":                    topog_crop,
         "lat_coords": xr.DataArray(
-            domain_lats[lat_indices], dims=["time", "lat"], coords={"time": fp.time}),
+            domain_lats[lat_indices], dims=["sample_id", "lat"], coords={"sample_id": fp["sample_id"]}),
         "lon_coords": xr.DataArray(
-            domain_lons[lon_indices], dims=["time", "lon"], coords={"time": fp.time}),
+            domain_lons[lon_indices], dims=["sample_id", "lon"], coords={"sample_id": fp["sample_id"]}),
     })
     else:
         result = xr.Dataset({
@@ -2079,9 +2122,9 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
             "landcover":                landcover_crop,
             "disaggregated_landcover":  disagg,
             "lat_coords": xr.DataArray(
-                domain_lats[lat_indices], dims=["time", "lat"], coords={"time": fp.time}),
+                domain_lats[lat_indices], dims=["sample_id", "lat"], coords={"sample_id": fp["sample_id"]}),
             "lon_coords": xr.DataArray(
-                domain_lons[lon_indices], dims=["time", "lon"], coords={"time": fp.time}),
+                domain_lons[lon_indices], dims=["sample_id", "lon"], coords={"sample_id": fp["sample_id"]}),
         })
 
     result = result.assign_coords(lat=np.arange(size), lon=np.arange(size))
