@@ -226,6 +226,8 @@ def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, col
         epoch (int): The current epoch number, used in the output filename.
         test_dataset: A dataset object exposing fp, fp_untransformed, and predictions attributes.
         training_ctx (TrainingContext): The training context object containing configuration and state information.
+            image_plots holds the sample_id values to plot, image_dates the matching
+            timestamps used only to label them.
         size (tuple of int): The spatial dimensions (height, width) used to reshape flat arrays into images.
         path (str): The base directory path for saving output images.
         model_name (str): The model name used to locate the output subfolder and name the saved file.
@@ -240,7 +242,8 @@ def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, col
     image_dates = training_ctx.image_dates
     size = training_ctx.size
 
-    subset_fp = test_dataset.sel(time=image_dates, method="nearest").copy()
+    # select by sample_id: a timestamp no longer identifies a single sample
+    subset_fp = test_dataset.sel(sample_id=image_plots).copy()
 
     rows = [
         ("fp_transformed_pred", "Trans Pred"),
@@ -264,12 +267,12 @@ def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, col
             vmin, vmax = None, None
 
         for n in range(4):
-            im = ax[row, n].imshow(row_da.isel(time=n).values, origin="lower", vmin=vmin, vmax=vmax)
+            im = ax[row, n].imshow(row_da.isel(sample_id=n).values, origin="lower", vmin=vmin, vmax=vmax)
             ax[row, n].set_xticks([])
             ax[row, n].set_yticks([])
 
             if row == 1:
-                ax[row, n].set_title(f"{label}\n({str(image_dates[n][:10])})")
+                ax[row, n].set_title(f"{label}\n({str(image_dates[n][:10])}, id {image_plots[n]})")
             else:
                 ax[row, n].set_title(label)
 

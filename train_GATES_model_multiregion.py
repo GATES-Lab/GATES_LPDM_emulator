@@ -138,8 +138,8 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
 
     Each region is loaded and optionally computed to memory before the next region begins,
     avoiding large cross-region Dask task graphs. After loading, train inputs and footprints
-    are concatenated along the time dimension with integer-reindexed coordinates to prevent
-    collisions between regions that share overlapping calendar dates.
+    are concatenated along sample_id and renumbered, since sample_id is assigned per load
+    and would otherwise collide between regions.
 
     Args:
         region_configs (list of dict): Each entry must have 'train_load_data' and 'test_load_data'
@@ -156,9 +156,11 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
             Defaults to False.
 
     Returns:
-        all_train_inputs (xr.DataArray): Concatenated train inputs (fp_time, lat, lon, variable_name).
-        all_train_fps (xr.Dataset): Concatenated train footprints (time, lat, lon).
+        all_train_inputs (xr.DataArray): Concatenated train inputs (sample_id, lat, lon, variable_name).
+        all_train_fps (xr.Dataset): Concatenated train footprints (sample_id, lat, lon).
+            Both share a fresh 1..N sample_id assigned after concatenation.
         test_regions (list of dict): One entry per region with keys 'name', 'inputs', 'fp_xr'.
+            These keep their own per-region sample_ids, since each region gets its own loader.
     """
     train_inputs_list = []
     train_fps_list = []
@@ -203,8 +205,8 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
         if verbose:
             # print number of samples in each dataset
             print("------------------------------------------")
-            print(f"Loaded train inputs for region '{region_name}' with {train_inputs_r.sizes['fp_time']} samples")
-            print(f"Loaded test inputs for region '{region_name}' with {test_inputs_r.sizes['fp_time']} samples")
+            print(f"Loaded train inputs for region '{region_name}' with {train_inputs_r.sizes['sample_id']} samples")
+            print(f"Loaded test inputs for region '{region_name}' with {test_inputs_r.sizes['sample_id']} samples")
         if load_into_memory:
             if verbose:
                 print(f"  computing train inputs into memory ({train_inputs_r.nbytes / 1e9:.2f} GB)...")
@@ -236,20 +238,21 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 f"variable_name coords differ between region 0 and region {i} "
                 f"({test_regions[i]['name']}). Ensure all regions use identical 'variables' settings.")
 
-    # Concatenate train data; reassign to integer coords to avoid duplicate timestamps
-    all_train_inputs = xr.concat(train_inputs_list, dim="fp_time")
-    #all_train_inputs = all_train_inputs.assign_coords(
-    #    fp_time=np.arange(len(all_train_inputs.fp_time)))
+    # Concatenate train data. sample_id is assigned per load, so it restarts at 1 for
+    # every region: renumber after concatenating, giving both objects the same fresh ids
+    # so the footprints and their inputs stay paired.
+    all_train_inputs = xr.concat(train_inputs_list, dim="sample_id")
+    all_train_fps = xr.concat(train_fps_list, dim="sample_id")
 
-    all_train_fps = xr.concat(train_fps_list, dim="time")
-    #all_train_fps = all_train_fps.assign_coords(
-    #    time=np.arange(len(all_train_fps.time)))
+    sample_ids = np.arange(1, all_train_fps.sizes["sample_id"] + 1)
+    all_train_inputs = all_train_inputs.assign_coords(sample_id=sample_ids)
+    all_train_fps = all_train_fps.assign_coords(sample_id=sample_ids)
 
     if verbose:
-        print(f"\nConcatenated train data: {all_train_inputs.sizes['fp_time']} total samples "
+        print(f"\nConcatenated train data: {all_train_inputs.sizes['sample_id']} total samples "
               f"across {len(region_configs)} region(s)")
         for r in test_regions:
-            print(f"  Test '{r['name']}': {r['inputs'].sizes['fp_time']} samples")
+            print(f"  Test '{r['name']}': {r['inputs'].sizes['sample_id']} samples")
 
     return all_train_inputs, all_train_fps, test_regions
 
@@ -264,8 +267,8 @@ def transform_test_region(test_inputs, test_fps, scalers, add_nan_mask, batch_si
     and is used directly by calculate_losses and save_training_plots.
 
     Args:
-        test_inputs (xr.DataArray): Stacked input DataArray (fp_time, lat, lon, variable_name).
-        test_fps: Footprint DataArray or Dataset with a 'time' dimension.
+        test_inputs (xr.DataArray): Stacked input DataArray (sample_id, lat, lon, variable_name).
+        test_fps: Footprint DataArray or Dataset indexed by 'sample_id'.
         scalers (dict): Must contain 'inputs_scaler' and 'fp_scaler' (already fitted).
         add_nan_mask (bool): Whether to add fp_nan_mask and fill NaNs with zero.
         batch_size (int): Batch size for the test DataLoader.
@@ -292,8 +295,8 @@ def transform_test_region(test_inputs, test_fps, scalers, add_nan_mask, batch_si
     if add_nan_mask:
         test_fp_ds = gates_datasets.add_fp_nan_mask(
             test_fp_ds, fill_nans=True, fp_var_name="fp_original")
-    test_fp_ds = test_fp_ds.chunk({"time": 1})
-    test_fp_ds = test_fp_ds.assign_coords(idx=("time", list(range(len(test_fp_ds.time)))))
+    test_fp_ds = test_fp_ds.chunk({"sample_id": 1})
+    test_fp_ds = test_fp_ds.assign_coords(idx=("sample_id", list(range(test_fp_ds.sizes["sample_id"]))))
 
     test_scaled_inputs, test_fp_ds = gates_datasets.trim_to_batch_size(
         test_scaled_inputs, test_fp_ds, batch_size)

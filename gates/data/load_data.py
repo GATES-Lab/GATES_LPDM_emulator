@@ -16,7 +16,6 @@ import os
 import copy
 import warnings
 from pathlib import Path
-import time
 
 import cartopy.crs as ccrs
 import cartopy
@@ -970,25 +969,26 @@ class LoadBaseSatelliteData:
             self.countries = country_ds
 
 
-    def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, return_fig=False, plot_marker=False, dpi=100, figsize=(6,6)):
+    def plot_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, return_fig=False, plot_marker=False, dpi=100, figsize=(6,6), coastlines_res="110m"):
         """
         plot a footprint for a particular timestamp or index
 
         inputs:
-            - idx: int index of the footprint to plot. If timestamp is also passed, timestamp will be used instead of idx
+            - idx: int position along sample_id of the footprint to plot. If timestamp is also passed, timestamp will be used instead of idx
             - timestamp: timestamp of the footprint to plot, as a string in format "YYYY-MM-DDTHH:MM:SS" (eg "2016-01-01T12:00:00"). If idx is also passed, timestamp will be used instead of idx
-            - return_fig: if True, returns the fig and ax objects instead of showing the plot. 
+            - return_fig: if True, returns the fig and ax objects instead of showing the plot.
         """
         import matplotlib.pyplot as plt
 
+        # a timestamp no longer identifies a single sample (receptor data has several
+        # samples per time), so look up the matching positions along sample_id
         if timestamp is not None:
-            fp_to_plot = self.fp_data_full.sel(time=np.datetime64(timestamp)).copy()
-            if len(fp_to_plot.time.values)>1:
+            matches = np.flatnonzero(self.fp_data_full.time.values == np.datetime64(timestamp))
+            if len(matches) > 1:
                 print("there are multiple footprints for the timestamp you passed, check the timestamp and try again! plotting the first one")
-                fp_to_plot = fp_to_plot.isel(time=0)
-        
-        else:
-            fp_to_plot = self.fp_data_full.isel(time=idx).copy()
+            idx = matches[0]
+
+        fp_to_plot = self.fp_data_full.isel(sample_id=idx).copy()
 
         f = np.copy(fp_to_plot.fp.values)
 
@@ -996,7 +996,7 @@ class LoadBaseSatelliteData:
 
         fig, ax = plt.subplots(1,1,subplot_kw={'projection': ccrs.PlateCarree()}, figsize=figsize, dpi=dpi)
         ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
-        ax.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
+        ax.coastlines(resolution=coastlines_res, color='black', linewidth=1, alpha=0.5)
         ax.add_feature(cartopy.feature.LAND)
         ax.add_feature(cartopy.feature.OCEAN)
         ax.stock_img()
@@ -1009,10 +1009,13 @@ class LoadBaseSatelliteData:
             levels = [-4, -3.5, -3,  -2.5, -2, -1.5]
 
         cb = ax.contourf(fp_to_plot.lon.values, fp_to_plot.lat.values, np.log10(f), **plot_params, levels=levels, extend="both", alpha=background_alpha)
+        
+        levels=cb.levels
+
         f[f<background_threshold] = 0
         cb = ax.contourf(fp_to_plot.lon.values, fp_to_plot.lat.values,np.log10(f), **plot_params, levels=levels, extend="both")
         formatted_time = fp_to_plot.time.values.astype('datetime64[ms]').astype('O').strftime('%d-%m-%Y %H:%M:%S.%f')[:-3]
-        ax.set_title(formatted_time)
+        ax.set_title(f"{formatted_time}\nsample_id {int(fp_to_plot.sample_id)}")
 
         if plot_marker:
             ax.scatter(fp_to_plot.release_lon.values, fp_to_plot.release_lat.values, marker="x", color="white",s=25, lw=1,transform=cartopy.crs.PlateCarree(), zorder=10)
@@ -1227,37 +1230,35 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.met_nan_idxs=[]
         """  
     
-    def plot_cropped_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, plot_wind=False, return_fig=False):
+    def plot_cropped_footprint(self, idx=0, timestamp=None, vmin_vmax=[None,None], levels=None, background_threshold=1e-4, add_cbar=False, plot_wind=False, return_fig=False, coastlines_res="110m"):
         """
         plot a footprint for a particular timestamp or index, with the option to also plot the topography and landcover if they have been loaded. 
 
         inputs:
-            - idx: int index of the footprint to plot. If timestamp is also passed, timestamp will be used instead of idx
+            - idx: int position along sample_id of the footprint to plot. If timestamp is also passed, timestamp will be used instead of idx
             - timestamp: timestamp of the footprint to plot, as a string in format "YYYY-MM-DDTHH:MM:SS" (eg "2016-01-01T12:00:00"). If idx is also passed, timestamp will be used instead of idx
         """
         import matplotlib.pyplot as plt
 
+        # a timestamp no longer identifies a single sample (receptor data has several
+        # samples per time), so look up the matching positions along sample_id
         if timestamp is not None:
-            fp_to_plot = self.fp_xr.sel(time=np.datetime64(timestamp)).copy()
-            if len(fp_to_plot.time.values)>1:
+            matches = np.flatnonzero(self.fp_xr.time.values == np.datetime64(timestamp))
+            if len(matches) > 1:
                 print("there are multiple footprints for the timestamp you passed, check the timestamp and try again! plotting the first one")
-                fp_to_plot = fp_to_plot.isel(time=0)
-            
-            idx = np.where(self.fp_xr.time.values == fp_to_plot.time.values)[0][0]
-        
-        else:
-            fp_to_plot = self.fp_xr.isel(time=idx).copy()
-            timestamp = fp_to_plot.time.values
+            idx = matches[0]
+
+        fp_to_plot = self.fp_xr.isel(sample_id=idx).copy()
 
         f = np.copy(fp_to_plot.fp.values)
-        fp_lats = self.fp_lats[idx]
-        fp_lons = self.fp_lons[idx]
+        fp_lats = fp_to_plot.lat_coords.values
+        fp_lons = fp_to_plot.lon_coords.values
 
         extent = (fp_lons[0], fp_lons[-1], fp_lats[0], fp_lats[-1])
 
         fig, ax = plt.subplots(1,1,subplot_kw={'projection': ccrs.PlateCarree()})
         ax.set_extent(extent, crs=cartopy.crs.PlateCarree())
-        ax.coastlines(resolution='110m', color='black', linewidth=1, alpha=0.5)
+        ax.coastlines(resolution=coastlines_res, color='black', linewidth=1, alpha=0.5)
         ax.add_feature(cartopy.feature.LAND)
         ax.add_feature(cartopy.feature.OCEAN)
 
@@ -1269,21 +1270,22 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             levels = [-4, -3.5, -3,  -2.5, -2, -1.5]
 
         cb = ax.contourf(fp_lons, fp_lats, np.log10(f), **plot_params, levels=levels, extend="both", alpha=background_alpha)
+        levels=cb.levels
         f[f<background_threshold] = 0
         cb = ax.contourf(fp_lons, fp_lats, np.log10(f), **plot_params, levels=levels, extend="both")
         formatted_time = fp_to_plot.time.values.astype('datetime64[ms]').astype('O').strftime('%d-%m-%Y %H:%M:%S.%f')[:-3]
-        ax.set_title(formatted_time)
+        ax.set_title(f"{formatted_time}\nsample_id {int(fp_to_plot.sample_id)}")
 
         if add_cbar:
             cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
 
         if plot_wind:
-            u_arrow = -self.met.x_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).values
-            v_arrow = -self.met.y_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).values
+            u_arrow = -self.met.x_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(sample_id=idx).values
+            v_arrow = -self.met.y_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(sample_id=idx).values
 
             # Position arrow at centre of domain
-            arrow_lat = self.fp_xr.lat_coords.sel(lat=self.size//2, time=timestamp).values
-            arrow_lon = self.fp_xr.lon_coords.sel(lon=self.size//2, time=timestamp).values
+            arrow_lat = fp_to_plot.lat_coords.sel(lat=self.size//2).values
+            arrow_lon = fp_to_plot.lon_coords.sel(lon=self.size//2).values
             print(f"plotting wind arrow at lat {arrow_lat} and lon {arrow_lon} with u {u_arrow} and v {v_arrow}")
             ax.quiver(arrow_lon, arrow_lat, u_arrow, v_arrow,
                     transform=cartopy.crs.PlateCarree(),
@@ -1302,7 +1304,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         """
         import matplotlib.pyplot as plt
 
-        f = self.fp_xr.fp.mean(dim="time").values
+        f = self.fp_xr.fp.mean(dim="sample_id").values
         #f[f<5e-5] = 0
         vmin, vmax = vmin_vmax
 
@@ -1489,7 +1491,8 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
     flux : xr.DataArray, dims (time, lat, lon)
         Monthly flux snapshots (e.g. from load_default_brazil_emissions).
     fp : xr.Dataset
-        Footprint dataset with release_lat, release_lon, and time coordinates.
+        Footprint dataset indexed by sample_id, with release_lat, release_lon and a
+        time coordinate along sample_id.
     size : int
         Side length of crop square. Must be even.
     tolerance : str
@@ -1500,13 +1503,13 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
 
     Returns
     -------
-    tuple of (xr.Dataset, pd.DatetimeIndex)
+    tuple of (xr.Dataset, np.ndarray)
         Dataset with variables:
-            - flux       : cropped flux (time, lat, lon)
-            - lat_coords : actual latitudes  (time, lat)
-            - lon_coords : actual longitudes (time, lon)
+            - flux       : cropped flux (sample_id, lat, lon)
+            - lat_coords : actual latitudes  (sample_id, lat)
+            - lon_coords : actual longitudes (sample_id, lon)
         lat/lon are artificial 0..size coordinates; release point is at size//2.
-        DatetimeIndex of fp timestamps that had no flux match within tolerance.
+        Array of sample_id values that had no flux match within tolerance.
     """
     if size % 2 != 0:
         raise ValueError(f"size must be even, got {size}")
@@ -1516,16 +1519,24 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
     tol = pd.Timedelta(tolerance)
     nearest = flux.indexes["time"].get_indexer(
         pd.DatetimeIndex(fp.time.values), method="nearest", tolerance=tol)
-    nan_idxs = pd.DatetimeIndex(fp.time.values)[nearest == -1]
+    # report failed matches as sample_id values (nearest is per-sample), so
+    # remove_indeces drops the right samples rather than every sample that
+    # happens to share a timestamp
+    nan_idxs = fp["sample_id"].values[nearest == -1]
     if verbose and len(nan_idxs):
-        print(f"cut_flux_data: {len(nan_idxs)} footprint timestamps had no "
+        print(f"cut_flux_data: {len(nan_idxs)} footprints had no "
               f"flux snapshot within {tolerance}. These will be NaN in the output.")
     nearest_safe = np.where(nearest != -1, nearest, 0)
-    flux_matched = flux.isel(time=xr.DataArray(nearest_safe, dims="time"))
-    flux_matched["time"] = fp.time.values
+    # picking one flux snapshot per sample turns the flux time axis into a
+    # per-sample axis: make sample_id the index and keep the footprint's own time
+    flux_matched = flux.isel(time=xr.DataArray(nearest_safe, dims="sample_id"))
+    flux_matched = flux_matched.assign_coords({
+        "sample_id": fp["sample_id"].values,
+        "time": ("sample_id", fp.time.values),
+    })
     if len(nan_idxs):
         flux_matched = flux_matched.where(
-            xr.DataArray(nearest != -1, dims="time"), np.nan)
+            xr.DataArray(nearest != -1, dims="sample_id"), np.nan)
 
     # --- 2. Resolution check ---
     domain_lats = flux_matched.lat.values
@@ -1550,17 +1561,17 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
         # --- 4. Vectorised isel ---
         lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(size)[None, :]
         lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(size)[None, :]
-        lat_da = xr.DataArray(lat_indices, dims=["time", "lat"], coords={"time": fp.time})
-        lon_da = xr.DataArray(lon_indices, dims=["time", "lon"], coords={"time": fp.time})
+        lat_da = xr.DataArray(lat_indices, dims=["sample_id", "lat"], coords={"sample_id": fp["sample_id"]})
+        lon_da = xr.DataArray(lon_indices, dims=["sample_id", "lon"], coords={"sample_id": fp["sample_id"]})
         with dask.config.set(**{"array.slicing.split_large_chunks": False}):
             cropped = flux_matched.isel(lat=lat_da, lon=lon_da)
-        
+
         lat_coords = xr.DataArray(
-                domain_lats[lat_indices], dims=["time", "lat"],
-                coords={"time": fp.time})
+                domain_lats[lat_indices], dims=["sample_id", "lat"],
+                coords={"sample_id": fp["sample_id"]})
         lon_coords=  xr.DataArray(
-                domain_lons[lon_indices], dims=["time", "lon"],
-                coords={"time": fp.time})
+                domain_lons[lon_indices], dims=["sample_id", "lon"],
+                coords={"sample_id": fp["sample_id"]})
     
     elif hasattr(fp, "lat_coords") or hasattr(fp, "lon_coords"):
         print("Using lat_coords and lon_coords to cut flux data, assuming they are aligned and have the same resolution as the flux data.")
@@ -1723,21 +1734,39 @@ def cut_satellite_data(fp_full, size, fill_bads_with="nans", delete_outofdomain=
     return cropped_fp, fp_full, release_idxs, padded_domain_coords
 
 
-def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_tolerance="4h"):
+def _match_met_times_to_fp(met, fp, time_delta, interp_method, closest_tolerance="4h"):
     """
-    Reindexes/interpolates met onto the footprint samples (at fp_time - time_delta).
-    Returns (met_on_samples, nan_idxs).
+    Matches each footprint sample to a met timestamp (at fp_time - time_delta), without
+    expanding the met onto the samples.
+    Returns (met_at_used_times, time_positions, sample_coords, nan_idxs).
 
-    The returned met is indexed by 'sample_id' to match the footprints, carrying 'fp_time' (the original footprint observation time, so that fp_time - time_delta is the met time used here) and, when interp_method='closest', 'met_timestamps' (the actual met timestamp used for each sample, NaT where no match was found within closest_tolerance) as coordinates along it. nan_idxs holds the sample_id values that had no match within the tolerance.
+    The met keeps its own time axis, selected down to just the timestamps actually used
+    (deduplicated, so receptor data — where many samples share a timestamp — selects each
+    timestep once). time_positions gives, per sample, the position of its timestamp on
+    that axis: the caller applies it as an indexer alongside the spatial crop, so the
+    per-sample expansion and the crop happen in one step and the full-domain per-sample
+    array is never built.
+
+    sample_coords holds the coordinates to attach once the data is on the sample axis:
+    'sample_id', 'fp_time' (the original footprint observation time, so that
+    fp_time - time_delta is the met time used) and, when interp_method='closest',
+    'met_timestamps' (the actual met timestamp used for each sample, NaT where no match
+    was found within closest_tolerance). nan_idxs holds the sample_id values that had no
+    match within the tolerance.
     """
     fp_original_times = fp.time.values
     sample_vals = fp["sample_id"].values
-    nan_mask = np.zeros(len(sample_vals), dtype=bool)
-    met_timestamps = None
     tol = pd.Timedelta(closest_tolerance)
 
     target_times = (fp_original_times if time_delta == 0
                     else pd.DatetimeIndex(fp_original_times) - pd.Timedelta(f"{time_delta}h"))
+
+    # failed matches are reported as sample_id values, so that remove_indeces drops
+    # the right samples rather than every sample sharing a timestamp
+    sample_coords = {
+        "sample_id": sample_vals,
+        "fp_time": ("sample_id", fp_original_times),
+    }
 
     if interp_method == "closest":
         nearest = met.indexes["time"].get_indexer(
@@ -1745,43 +1774,22 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
         nan_mask = nearest == -1
         nearest_safe = np.where(~nan_mask, nearest, 0)
         nearest_timestamps = met.indexes["time"].values[nearest_safe]
-        unique_met_times, inverse_idx = np.unique(
-            nearest_timestamps, return_inverse=True
-        )
-        t0 = time.perf_counter()
-        met_unique = met.sel(time=unique_met_times)
-        print(f"Graph build: {time.perf_counter()-t0:.2f}s")
-        # print weight and chunks of unique
-        print(f"met_unique has chunks {met_unique.chunks} and size {met_unique.nbytes / 1e6:.2f} MB")
-        
-        print("Tasks in graph:", len(met_unique.__dask_graph__()))
-        #met_unique = met_unique.chunk({"time": -1})  # merge into one chunk before compute
-        met_unique = met_unique.chunk({"time": -1, "lat": -1, "lon": -1, "levels": -1})
-        print(f"Tasks after rechunk: {len(met_unique.__dask_graph__())}")
-        print("computing met unique!")
-        #met_unique = met_unique.compute()
-        met = met_unique.isel(time=inverse_idx)
-        met_timestamps = pd.DatetimeIndex(
-            np.where(~nan_mask, nearest_timestamps, pd.NaT)
-        )
+
+        used_times, time_positions = np.unique(nearest_timestamps, return_inverse=True)
+        met = met.sel(time=used_times)
+
+        sample_coords["met_timestamps"] = ("sample_id", pd.DatetimeIndex(
+            np.where(~nan_mask, nearest_timestamps, pd.NaT)))
+        nan_idxs = sample_vals[nan_mask]
     else:
-        met = met.interp(time=target_times, method=interp_method)
+        # interpolate to the unique targets only, for the same reason: several samples
+        # can ask for the same target time, and interpolating each one separately
+        # produces a full-domain field per sample
+        used_times, time_positions = np.unique(target_times, return_inverse=True)
+        met = met.interp(time=used_times, method=interp_method)
+        nan_idxs = sample_vals[:0]
 
-    # the met time axis now holds one entry per footprint sample, in fp order: make
-    # sample_id the index and keep the footprint's own time as fp_time
-    met = met.rename({"time": "sample_id"})
-    met = met.assign_coords({
-        "sample_id": sample_vals,
-        "fp_time": ("sample_id", fp_original_times),
-    })
-    if met_timestamps is not None:
-        met = met.assign_coords(met_timestamps=("sample_id", met_timestamps))
-
-    # failed matches are reported as sample_id values, so that remove_indeces drops
-    # the right samples rather than every sample sharing a timestamp
-    nan_idxs = sample_vals[nan_mask]
-
-    return met, nan_idxs
+    return met, time_positions, sample_coords, nan_idxs
 
 
 def _pad_domain(data, fp, release_idxs, half, pad_mode, verbose=True):
@@ -1901,7 +1909,7 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
 
     assert time_delta >= 0, "time_delta must be zero or positive"
     met_times = met.indexes["time"]
-    met, nan_idxs = _interp_met_to_fp_times(
+    met, time_positions, sample_coords, nan_idxs = _match_met_times_to_fp(
         met, fp, time_delta, interp_method, closest_tolerance)
 
     # if nothing matched there is no point cropping — the footprints and the met do
@@ -1929,26 +1937,37 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
     met, domain_lats, domain_lons, release_idxs = _pad_domain(
         met, fp, release_idxs, half, pad_mode, verbose=verbose)
 
-    # build integer index arrays: shape (n_times, metsize)
+    # build integer index arrays: shape (n_samples, metsize)
     lat_indices = (release_idxs[:, 0] - half)[:, None] + np.arange(metsize)[None, :]
     lon_indices = (release_idxs[:, 1] - half)[:, None] + np.arange(metsize)[None, :]
 
-    lat_da = xr.DataArray(lat_indices, dims=["sample_id", "lat"], coords={"sample_id": met["sample_id"]})
-    lon_da = xr.DataArray(lon_indices, dims=["sample_id", "lon"], coords={"sample_id": met["sample_id"]})
+    # all three indexers carry the sample_id dim, so xarray broadcasts them into a single
+    # pointwise selection: every sample reads its own metsize x metsize block straight out
+    # of its own met timestep. Selecting the time first would materialise a full-domain
+    # field per sample before cropping it away, which for receptor data is one field per
+    # (time, receptor) pair rather than per timestep.
+    sample_vals = sample_coords["sample_id"]
+    time_da = xr.DataArray(time_positions, dims=["sample_id"], coords={"sample_id": sample_vals})
+    lat_da = xr.DataArray(lat_indices, dims=["sample_id", "lat"], coords={"sample_id": sample_vals})
+    lon_da = xr.DataArray(lon_indices, dims=["sample_id", "lon"], coords={"sample_id": sample_vals})
 
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
-        cropped_met = met.isel(lat=lat_da, lon=lon_da)
+        cropped_met = met.isel(time=time_da, lat=lat_da, lon=lon_da)
 
+    # indexing the time axis leaves the met timestamps behind as a 'time' coordinate along
+    # sample_id; met_timestamps holds the same thing with NaT for the unmatched samples
     cropped_met = (
         cropped_met
+        .drop_vars("time")
         .assign_coords(lat=np.arange(metsize), lon=np.arange(metsize))
+        .assign_coords(sample_coords)
         .assign({
             "lat_coords": xr.DataArray(
                 domain_lats[lat_indices], dims=["sample_id", "lat"],
-                coords={"sample_id": cropped_met["sample_id"]}),
+                coords={"sample_id": sample_vals}),
             "lon_coords": xr.DataArray(
                 domain_lons[lon_indices], dims=["sample_id", "lon"],
-                coords={"sample_id": cropped_met["sample_id"]}),
+                coords={"sample_id": sample_vals}),
         })
     )
 
@@ -1995,38 +2014,6 @@ def getint(name):
     num = name.split('_')[-1]
     num = num.split('.')[0]
     return int(num)
-
-def get_grid(data, latlon_fp=0):
-    """
-    produce reference grid and node indeces
-    """
-    if latlon_fp is None:
-        latlon_fp = 0
-        
-    print(f"getting grid for time {data.met.time.values[latlon_fp]}")
-    #print(f"making grid for footprint at time {data}")
-
-    if data.dataset_format == "square":
-        single_meshgrid = np.meshgrid(data.fp_lats[latlon_fp,:], data.fp_lons[latlon_fp,:])
-        latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
-
-        idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[latlon_fp,:]))), list(range(len(data.fp_lons[latlon_fp,:]))))
-        idx_meshgrid = np.array(idx_meshgrid)-int(data.size/2)
-        idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
-
-    elif data.dataset_format == "domain":
-        single_meshgrid = np.meshgrid(data.fp_lats[0], data.fp_lons[0])
-        latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
-
-        # should I find a way of making sure this idx meshgrid is consistent across different domain sizes?
-        idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[0]))), list(range(len(data.fp_lons[0]))))
-
-        #idx_meshgrid = np.array(idx_meshgrid)-int(data.size/2)
-
-        idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])]    
-
-
-    return latlons, idx_latlons
 
 """
 def grid_coordinates(side):
@@ -2139,13 +2126,13 @@ def get_grid(fp_xr, reference_fp=0):
     the grid is made from the lat/lon coordinates of the reference footprint, and the indices are centred around the reference footprint (i.e. the release point is at index (size//2, size//2)).
 
     Inputs:
-    - fp_xr: a xarray Dataset containing the footprint data as fp_xr, with variables fp_lats and fp_lons, and coordinates time, lat, lon
-    - reference_fp: the index of the reference footprint to use for grid generation. Default is 0 (the first footprint).
+    - fp_xr: a xarray Dataset containing the cropped footprint data, with variables lat_coords and lon_coords, and dimensions sample_id, lat, lon
+    - reference_fp: the position along sample_id of the reference footprint to use for grid generation. Default is 0 (the first footprint).
     """
     if reference_fp is None:
         reference_fp = 0
-        
-    single_meshgrid = np.meshgrid(fp_xr.lat_coords.isel(time=reference_fp), fp_xr.lon_coords.isel(time=reference_fp))  
+
+    single_meshgrid = np.meshgrid(fp_xr.lat_coords.isel(sample_id=reference_fp), fp_xr.lon_coords.isel(sample_id=reference_fp))
 
     latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(fp_xr.lon.size) for j in range(fp_xr.lat.size)]
 

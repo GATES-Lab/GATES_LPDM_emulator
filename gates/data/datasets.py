@@ -1382,21 +1382,5 @@ def get_square_satellite_inputs_v2(
             "All requested variables/levels were unavailable after filtering. "
             "Please check met_variables/met_levels/static_variables against dataset contents."
         )
-    
-    len_inputs_before = len(concatenated_inputs.fp_time)
-
-    if len(concatenated_inputs.fp_time) < len_inputs_before:
-        warnings.warn(
-            f"Dropped {len_inputs_before - len(concatenated_inputs.fp_time)} duplicate fp_time entries after concatenating inputs. "
-            "The duplicates have been dropped, but you may want to investigate the underlying met timestamp issues for those fp_time entries."
-        )
-        len_fp_before = len(data.fp_xr.time)
-        data.fp_xr = data.fp_xr.sel(time=concatenated_inputs.fp_time.values)
-        print(f"Filtered fp_xr to keep only {len(data.fp_xr.time)} unique time steps (from the original number of samples {len_fp_before})")
-
-
-
-
-
 
     return concatenated_inputs, data

@@ -205,15 +205,16 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
             to preserve backward compatibility.
 
     Returns:
-        fp_xr (xr.Dataset): Concatenated footprints with shape (time, lat, lon).
-        inputs (xr.DataArray): Concatenated met inputs with shape (fp_time, lat, lon, variable_name).
+        fp_xr (xr.Dataset): Concatenated footprints with shape (sample_id, lat, lon).
+        inputs (xr.DataArray): Concatenated met inputs with shape (sample_id, lat, lon, variable_name).
+            Both are sorted chronologically and share a fresh 1..N sample_id, since the
+            per-year sample_ids collide once concatenated.
         wandb_year_counter (int): Final counter value after all years are loaded.
             Only returned when return_wandb_year_counter=True.
     """
     if "met_args" in data_parameters and "met_args" in datapath_args:
         merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
         data_parameters["met_args"] = merged_met_args
-        datapath_args.pop("met_args")
 
     #load_into_memory = data_parameters.get("load_into_memory", False)
     years, months = _resolve_years_months(data_parameters)
@@ -242,6 +243,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     met_args.setdefault("met_variables", input_variables.get("met_variables", []))
     met_args.setdefault("met_levels", input_variables.get("met_levels", []))
     base_params["met_args"] = met_args
+    datapath_args.pop("met_args", None)
 
     all_inputs = []
     all_fp_xr = []
@@ -260,16 +262,20 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
         if verbose:
             print(f"Loading year={year} (whole year in one pass)")
         year_params = {**base_params, "year": year, "month": None}
+        print(f"year_params: {year_params}")
+        print(f"datapath_args: {datapath_args}")
         try:
             data = LoadSquareSatelliteData(**year_params, **datapath_args, verbose=verbose)
 
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
 
             # Filter to the requested months, if any (met stays whole-year, so
-            # cross-month-boundary time_deltas are already resolved).
+            # cross-month-boundary time_deltas are already resolved). The same mask is
+            # applied to both so the footprints and their inputs stay paired.
             if requested_months is not None:
-                inputs = inputs.sel(fp_time=np.isin(inputs.fp_time.dt.month, requested_months))
-                data.fp_xr = data.fp_xr.sel(time=np.isin(data.fp_xr.time.dt.month, requested_months))
+                keep_months = np.isin(data.fp_xr.time.dt.month, requested_months)
+                inputs = inputs.isel(sample_id=keep_months)
+                data.fp_xr = data.fp_xr.isel(sample_id=keep_months)
 
             if load_into_memory:
                 print(f"Loading data into memory for {year} before concatenation...")
@@ -287,7 +293,9 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
             if hasattr(data, "fp_data_full") and data.fp_data_full is not None:
                 data.fp_data_full.close()
 
-            loaded_samples = len(data.fp_xr.fp.time)
+            loaded_samples = data.fp_xr.sizes["sample_id"]
+
+            print(data.fp_xr.sizes["sample_id"])
 
         except Exception as e:
             print(f"Error loading data for {year}: {e}")
@@ -317,9 +325,21 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     print("\n".join(f"{k} : {v}" for k, v in loading_times.items()))
     print("")
 
-    
-    fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
-    inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
+    print(all_fp_xr)
+    fp_xr = xr.concat(all_fp_xr, dim="sample_id")
+    inputs = xr.concat(all_inputs, dim="sample_id")
+
+    # sample_id is assigned per load, so it restarts at 1 for every year and is no
+    # longer unique after concatenating. Sort chronologically and renumber, driving
+    # both off the same order so the footprints and their inputs stay paired (they
+    # come out of each year's load in the same sample_id order).
+    chronological = np.argsort(fp_xr.time.values, kind="stable")
+    fp_xr = fp_xr.isel(sample_id=chronological)
+    inputs = inputs.isel(sample_id=chronological)
+
+    sample_ids = np.arange(1, fp_xr.sizes["sample_id"] + 1)
+    fp_xr = fp_xr.assign_coords(sample_id=sample_ids)
+    inputs = inputs.assign_coords(sample_id=sample_ids)
 
     if return_wandb_year_counter:
         return fp_xr, inputs, wandb_year_counter

@@ -196,8 +196,8 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         print("adding outputs to dataset for evaluation")
         write_to_file("adding outputs to dataset for evaluation", paths_ctx.updates_path)
 
-        test_fp_dataset["fp_transformed_pred"] = (("time", "lat", "lon"), test_out.reshape(*test_fp_dataset.fp_original.shape))  # reshape to (samples, H, W, 1) for evaluation and plotting
-        test_fp_dataset["fp_pred"] = (("time", "lat", "lon"), outputs_original_space.reshape(*test_fp_dataset.fp_original.shape)) 
+        test_fp_dataset["fp_transformed_pred"] = (("sample_id", "lat", "lon"), test_out.reshape(*test_fp_dataset.fp_original.shape))  # reshape to (samples, H, W, 1) for evaluation and plotting
+        test_fp_dataset["fp_pred"] = (("sample_id", "lat", "lon"), outputs_original_space.reshape(*test_fp_dataset.fp_original.shape))
 
 
 
@@ -372,36 +372,38 @@ def train_and_save_model(parameters, model_save_dir):
 
     client, cluster = gates_training.make_cluster()
 
-    load_monthly = parameters.get("load_data_monthly", False)
-    
-    if not load_monthly:
-        data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
-        train_fp_data = data.fp_xr
+    #new_data_loaders = parameters.get("new_data_loaders", True)
+    new_data_loaders = True  # force to True for now, until the old loaders are removed
+    # if not new_data_loaders:
+    #     data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
+    #     train_fp_data = data.fp_xr
 
-    if load_monthly:
+    if new_data_loaders:
         data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
         train_fp_data = data
 
-    write_to_file(f"Successfully loaded training met and fp data with {len(train_fp_data.time)} time samples. Loading test data", paths_ctx.updates_path)
-    print("Successfully loaded training met and fp data with", len(train_fp_data.time), "time samples")
+    print(train_fp_data)
+    write_to_file(f"Successfully loaded training met and fp data with {train_fp_data.sizes['sample_id']} samples. Loading test data", paths_ctx.updates_path)
+    print("Successfully loaded training met and fp data with", train_fp_data.sizes["sample_id"], "samples")
     print("Loading test data")
 
-    if not load_monthly:
-        test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
-        test_fp_data = test_data.fp_xr
-    if load_monthly:
+    # if not new_data_loaders:
+    #     test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+    #     test_fp_data = test_data.fp_xr
+
+    if new_data_loaders:
         test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
         test_fp_data = test_data
         
 
-    write_to_file(f"Successfully load test met and fp data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
-    print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")
+    write_to_file(f"Successfully load test met and fp data with {test_fp_data.sizes['sample_id']} samples", paths_ctx.updates_path)
+    print("Successfully load test met and fp data with", test_fp_data.sizes["sample_id"], "samples")
 
     if use_wandb:
         # save the number of testing and training samples to wandb config for reference
         wandb.summary.update({
-            "num_training_samples": len(train_fp_data.time),
-            "num_testing_samples": len(test_fp_data.time),
+            "num_training_samples": train_fp_data.sizes["sample_id"],
+            "num_testing_samples": test_fp_data.sizes["sample_id"],
         })
     
     ## add the number of features to the parameter file, and to wandb
@@ -443,10 +445,14 @@ def train_and_save_model(parameters, model_save_dir):
     save_object(scalers, "scalers",
     paths_ctx.training_outputs_path, model_name, description=f"Input and output scaler objects used in model {model_name}", use_wandb=use_wandb)
     
-    # images will get plotted and saved for a random selection of 4 dates from the test set - these indeces are saved to parameters for reference 
-    image_plots = random.sample(list(range(len(test_inputs))), k=4)
-    image_dates = np.datetime_as_string(test_fp_data.time.values[sorted(image_plots)])
+    # images will get plotted and saved for a random selection of 4 samples from the test
+    # set - these sample_ids and their dates are saved to parameters for reference.
+    # sampled from test_scaled_fp rather than test_inputs because it has been trimmed to
+    # a whole number of batches, so every id picked here is actually plottable.
+    image_plots = sorted(random.sample(list(test_scaled_fp.sample_id.values), k=4))
+    image_dates = np.datetime_as_string(test_scaled_fp.time.sel(sample_id=image_plots).values)
 
+    parameters["plotted_sample_ids"] = [int(s) for s in image_plots]
     parameters["plotted_dates"] = image_dates.tolist()
 
     save_object(parameters, "training_settings", paths_ctx.training_outputs_path, model_name,  file_type="json", description=f"Training settings and hyperparameters for model {model_name}", use_wandb=use_wandb)
