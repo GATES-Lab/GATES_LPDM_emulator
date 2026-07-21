@@ -16,6 +16,7 @@ import os
 import copy
 import warnings
 from pathlib import Path
+import re
 
 import cartopy.crs as ccrs
 import cartopy
@@ -397,6 +398,8 @@ class LoadBaseSatelliteData:
             self.year = int(str(year)[:4])
         elif "[" in str(year):
             self.year = str(year)
+        elif year == "*":
+            self.year = "*"
         else:
             self.year = int(year)
 
@@ -1365,9 +1368,18 @@ class LoadReceptorData(LoadSquareSatelliteData):
     NOTE: flux and the input/dataloader machinery are not yet updated for the
     sample_id layout, so load_everything defaults to False.
     """
-    def __init__(self, year, region="BRAZIL", month=None, domain=None, size=10,
+    def __init__(self, year, region="Canterbury", subregion=None, month=None, domain=None, size=10,
                  fp_zarr_datadir=None, fp_format="zarr",
                  load_everything=False, **kwargs):
+
+        self.super_region=str(region).upper()
+        self.subregion=subregion
+        if subregion is not None:
+            region = f"{region}{subregion}"
+        # if there is a number in the super_region, keep the string ONLY before the number
+        if any(char.isdigit() for char in self.super_region):
+            self.super_region = re.split(r"\d", self.super_region)[0]
+
         super().__init__(
             year, region=region, month=month, domain=domain, size=size,
             fp_zarr_datadir=fp_zarr_datadir, fp_format=fp_format,
@@ -1379,6 +1391,44 @@ class LoadReceptorData(LoadSquareSatelliteData):
         if self.verbose:
             print("----- Flattening (time, receptor) footprints into sample_id index")
         return _stack_receptors_to_sample_id(fp_data_full)
+
+    def split_samples(self, mode="random", split_fractions={"train":0.75, "val":0.20, "test":0.05}, return_fps=False, random_seed=None):
+        """
+        Split the sample_id index into train, val and test sets. Returns a dict with keys "train", "val" and "test" and values as lists of sample_id values for each set. The split is done randomly by default, but can be changed to "sequential" to split the sample_id index sequentially (eg first 75% for train, next 20% for val, last 5% for test). The split fractions can be changed by passing a dict with keys "train", "val" and "test" and values as the fractions to use for each set. The fractions should sum to 1.0.
+        """
+        if mode=="random":
+            sample_ids = self.fp_data_full.sample_id.values
+            np.random.shuffle(sample_ids)
+            n_samples = len(sample_ids)
+            train_end = int(split_fractions["train"] * n_samples)
+            val_end = train_end + int(split_fractions["val"] * n_samples)
+            self.data_split = {
+                "train": sample_ids[:train_end],
+                "val": sample_ids[train_end:val_end],
+                "test": sample_ids[val_end:],
+            }
+        elif mode=="sequential":
+            sample_ids = self.fp_data_full.sample_id.values
+            n_samples = len(sample_ids)
+            train_end = int(split_fractions["train"] * n_samples)
+            val_end = train_end + int(split_fractions["val"] * n_samples)
+            self.data_split = {
+                "train": sample_ids[:train_end],
+                "val": sample_ids[train_end:val_end],
+                "test": sample_ids[val_end:],
+            }
+        else:
+            raise ValueError(f"mode {mode} not recognized. Use 'random' or 'sequential'.")
+        if self.verbose:
+            print(f"Data split into {len(self.data_split['train'])} train, {len(self.data_split['val'])} val and {len(self.data_split['test'])} test samples.")
+        
+        if not return_fps:
+            return self.data_split
+        
+        elif return_fps:
+            return {k: self.fp_xr.sel(sample_id=v) for k, v in self.data_split.items()}
+    
+
 
 
 def _get_release_idxs(fp, domain_lats=None, domain_lons=None):

@@ -32,7 +32,7 @@ import wandb
 from gates.model.forecast import GraphSatelliteForecaster
 
 
-from gates import LoadSquareSatelliteData
+from gates import LoadSquareSatelliteData, LoadReceptorData
 import gates.data.datasets as gates_datasets
 from gates.data.datasets import get_square_satellite_inputs_v2
 import gates.evaluation.metrics as gates_metrics
@@ -345,6 +345,117 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
         return fp_xr, inputs, wandb_year_counter
     return fp_xr, inputs
 
+
+def load_receptor_data(data_parameters, input_variables, sampling_params, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False):
+
+    if "met_args" in data_parameters and "met_args" in datapath_args:
+        merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
+        data_parameters["met_args"] = merged_met_args
+
+    ## only keeping the years parameter
+    years, _ = _resolve_years_months(data_parameters)
+    if years != ["*"]:
+        raise ValueError("For receptor data, the 'years' parameter must be set to '*' to load all available years.")
+    year = "*"
+    
+    # if only region is present, turn into a list. otherwise use regions list if present. This is to allow for loading multiple regions at once, but also for backwards compatibility with the old region parameter.
+    if "regions" in data_parameters and isinstance(data_parameters["regions"], list):
+        regions = data_parameters["regions"]
+    else:  
+        region = data_parameters.get("region")
+        regions = [region]
+    
+    base_params = {
+        k: v for k, v in data_parameters.items()
+        if k not in ("year", "years", "month", "months", "load_into_memory", "regions", "region")
+    }        
+
+    met_args = dict(base_params.get("met_args", {}))
+    met_args.setdefault("met_variables", input_variables.get("met_variables", []))
+    met_args.setdefault("met_levels", input_variables.get("met_levels", []))
+    base_params["met_args"] = met_args
+    datapath_args.pop("met_args", None)
+
+    all_inputs = {"train":[], "val":[], "test":[]}
+    all_fp_xr = {"train":[], "val":[], "test":[]}
+    loading_times = {}
+
+    total_time= 0
+    total_samples = {"train":0, "val":0, "test":0}
+
+    if use_wandb:
+        wandb.define_metric("loading/loaded_region")
+        wandb.define_metric("loading/*", step_metric="loading/loaded_region")
+    
+    wandb_region_counter = 1
+    for region in regions:
+        if verbose:
+            print("Loading receptor data for region:", region)
+        region_start = time.perf_counter() 
+
+        try:
+            data = LoadReceptorData(year, region=region, **base_params, **datapath_args, verbose=verbose, load_everything=True)
+
+            inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
+        
+        except Exception as e:
+            print(f"Error loading data for region {region}: {e}")
+            loaded_samples = 0
+
+        if sampling_params["schema"] in ["random", "sequential"]:
+            split_fractions = sampling_params.get("split_fractions", {"train":0.75, "val":0.20, "test":0.05})
+
+            split_dict = data.split_samples(mode=sampling_params["schema"], split_fractions=split_fractions)
+        
+        else:
+            raise ValueError(f"Unknown sampling schema: {sampling_params['schema']}. Supported schemas are 'random' and 'sequential'.")
+        
+        all_inputs = {k: all_inputs[k] + [inputs.sel(sample_id=split_dict[k])] for k in split_dict}
+        all_fp_xr = {k: all_fp_xr[k] + [data.fp_xr.sel(sample_id=split_dict[k])] for k in split_dict}
+        
+        samples_loaded = sum(len(split_dict[k]) for k in split_dict)
+        total_samples = {k: total_samples[k] + len(split_dict[k]) for k in split_dict}
+
+        if verbose:
+            print("Loaded samples for region", region, ":", samples_loaded)
+
+        elapsed_mins = (time.perf_counter() - region_start) / 60
+
+        loading_times[region] = elapsed_mins
+        total_time += elapsed_mins
+
+        if use_wandb:
+            wandb.log({
+                "loading/loaded_region": wandb_region_counter,
+                "loading/train_time": elapsed_mins,
+                "loading/total_time": total_time,
+                "loading/samples_loaded": loaded_samples,
+                "loading/total_samples": total_samples,
+            })
+        wandb_region_counter += 1
+    
+    inputs = {}
+    fp_xr = {}
+    for split in ["train", "val", "test"]:
+        fp_xr[split] = xr.concat(all_fp_xr[split], dim="sample_id")
+        inputs[split] = xr.concat(all_inputs[split], dim="sample_id")
+
+    first_sample_id = 1
+    for split in ["train", "val", "test"]:
+        sample_ids = np.arange(first_sample_id, first_sample_id + fp_xr[split].sizes["sample_id"])
+        fp_xr[split] = fp_xr[split].assign_coords(sample_id=sample_ids)
+        inputs[split] = inputs[split].assign_coords(sample_id=sample_ids)
+        first_sample_id = sample_ids[-1] + 1
+    
+    if verbose:
+        print("Total samples loaded:", total_samples)
+        print("")
+        print("")
+        print("----- Loading times for each region -----")
+        print("\n".join(f"{k} : {v:.2f}mins" for k, v in loading_times.items()))
+        print("")
+    
+    return fp_xr, inputs
 
 def _get_scaler(scaler_name, scaler_module=None):
     """

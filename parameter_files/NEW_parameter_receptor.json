@@ -1,0 +1,93 @@
+{
+    "model_name" : "SAHARA_receptor_test",
+    "sample_mode": "receptors",
+    "verbose": true,
+    "parallel_loading": true,
+    "load_into_memory": true,
+    "mode":"receptor",
+    "train_load_data" : {
+        "years": "*",
+        "domain":"NEWZEALAND",
+        "region":"Canterbury",
+        "size":50,
+    "crop_met": false
+    },
+
+    "receptor_split" : {
+        "schema":"random",
+        "split_fractions":{"train":0.75, "val":0.20, "test":0.05}
+    },
+
+    "variables" : {
+        "met_variables":["x_wind", "y_wind", "atmosphere_boundary_layer_thickness"],
+        "met_levels":[ 9],
+        "static_variables":["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "x_coords", "y_coords", "xy_distance_centre", "topog", "land_cover"], 
+        "time_deltas":[12],
+        "add_wind_direction":true
+    },
+
+    "input_scaler" : {
+        "scaler":"DefaultInputsScaler",
+        "fit_on_subsample":1,
+        "scaler_params":{}
+    },
+
+    "fp_scaler": {
+        "scaler":"LogAndShiftFpScaler",
+        "scaler_params":{}
+    },
+
+
+    "dataloader":{
+        "batch_size": 5,
+        "test_batch_size": 5,
+        "nans_to_zeros": true,
+
+        "dataloader_params": {
+                "prefetch_factor": 3,
+                "num_workers": 2,
+                "pin_memory": true,
+                "persistent_workers": true,
+                "multiprocessing_context": "forkserver",
+            "shuffle": true}
+    },
+
+    "model_parameters":{
+        "num_blocks":4, 
+        "node_dim":64, 
+        "edge_dim":64, 
+        "hidden_layers_processor_node":2, 
+        "hidden_layers_processor_edge":2,  
+        "hidden_layers_decoder":1, 
+        "hidden_dim_processor_node":16, 
+        "hidden_dim_processor_edge":16, 
+        "hidden_dim_decoder":16, 
+        "resolution":4, 
+        "output_dim":1, 
+        "residuals":false, 
+        "attention":false
+    },
+
+    "learning_rate":5e-5,
+    "use_wandb":false,
+    "wandb": {
+        "project": "gates-tests-receptor",
+        "entity": "gates-lab",
+        "tags": ["receptor"]
+    },
+
+    "epochs" : {
+        "training": 5,
+        "visualize": 2,
+        "patience": 100,
+        "model_save": 50
+    },    
+
+    "loss_functions" : {
+        "criterion": "gates_losses.PixelWeightedMSELoss",
+        "criterion_params": {"weight_label":"fp_original", "transform_fn":"scale_and_shift", "w":1000, "a":0.5},
+        "criterion_test": "gates_losses.MSELoss",
+        "criterion_test_params": {}
+    }  
+      
+}

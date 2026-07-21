@@ -358,46 +358,59 @@ def train_and_save_model(parameters, model_save_dir):
     write_to_file(f"using device {device}, starting at" + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
     write_to_file("loading data", paths_ctx.updates_path)
 
-    train_load_data_params = copy.deepcopy(parameters["train_load_data"])
-    test_load_data_params = copy.deepcopy(parameters["train_load_data"])
-    test_load_data_params.update(parameters["test_load_data"])
+    sample_mode = parameters.get("sample_mode", "satellite")
+
+    if sample_mode not in ["satellite", "receptors"]:
+        raise ValueError(f"Invalid sample_mode '{sample_mode}'. Must be 'satellite' or 'receptors'.")
 
     input_variables = parameters["variables"]
-
-    # the data is extracted from the config file, unless it is superced from parameters. resolve_datapath_args returns the correct path in a dictionary passed to the data objects 
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
 
-    print("Loading met and fp data for model", model_name)
-    write_to_file("Load training and testing met and fp data", paths_ctx.updates_path)
-
     client, cluster = gates_training.make_cluster()
+    
+    if sample_mode == "satellite":
 
-    #new_data_loaders = parameters.get("new_data_loaders", True)
-    new_data_loaders = True  # force to True for now, until the old loaders are removed
-    # if not new_data_loaders:
-    #     data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
-    #     train_fp_data = data.fp_xr
+        train_load_data_params = copy.deepcopy(parameters["train_load_data"])
+        test_load_data_params = copy.deepcopy(parameters["train_load_data"])
+        test_load_data_params.update(parameters["test_load_data"])
 
-    if new_data_loaders:
+        
+        # the data is extracted from the config file, unless it is superced from parameters. resolve_datapath_args returns the correct path in a dictionary passed to the data objects 
+        
+        print("[SATELLITE MODE] Loading met and fp data for model", model_name)
+        write_to_file("[SATELLITE MODE] Load training and testing met and fp data", paths_ctx.updates_path)
+
+        
         data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
         train_fp_data = data
 
-    print(train_fp_data)
-    write_to_file(f"Successfully loaded training met and fp data with {train_fp_data.sizes['sample_id']} samples. Loading test data", paths_ctx.updates_path)
-    print("Successfully loaded training met and fp data with", train_fp_data.sizes["sample_id"], "samples")
-    print("Loading test data")
+        print(train_fp_data)
+        write_to_file(f"Successfully loaded training met and fp data with {train_fp_data.sizes['sample_id']} samples. Loading test data", paths_ctx.updates_path)
+        print("Successfully loaded training met and fp data with", train_fp_data.sizes["sample_id"], "samples")
+        print("Loading test data")
 
-    # if not new_data_loaders:
-    #     test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
-    #     test_fp_data = test_data.fp_xr
 
-    if new_data_loaders:
+
         test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
         test_fp_data = test_data
-        
 
-    write_to_file(f"Successfully load test met and fp data with {test_fp_data.sizes['sample_id']} samples", paths_ctx.updates_path)
-    print("Successfully load test met and fp data with", test_fp_data.sizes["sample_id"], "samples")
+        write_to_file(f"Successfully load test met and fp data with {test_fp_data.sizes['sample_id']} samples", paths_ctx.updates_path)
+        print("Successfully load test met and fp data with", test_fp_data.sizes["sample_id"], "samples")
+
+    if sample_mode == "receptors":
+        sampling_params = parameters.get("receptor_split", None)
+        train_load_data_params = copy.deepcopy(parameters["train_load_data"])
+        if sampling_params is None:
+            raise ValueError("receptor_split parameters must be provided when sample_mode is 'receptors'.")
+        print("going into the load receptor function")
+        fp_xr_dict, inputs_dict = gates_training.load_receptor_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, sampling_params=sampling_params, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
+
+        #### NOTE THAT HERE WE ARE IGNORING THE ACTUAL TEST!
+        ## USE ONLY IN PREDICTION
+        train_fp_data = fp_xr_dict["train"]
+        test_fp_data = fp_xr_dict["val"]
+        train_inputs = inputs_dict["train"]
+        test_inputs = inputs_dict["val"]
 
     if use_wandb:
         # save the number of testing and training samples to wandb config for reference

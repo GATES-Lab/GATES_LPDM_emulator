@@ -40,6 +40,8 @@ class PathContext:
                 datapath_args["topog_args"]["topog_datadir"] = parameters["data_dirs"]["topog_datadir"]
             if "landcover_datadir" in parameters["data_dirs"]:
                 datapath_args["topog_args"]["landcover_datadir"] = parameters["data_dirs"]["landcover_datadir"]
+            if "fp_zarr_datadir" in parameters["data_dirs"]:
+                datapath_args["fp_zarr_datadir"] = parameters["data_dirs"]["fp_zarr_datadir"]
         #self.datapath_args = datapath_args
         return datapath_args
 
