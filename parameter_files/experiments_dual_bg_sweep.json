@@ -1,8 +1,8 @@
 {
   "experiments": [
-    { "name": "bg0",    "overrides": { "loss_functions.bg_loss_weight": 0.0 } },
-    { "name": "bg0p33", "overrides": { "loss_functions.bg_loss_weight": 0.33 } },
-    { "name": "bg0p67", "overrides": { "loss_functions.bg_loss_weight": 0.67 } },
-    { "name": "bg1",    "overrides": { "loss_functions.bg_loss_weight": 1.0 } }
+    { "name": "bg001",    "overrides": { "loss_functions.bg_loss_weight": 0.01 } },
+    { "name": "bg005", "overrides": { "loss_functions.bg_loss_weight": 0.05 } },
+    { "name": "bg01", "overrides": { "loss_functions.bg_loss_weight": 0.1 } },
+    { "name": "bg015",    "overrides": { "loss_functions.bg_loss_weight": 0.15 } }
   ]
 }

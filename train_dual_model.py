@@ -38,7 +38,7 @@ from gates.training.training_background import format_aux_data, normalize_bounda
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
 from gates.training.training_helperfuns import (
     load_parameter_file, save_object, write_to_file, save_training_plots,
-    export_results_to_netcdf, set_reproducibility,
+    save_bg_timeseries_plots, export_results_to_netcdf, set_reproducibility,
 )
 
 
@@ -102,10 +102,13 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
 
 @torch.no_grad()
 def validate_and_predict(model, loader, model_ctx, output_norm=None):
-    """Validate the joint model; returns losses plus stacked footprint predictions.
+    """Validate the joint model; returns losses plus stacked footprint and background predictions.
 
-    Returns ``(avg_total, avg_fp, avg_bg, bg_mae_denorm, fp_preds)`` where ``fp_preds`` are the
-    normalised footprint-head predictions stacked across batches (shape (N_samples, n_nodes)).
+    Returns ``(avg_total, avg_fp, avg_bg, bg_mae_denorm, fp_preds, bg_preds, bg_trues)`` where
+    ``fp_preds`` are the normalised footprint-head predictions stacked across batches (shape
+    (N_samples, n_nodes)) and ``bg_preds``/``bg_trues`` are the normalised background-head
+    predictions/targets stacked across batches (shape (N_samples, num_classes)). The test loader
+    is not shuffled, so these stay aligned with the test time coordinate.
     """
     model.eval()
     total_err = 0.0
@@ -113,6 +116,8 @@ def validate_and_predict(model, loader, model_ctx, output_norm=None):
     bg_err = 0.0
     bg_mae_denorm = 0.0
     fp_preds = []
+    bg_preds = []
+    bg_trues = []
     n_batches = 0
 
     for batch in loader:
@@ -141,18 +146,28 @@ def validate_and_predict(model, loader, model_ctx, output_norm=None):
             bg_mae_denorm += float(diff.reshape(diff.shape[0], -1).mean().item())
 
         fp_preds.append(fp_pred.cpu().numpy().reshape(fp_pred.shape[0], -1))
+        bg_preds.append(bg_pred.cpu().numpy().reshape(bg_pred.shape[0], -1))
+        bg_trues.append(bg_batch.cpu().numpy().reshape(bg_batch.shape[0], -1))
         n_batches += 1
 
     denom = max(n_batches, 1)
     return (total_err / denom, fp_err / denom, bg_err / denom,
             bg_mae_denorm / denom if output_norm is not None else None,
-            np.vstack(fp_preds))
+            np.vstack(fp_preds), np.vstack(bg_preds), np.vstack(bg_trues))
 
 
 def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, test_loader,
-                      test_fp_dataset, losses, output_norm=None, epoch_so_far=0):
-    """Joint training loop with footprint-head metrics and background-head MAE."""
+                      test_fp_dataset, losses, output_norm=None, epoch_so_far=0,
+                      bg_detrended=True):
+    """Joint training loop with footprint-head metrics and background-head MAE.
+
+    Background time-series plots and their NetCDF export are produced for single-class
+    (``num_classes=1``, summed) runs only; ``bg_detrended`` records whether the backgrounds
+    were detrended (affects only plot labels).
+    """
     write_to_file("starting dual training loop", paths_ctx.updates_path)
+
+    bg_true_ppb = bg_pred_ppb = None
 
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx + epoch_so_far
@@ -162,7 +177,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             model, train_loader, model_ctx, epoch, paths_ctx=paths_ctx
         )
         # Nawid- get the validation parameters
-        avg_test_total, avg_test_fp, avg_test_bg, bg_mae_denorm, fp_test_out = validate_and_predict(
+        avg_test_total, avg_test_fp, avg_test_bg, bg_mae_denorm, fp_test_out, bg_test_out, bg_test_true = validate_and_predict(
             model, test_loader, model_ctx, output_norm=output_norm
         )
 
@@ -215,10 +230,28 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             log_text += f", bg MAE(denorm) {bg_mae_denorm:.4e}"
         write_to_file(log_text, paths_ctx.updates_path)
 
+        # Nawid - denormalise the background head outputs and convert mol/mol -> ppb so the
+        # time-series plots and the NetCDF export are in physical units. Only done for the
+        # single-class (summed) case.
+        if output_norm is not None and bg_test_out.shape[1] == 1:
+            mean, std = output_norm
+            bg_true_ppb = denormalize(bg_test_true[:, 0], mean, std) * 1e9
+            bg_pred_ppb = denormalize(bg_test_out[:, 0], mean, std) * 1e9
+
         if epoch % model_ctx.epochs_visualise == 0:
             img_save_path = save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
             if model_ctx.use_wandb:
                 wandb.log({f"fps_epoch_{epoch}": wandb.Image(img_save_path)}, step=epoch)
+
+            # Nawid - background time series (true vs predicted, denormalised, in ppb) over
+            # 4 week-long windows spread across the test period.
+            if bg_true_ppb is not None:
+                bg_img_path = save_bg_timeseries_plots(
+                    epoch, test_fp_dataset.time.values, bg_true_ppb, bg_pred_ppb,
+                    paths_ctx.model_path, paths_ctx.model_name, detrended=bg_detrended,
+                )
+                if model_ctx.use_wandb:
+                    wandb.log({f"bg_timeseries_epoch_{epoch}": wandb.Image(str(bg_img_path))}, step=epoch)
 
         if epoch % model_ctx.epochs_save == 0:
             checkpoint_path = paths_ctx.model_path / f"{paths_ctx.model_name}_{epoch}.pt"
@@ -229,6 +262,18 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 'loss': losses,
                 'learning_rate': model_ctx.lr,
             }, checkpoint_path)
+
+    # Nawid - include the last epoch's background time series (denormalised, ppb) in the export
+    # so the raw values behind the plots are saved alongside the footprint predictions.
+    if bg_true_ppb is not None:
+        test_fp_dataset["bg_true_ppb"] = (("time",), bg_true_ppb)
+        test_fp_dataset["bg_pred_ppb"] = (("time",), bg_pred_ppb)
+        test_fp_dataset["bg_true_ppb"].attrs["units"] = "ppb"
+        test_fp_dataset["bg_pred_ppb"].attrs["units"] = "ppb"
+        if bg_detrended:
+            note = "detrended: relative to the south-boundary midpoint baseline"
+            test_fp_dataset["bg_true_ppb"].attrs["note"] = note
+            test_fp_dataset["bg_pred_ppb"].attrs["note"] = note
 
     export_results_to_netcdf(test_fp_dataset, paths_ctx.model_path, model_ctx.model_name, use_wandb=model_ctx.use_wandb)
     print("Finished Training.")
@@ -461,6 +506,7 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     run_full_training(
         model, model_ctx, training_ctx, paths_ctx, train_loader, test_loader,
         test_scaled_fp, losses, output_norm=norm_vals["outputs"], epoch_so_far=0,
+        bg_detrended=background_params["detrend"],
     )
 
     if use_wandb:
