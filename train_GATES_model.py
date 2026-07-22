@@ -31,7 +31,7 @@ from gates.config import get_config
 from gates.data.load_data import get_grid
 from gates.training.training_dataclasses import PathContext, TrainingContext
 
-from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility
+from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility, plot_receptor_split
 
 
 
@@ -423,6 +423,9 @@ def train_and_save_model(parameters, model_save_dir):
             raise ValueError("receptor_split parameters must be provided when sample_mode is 'receptors'.")
         print("going into the load receptor function")
         fp_xr_dict, inputs_dict = gates_training.load_receptor_data(train_load_data_params, input_variables=input_variables, flux_args=flux_args, datapath_args=datapath_args, sampling_params=sampling_params, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
+
+        split_plot_path = plot_receptor_split(fp_xr_dict, paths_ctx.model_path, model_name, verbose=verbose, use_wandb=use_wandb)
+        write_to_file(f"Receptor split plot saved to: {split_plot_path}", paths_ctx.updates_path)
 
         #### NOTE THAT HERE WE ARE IGNORING THE ACTUAL TEST!
         ## USE ONLY IN PREDICTION

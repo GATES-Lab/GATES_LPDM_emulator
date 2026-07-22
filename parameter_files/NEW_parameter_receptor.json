@@ -1,5 +1,5 @@
 {
-    "model_name" : "SAHARA_receptor_test",
+    "model_name" : "CANTAB1a_long_test",
     "sample_mode": "receptors",
     "verbose": true,
     "parallel_loading": true,
@@ -8,14 +8,22 @@
     "train_load_data" : {
         "years": "*",
         "domain":"NEWZEALAND",
-        "region":"Canterbury",
+        "region":"Canterbury1a",
         "size":50,
     "crop_met": false
     },
 
     "receptor_split" : {
-        "schema":"random",
-        "split_fractions":{"train":0.75, "val":0.20, "test":0.05}
+        "schema":"box",
+        "box_params": {
+            "boxes_file": "/esi/project/niwa03448/METHANESAT/project/MSAT_2025/GATES_emulator/GATES_LPDM_emulator/receptor_boxes.json",
+            "boxes": ["mountains", "plains"],
+            "buffer_width": 0.1,
+            "box_split_fractions":{"val":0.20, "test":0.80}
+        },
+        "random_sequential_split_fractions": {"train":0.75, "val":0.20, "test":0.05},
+        "train_freq": 3
+
     },
 
     "variables" : {
@@ -23,7 +31,8 @@
         "met_levels":[ 9],
         "static_variables":["sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords", "lat_coords", "lon_coords", "x_coords", "y_coords", "xy_distance_centre", "topog", "land_cover"], 
         "time_deltas":[12],
-        "add_wind_direction":true
+        "add_wind_direction":true,
+        "load_into_memory": true
     },
 
     "input_scaler" : {
@@ -62,14 +71,14 @@
         "hidden_dim_processor_node":16, 
         "hidden_dim_processor_edge":16, 
         "hidden_dim_decoder":16, 
-        "resolution":4, 
+        "resolution":7,
         "output_dim":1, 
         "residuals":false, 
         "attention":false
     },
 
     "learning_rate":5e-5,
-    "use_wandb":false,
+    "use_wandb":true,
     "wandb": {
         "project": "gates-tests-receptor",
         "entity": "gates-lab",
@@ -77,8 +86,8 @@
     },
 
     "epochs" : {
-        "training": 5,
-        "visualize": 2,
+        "training": 150,
+        "visualize": 10,
         "patience": 100,
         "model_save": 50
     },    

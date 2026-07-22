@@ -414,12 +414,24 @@ def load_receptor_data(data_parameters, input_variables, sampling_params, datapa
             loaded_samples = 0
 
         if sampling_params["schema"] in ["random", "sequential"]:
-            split_fractions = sampling_params.get("split_fractions", {"train":0.75, "val":0.20, "test":0.05})
+            split_fractions = sampling_params.get("random_sequential_split_fractions", {"train":0.75, "val":0.20, "test":0.05})
 
             split_dict = data.split_samples(mode=sampling_params["schema"], split_fractions=split_fractions)
-        
+
+        elif sampling_params["schema"] == "box":
+            box_params = sampling_params.get("box_params", {})
+            boxes_file = box_params.get("boxes_file")
+            boxes = box_params.get("boxes")
+            buffer_width = box_params.get("buffer_width")
+            split_fractions = box_params.get("box_split_fractions", {"val":0.20, "test":0.80})
+
+            train_freq = sampling_params.get("train_freq")
+
+            split_dict = data.split_samples_box(boxes_file=boxes_file, boxes=boxes, buffer_width=buffer_width,
+                                                split_fractions=split_fractions, train_freq=train_freq)
+
         else:
-            raise ValueError(f"Unknown sampling schema: {sampling_params['schema']}. Supported schemas are 'random' and 'sequential'.")
+            raise ValueError(f"Unknown sampling schema: {sampling_params['schema']}. Supported schemas are 'random', 'sequential' and 'box'.")
         
         all_inputs = {k: all_inputs[k] + [inputs.sel(sample_id=split_dict[k])] for k in split_dict}
         all_fp_xr = {k: all_fp_xr[k] + [data.fp_xr.sel(sample_id=split_dict[k])] for k in split_dict}
@@ -440,7 +452,7 @@ def load_receptor_data(data_parameters, input_variables, sampling_params, datapa
                 "loading/loaded_region": wandb_region_counter,
                 "loading/train_time": elapsed_mins,
                 "loading/total_time": total_time,
-                "loading/samples_loaded": loaded_samples,
+                "loading/samples_loaded": samples_loaded,
                 "loading/total_samples": total_samples,
             })
         wandb_region_counter += 1
