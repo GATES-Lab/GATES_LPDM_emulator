@@ -55,6 +55,100 @@ def haversine(lat1, lon1, lat2, lon2, radius=6371.0, degrees=False):
     return radius * c
 
 
+SECONDS_PER = {
+    "s": 1.0,
+    "hour": 3600.0,
+    "day": 24 * 3600.0,
+    "month": 30.44 * 24 * 3600.0,
+    "year": 365.25 * 24 * 3600.0,
+}
+
+KG_PER = {
+    "kg": 1.0,
+    "g": 1e-3,
+    "t": 1e3,
+    "kt": 1e6,
+    "Mt": 1e9,
+    "Tg": 1e9,
+}
+
+
+def grid_cell_area(lat, lon, radius=6.371e6):
+    """
+    Area of each cell of a regular lat/lon grid, in m^2.
+
+    Uses the exact spherical band area R^2 * dlon * (sin(lat_north) - sin(lat_south)),
+    so it stays correct at high latitudes where the cos(lat) approximation breaks down.
+
+    Parameters
+    ----------
+    lat, lon : array-like
+        1D cell-centre coordinates in degrees, evenly spaced.
+    radius : float, default=6.371e6
+        Earth radius in m.
+
+    Returns
+    -------
+    area : xr.DataArray
+        (lat, lon) cell areas in m^2, carrying lat/lon coords so it broadcasts
+        against data on the same grid.
+    """
+    lat = np.asarray(lat)
+    lon = np.asarray(lon)
+
+    dlat = np.abs(np.mean(np.diff(lat)))
+    dlon = np.abs(np.mean(np.diff(lon)))
+
+    area_per_lat = radius**2 * np.radians(dlon) * (
+        np.sin(np.radians(lat + dlat / 2)) - np.sin(np.radians(lat - dlat / 2))
+    )
+    area = area_per_lat[:, np.newaxis] * np.ones(lon.size)
+
+    lon2d, lat2d = np.meshgrid(lon, lat)
+    dA = (np.radians(dlat) * radius) * (np.radians(dlon) * radius * np.cos(np.radians(lat2d)))
+    
+
+    return xr.DataArray(
+        dA,
+        dims=("lat", "lon"),
+        coords={"lat": lat, "lon": lon},
+        attrs={"units": "m2"},
+    )
+
+
+def convert_flux_units(flux, mass_unit="kg", time_unit="s", cell_area="auto"):
+    """
+    Convert a flux field to kg m-2 s-1.
+
+    Each component is independent, so data that is already per-second or already
+    per-area just takes the default for that component.
+
+    Parameters
+    ----------
+    flux : xr.DataArray
+        Flux in <mass_unit> per <time_unit>, per cell if `cell_area` is given.
+    mass_unit : str, default="kg"
+        Key into `KG_PER`.
+    time_unit : str, default="s"
+        Key into `SECONDS_PER`, i.e. the period the flux is accumulated over.
+        Leave as "s" for data that is already a rate per second.
+    cell_area : xr.DataArray, float or "auto", default="auto"
+        Cell areas in m^2, computed from the lat/lon coords of `flux` by default.
+        Pass 1.0 for data that is already per unit area.
+
+    Returns
+    -------
+    flux : xr.DataArray
+        Flux in kg m-2 s-1, with the new units recorded in `.attrs["units"]`.
+    """
+    if isinstance(cell_area, str):
+        cell_area = grid_cell_area(flux["lat"], flux["lon"])
+
+    converted = flux * KG_PER[mass_unit] / (cell_area * SECONDS_PER[time_unit])
+
+    return converted.assign_attrs(units="kg m-2 s-1")
+
+
 def select_met_levels(met, levels=None):
     # subset the right levels and variables, as specified in the inputs
     if levels is not None and len(levels)>0 and "levels" in met.coords:

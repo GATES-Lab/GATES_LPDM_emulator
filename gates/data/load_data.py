@@ -21,7 +21,7 @@ import re
 import cartopy.crs as ccrs
 import cartopy
 
-from .load_data_helper_funs import haversine, select_met_levels,select_met_variables,get_static_variables_functions
+from .load_data_helper_funs import haversine, select_met_levels,select_met_variables,get_static_variables_functions,convert_flux_units
 
 from gates.config import get_config
 
@@ -1172,8 +1172,14 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.size, pad_mode="zeros")
         return self.topog
 
-    def get_flux(self, append_to_fp=True):
-        ems = load_flux_data(self.domain, year=self.year)
+    def get_flux(self, year=None, append_to_fp=True, search_others=True, convert_units=False, convert_units_args={}):
+        if year is None:
+            year = self.year
+        ems = load_flux_data(self.domain, year=year, search_others=search_others)
+        if convert_units:
+            if len(convert_units_args) == 0:
+                warnings.warn("convert_units is True but no convert_units_args were passed!")
+            ems = convert_flux_units(ems, **convert_units_args)
         cropped_flux, nan_idxs = cut_flux_data(ems, self.fp_data_full, size=self.size)
         self.fluxes = cropped_flux
         self.remove_indeces(nan_idxs)
@@ -1386,6 +1392,8 @@ class LoadReceptorData(LoadSquareSatelliteData):
             load_everything=load_everything, **kwargs,
         )
 
+
+
     def _prepare_samples(self, fp_data_full):
         """Flatten (time, receptor) footprints into a unique sample_id index; see _stack_receptors_to_sample_id."""
         if self.verbose:
@@ -1456,6 +1464,18 @@ def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
 
 
 
+def _open_flux_file(path):
+    """
+    Open a flux file and return its flux DataArray, carrying the file's global
+    attributes across so they survive into cut_flux_data's output. Attributes set on
+    the flux variable itself take precedence over global ones of the same name.
+    """
+    ds = xr.open_dataset(path)
+    flux = ds.flux
+    flux.attrs = {**ds.attrs, **flux.attrs}
+    return flux
+
+
 def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, search_others=False):
     """
     Load emissions for the given domain and year. Returns a lazy xarray DataArray (time, lat, lon) with all months in the file. Loads the file in flux_path if provided, otherwise looks up the file based on the config, domain and species. 
@@ -1470,7 +1490,7 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, s
         # assert that there is a file at flux path
         if not os.path.isfile(flux_path):
             raise ValueError(f"flux_path {flux_path} does not exist or is not a file")
-        return xr.open_dataset(flux_path).flux
+        return _open_flux_file(flux_path)
     
     if cfg is None:
         cfg = get_config()
@@ -1509,7 +1529,7 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, s
     # make the sorted list a list of strings
     if not path.is_file():
         if search_others:
-            other_files = sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_{year}_*.nc"))
+            other_files = sorted(str(f) for f in path.parent.glob(f"{species}*{resolved_domain_name}*{year}*.nc"))
             if len(other_files) ==1:
                 print(f"Using another file for this domain and species: \n{other_files[0]}")
                 path = other_files[0]
@@ -1520,7 +1540,7 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, s
             raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_{year}_*.nc"))}")
     else:
         print(f"Loading flux data from {path}")
-    return xr.open_dataset(path).flux
+    return _open_flux_file(path)
 
 
 def load_default_brazil_emissions(year=2016):
@@ -1531,7 +1551,14 @@ def load_default_sahara_emissions(year=2016):
     print("Obsolete: use load_emissions(domain='sahara', year=2016) instead")
 
 
-def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
+_FLUX_DENSITY_WARNING = (
+    "WARNING — interpolation assumes the flux is a density (e.g. mol/m2/s). If it is a mass "
+    "per grid cell (e.g. kT/cell), interpolating does not conserve the total and the result "
+    "will be wrong; convert to a density first."
+)
+
+
+def cut_flux_data(flux, fp, size=None, tolerance="32D", interp_method="linear", verbose=True):
     """
     Crops flux data to a size x size square centred on each footprint's release
     point, after matching each footprint to the nearest monthly flux snapshot.
@@ -1548,6 +1575,13 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
     tolerance : str
         Maximum time distance for matching a footprint to a flux snapshot.
         Default '32D' (32 days) ensures each footprint matches at most one month.
+    interp_method : str or None
+        Method used to regrid the flux onto the footprint grid when the two do not
+        already share coordinates: 'linear' or 'nearest', passed to
+        xr.DataArray.interp. None skips regridding and only warns that the
+        resolutions differ. Interpolation is only valid for flux *densities*: a
+        flux given as mass per grid cell must be converted to a density first, or
+        the regridded totals will be wrong.
     verbose : bool
         Print progress messages.
 
@@ -1561,11 +1595,50 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
         lat/lon are artificial 0..size coordinates; release point is at size//2.
         Array of sample_id values that had no flux match within tolerance.
     """
+
+    # cropped footprints keep release_lat/release_lon, but their lat/lon dims are
+    # artificial 0..size indices and the real coordinates live in lat_coords/lon_coords
+    fp_is_cropped = hasattr(fp, "lat_coords") and hasattr(fp, "lon_coords")
+    if not fp_is_cropped and size is None:
+        raise ValueError("size must be passed when cutting uncropped footprints")
+    elif fp_is_cropped and size is not None and size != fp.sizes["lat"]:
+        # raise a warning and use size of fp
+        warnings.warn(f"size {size} does not match footprint size {fp.sizes['lat']}. Using footprint size.")
+    if fp_is_cropped:
+        size = fp.sizes["lat"]
+
     if size % 2 != 0:
         raise ValueError(f"size must be even, got {size}")
     half = size // 2
 
-    # --- 1. Time matching ---
+
+    # --- 1. Regrid onto the footprint grid ---
+    # Uncropped footprints carry the domain grid on fp.lat/fp.lon, so the flux can be
+    # regridded once here, before the time axis is expanded to one snapshot per sample.
+    # Cropped footprints have a different target grid per sample, so they are regridded
+    # onto lat_coords/lon_coords in step 4 instead.
+    if not fp_is_cropped:
+        same_grid = (np.array_equal(flux.lat.values, fp.lat.values)
+                     and np.array_equal(flux.lon.values, fp.lon.values))
+        if not same_grid:
+            em_dlat = flux.lat.values[1] - flux.lat.values[0]
+            em_dlon = flux.lon.values[1] - flux.lon.values[0]
+            fp_dlat = fp.lat.values[1] - fp.lat.values[0]
+            fp_dlon = fp.lon.values[1] - fp.lon.values[0]
+            grid_str = (f"flux grid ({flux.sizes['lat']}, {flux.sizes['lon']}) at "
+                        f"({em_dlat:.4f}, {em_dlon:.4f}) deg vs fp grid "
+                        f"({fp.sizes['lat']}, {fp.sizes['lon']}) at ({fp_dlat:.4f}, {fp_dlon:.4f}) deg")
+            if interp_method is None:
+                if verbose:
+                    print(f"cut_flux_data: WARNING — {grid_str}, and interp_method is None. "
+                          f"Spatial alignment may be off.")
+            else:
+                if verbose:
+                    print(f"cut_flux_data: regridding onto the fp grid with "
+                          f"method='{interp_method}': {grid_str}.\n{_FLUX_DENSITY_WARNING}")
+                flux = flux.interp(lat=fp.lat.values, lon=fp.lon.values, method=interp_method)
+
+    # --- 2. Time matching ---
     tol = pd.Timedelta(tolerance)
     nearest = flux.indexes["time"].get_indexer(
         pd.DatetimeIndex(fp.time.values), method="nearest", tolerance=tol)
@@ -1588,21 +1661,29 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
         flux_matched = flux_matched.where(
             xr.DataArray(nearest != -1, dims="sample_id"), np.nan)
 
-    # --- 2. Resolution check ---
     domain_lats = flux_matched.lat.values
     domain_lons = flux_matched.lon.values
-    fp_lats = fp.lat.values
-    fp_lons = fp.lon.values
-    em_dlat = domain_lats[1] - domain_lats[0]
-    em_dlon = domain_lons[1] - domain_lons[0]
-    fp_dlat = fp_lats[1] - fp_lats[0]
-    fp_dlon = fp_lons[1] - fp_lons[0]
-    if verbose and (not np.isclose(em_dlat, fp_dlat) or not np.isclose(em_dlon, fp_dlon)):
-        print(f"cut_flux_data: WARNING — flux resolution "
-              f"({em_dlat:.4f}, {em_dlon:.4f}) differs from fp resolution "
-              f"({fp_dlat:.4f}, {fp_dlon:.4f}). Spatial alignment may be off.")
 
-    if hasattr(fp, "release_lat") and hasattr(fp, "release_lon"):
+    if fp_is_cropped:
+        # --- 3+4. Sample onto each footprint's own coordinates ---
+        em_dlat = domain_lats[1] - domain_lats[0]
+        em_dlon = domain_lons[1] - domain_lons[0]
+        fp_dlat = float(fp.lat_coords[0, 1] - fp.lat_coords[0, 0])
+        fp_dlon = float(fp.lon_coords[0, 1] - fp.lon_coords[0, 0])
+        grid_str = (f"flux grid at ({em_dlat:.4f}, {em_dlon:.4f}) deg vs cropped fp "
+                    f"lat_coords/lon_coords at ({fp_dlat:.4f}, {fp_dlon:.4f}) deg")
+        if interp_method is None:
+            print(f"Using lat_coords and lon_coords to cut flux data, assuming they are aligned "
+                  f"and have the same resolution as the flux data: {grid_str}.")
+            cropped = flux_matched.sel(lat=fp.lat_coords, lon=fp.lon_coords, method="nearest")
+        else:
+            print(f"Interpolating flux onto the footprints' lat_coords and lon_coords with "
+                  f"method='{interp_method}': {grid_str}.\n{_FLUX_DENSITY_WARNING}")
+            cropped = flux_matched.interp(lat=fp.lat_coords, lon=fp.lon_coords, method=interp_method)
+        lat_coords = fp.lat_coords
+        lon_coords = fp.lon_coords
+
+    elif hasattr(fp, "release_lat") and hasattr(fp, "release_lon"):
         # --- 3. Release indices + padding ---
         release_idxs = _get_release_idxs(fp, domain_lats, domain_lons)
         flux_matched, domain_lats, domain_lons, release_idxs = _pad_domain(
@@ -1622,12 +1703,6 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
         lon_coords=  xr.DataArray(
                 domain_lons[lon_indices], dims=["sample_id", "lon"],
                 coords={"sample_id": fp["sample_id"]})
-    
-    elif hasattr(fp, "lat_coords") or hasattr(fp, "lon_coords"):
-        print("Using lat_coords and lon_coords to cut flux data, assuming they are aligned and have the same resolution as the flux data.")
-        cropped = flux_matched.sel(lat=fp.lat_coords, lon=fp.lon_coords, method="nearest") 
-        lat_coords = fp.lat_coords
-        lon_coords = fp.lon_coords 
 
     # --- 5. Assign coordinates + return ---
     cropped = (
