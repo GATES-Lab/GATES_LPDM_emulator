@@ -103,13 +103,10 @@ def grid_cell_area(lat, lon, radius=6.371e6):
         np.sin(np.radians(lat + dlat / 2)) - np.sin(np.radians(lat - dlat / 2))
     )
     area = area_per_lat[:, np.newaxis] * np.ones(lon.size)
-
-    lon2d, lat2d = np.meshgrid(lon, lat)
-    dA = (np.radians(dlat) * radius) * (np.radians(dlon) * radius * np.cos(np.radians(lat2d)))
     
 
     return xr.DataArray(
-        dA,
+        area,
         dims=("lat", "lon"),
         coords={"lat": lat, "lon": lon},
         attrs={"units": "m2"},

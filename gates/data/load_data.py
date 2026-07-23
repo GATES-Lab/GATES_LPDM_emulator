@@ -1187,6 +1187,24 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.fp_xr["flux"] = self.fluxes.flux
         return self.fluxes
 
+    def calculate_modelled_mf(self):
+        """
+        Calculate the modelled mole fraction for each sample, using the fluxes and the footprints. Returns a 1D array of shape (n_samples,) with the modelled mole fraction for each sample.
+        """
+        if not hasattr(self, "fluxes"):
+            raise ValueError("Fluxes have not been loaded yet. Please run get_flux() first.")
+        if not hasattr(self, "fp_xr"):
+            raise ValueError("Footprints have not been loaded yet. Please run _load_footprints() first.")
+        if self.fluxes.flux.shape[0] != self.fp_xr.fp.shape[0]:
+            raise ValueError("Fluxes and footprints have different number of samples. Please check your data.")
+        # calculate the modelled mole fraction for each sample
+        modelled_mf = self.fp_xr.fp * self.fluxes.flux
+        modelled_mf = modelled_mf.sum(axis=(1, 2))
+        self.fluxes["modelled_mf"] = modelled_mf
+        self.fluxes["release_lat"] = self.fp_xr.release_lat
+        self.fluxes["release_lon"] = self.fp_xr.release_lon
+        return modelled_mf
+
     def remove_indeces(self, nan_idxs):
         """
         removes any set of samples passed as nan_idxs from all the objects in the dataset
@@ -1436,7 +1454,28 @@ class LoadReceptorData(LoadSquareSatelliteData):
         elif return_fps:
             return {k: self.fp_xr.sel(sample_id=v) for k, v in self.data_split.items()}
     
+    def plot_modelled_mf(self):
+        """
+        Plot the modelled mole fraction for each sample as scatter points on a map, calculated from the fluxes and footprints.
+        """
+        import matplotlib.pyplot as plt
 
+        if not hasattr(self, "fluxes"):
+            raise ValueError("Fluxes have not been loaded yet. Please run get_flux() first.")
+        # if modelled_mf is not in fluxes, calculate it
+        if "modelled_mf" not in self.fluxes:
+            self.calculate_modelled_mf()
+        
+        fig, ax = plt.subplots(1,1,subplot_kw={'projection': ccrs.PlateCarree()})
+        ax.coastlines(resolution="50m", color='black', linewidth=1, alpha=0.5)
+        ax.add_feature(cartopy.feature.LAND)
+        ax.add_feature(cartopy.feature.OCEAN)
+        cb = ax.scatter(self.fluxes.release_lon.values, self.fluxes.release_lat.values, c=self.fluxes.modelled_mf.values, cmap="viridis", s=10, transform=cartopy.crs.PlateCarree())
+        cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'Modelled mole fraction', size=12)
+        plt.show()
+
+
+        
 
 
 def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
