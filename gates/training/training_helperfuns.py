@@ -326,7 +326,8 @@ def plot_receptor_split(fp_xr_dict, path, model_name, verbose=True, use_wandb=Fa
     for split_name, split_fp in sorted(fp_xr_dict.items(), key=lambda kv: -kv[1].sizes.get("sample_id", 0)):
         if split_fp.sizes.get("sample_id", 0) == 0:
             continue
-        _, first_idx = np.unique(split_fp.receptor.values, return_index=True)
+        combo = np.array([f"{r}__{int(rec)}" for r, rec in zip(split_fp.region.values, split_fp.receptor.values)])
+        _, first_idx = np.unique(combo, return_index=True)
         lon = split_fp.release_lon.values[first_idx]
         lat = split_fp.release_lat.values[first_idx]
         all_lon.append(lon)

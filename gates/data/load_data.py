@@ -1420,7 +1420,8 @@ class LoadReceptorData(LoadSquareSatelliteData):
         return _stack_receptors_to_sample_id(fp_data_full)
 
     def split_samples(self, mode="random", split_fractions={"train":0.75, "val":0.20, "test":0.05}, 
-                      train_freq=1, return_fps=False, random_seed=42):
+                      train_freq=1, train_subsample_method="random",
+                      return_fps=False, random_seed=42):
         """
         Split the sample_id index into train, val and test sets. Returns a dict with keys "train", "val" and "test" and values as lists of sample_id values for each set. 
         The split is done randomly by default, but can be changed to "sequential" to split the sample_id index sequentially (eg first 75% for train, next 20% for val, last 5% for test). 
@@ -1451,8 +1452,17 @@ class LoadReceptorData(LoadSquareSatelliteData):
             raise ValueError(f"mode {mode} not recognized. Use 'random' or 'sequential'.")
 
         if train_freq and train_freq > 1:
-            # reduce frequency of training samples by regular subsampling
-            self.data_split["train"] = self.data_split["train"][::train_freq]
+            # reduce frequency of training samples by subsampling
+            if train_subsample_method == "regular":
+                self.data_split["train"] = self.data_split["train"][::train_freq]
+            elif train_subsample_method == "random":
+                n_train = len(self.data_split["train"])
+                n_keep = -(-n_train // train_freq)  # match "regular" method's sample count
+                subsample_rng = np.random.default_rng(random_seed)
+                keep_idx = np.sort(subsample_rng.choice(n_train, size=n_keep, replace=False))
+                self.data_split["train"] = self.data_split["train"][keep_idx]
+            else:
+                raise ValueError(f"subsampling method {train_subsample_method} not recognized. Use 'regular' or 'random'.")
 
         if self.verbose:
             print(f"Data split into {len(self.data_split['train'])} train, {len(self.data_split['val'])} val and {len(self.data_split['test'])} test samples.")
@@ -1463,8 +1473,9 @@ class LoadReceptorData(LoadSquareSatelliteData):
         elif return_fps:
             return {k: self.fp_xr.sel(sample_id=v) for k, v in self.data_split.items()}
 
-    def split_samples_box(self, boxes_file=None, boxes=None, buffer_width=0.1, split_fractions={"val":0.20, "test":0.80}, train_freq=1,
-                            return_fps=False, random_seed=42):
+    def split_samples_box(self, boxes_file=None, boxes=None, buffer_width=0.1, split_fractions={"val":0.20, "test":0.80}, 
+                          train_freq=1, train_subsample_method="random",
+                          return_fps=False, random_seed=42):
         """
         Split the sample_id index into train, val and test sets. Returns a dict with keys "train", "val" and "test" and values as lists of sample_id values for each set. 
         The split is done randomly by default, but can be changed to "sequential" to split the sample_id index sequentially (eg first 75% for train, next 20% for val, last 5% for test). 
@@ -1548,15 +1559,23 @@ class LoadReceptorData(LoadSquareSatelliteData):
         val_ids = all_sample_ids[np.isin(all_receptor, val_receptors)]
         test_ids = all_sample_ids[np.isin(all_receptor, test_receptors)]
 
-        if train_freq and train_freq > 1:
-            # reduce frequency of training receptors by regular subsampling
-            train_ids = train_ids[::train_freq]
-
         self.data_split = {"train": train_ids, "val": val_ids, "test": test_ids}
 
+        if train_freq and train_freq > 1:
+            # reduce frequency of training samples by subsampling
+            if train_subsample_method == "regular":
+                self.data_split["train"] = self.data_split["train"][::train_freq]
+            elif train_subsample_method == "random":
+                n_train = len(self.data_split["train"])
+                n_keep = -(-n_train // train_freq)  # match "regular" method's sample count
+                subsample_rng = np.random.default_rng(random_seed)
+                keep_idx = np.sort(subsample_rng.choice(n_train, size=n_keep, replace=False))
+                self.data_split["train"] = self.data_split["train"][keep_idx]
+            else:
+                raise ValueError(f"subsampling method {train_subsample_method} not recognized. Use 'regular' or 'random'.")
+
         if self.verbose:
-            print(f"Data split into {len(train_ids)} train, {len(val_ids)} val and "
-                f"{len(test_ids)} test samples (box(es): {boxes}).")
+            print(f"Data split into {len(self.data_split['train'])} train, {len(self.data_split['val'])} val and {len(self.data_split['test'])} test samples.")
 
         if not return_fps:
             return self.data_split

@@ -1,5 +1,5 @@
 {
-    "model_name" : "CANTAB1a_long_test",
+    "model_name" : "CANTAB1a_random_freq3regular",
     "sample_mode": "receptors",
     "verbose": true,
     "parallel_loading": true,
@@ -14,16 +14,18 @@
     },
 
     "receptor_split" : {
-        "schema":"box",
+        "schema":"random",
+        "train_subsample": {
+            "freq": 3,
+            "method": "regular"
+        },
         "box_params": {
             "boxes_file": "/esi/project/niwa03448/METHANESAT/project/MSAT_2025/GATES_emulator/GATES_LPDM_emulator/receptor_boxes.json",
             "boxes": ["mountains", "plains"],
             "buffer_width": 0.1,
             "box_split_fractions":{"val":0.20, "test":0.80}
         },
-        "random_sequential_split_fractions": {"train":0.75, "val":0.20, "test":0.05},
-        "train_freq": 3
-
+        "random_sequential_split_fractions": {"train":0.75, "val":0.05, "test":0.20}
     },
 
     "variables" : {
@@ -90,7 +92,7 @@
         "visualize": 10,
         "patience": 100,
         "model_save": 50
-    },    
+    },
 
     "loss_functions" : {
         "criterion": "gates_losses.PixelWeightedMSELoss",
@@ -98,5 +100,5 @@
         "criterion_test": "gates_losses.MSELoss",
         "criterion_test_params": {}
     }  
-      
+
 }
