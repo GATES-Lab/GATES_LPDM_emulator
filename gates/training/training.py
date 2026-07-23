@@ -169,7 +169,7 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=Non
     return dynamic_edge_params
 
 
-def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False, wandb_year_counter=1, return_wandb_year_counter=False):
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_args=None, verbose=True, load_into_memory=False, use_wandb=False, wandb_year_counter=1, return_wandb_year_counter=False):
     """
     Loads footprints and inputs one whole year at a time for the years specified in
     data_parameters, returning them as concatenated xarrays rather than a
@@ -267,6 +267,11 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
         try:
             data = LoadSquareSatelliteData(**year_params, **datapath_args, verbose=verbose)
 
+            if flux_args is not None and len(flux_args) > 0:
+                get_flux = flux_args.pop("get_flux", True)
+                if get_flux:
+                    data.get_flux(**flux_args)
+
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
 
             # Filter to the requested months, if any (met stays whole-year, so
@@ -346,7 +351,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     return fp_xr, inputs
 
 
-def load_receptor_data(data_parameters, input_variables, sampling_params, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False):
+def load_receptor_data(data_parameters, input_variables, sampling_params, datapath_args={}, flux_args=None, verbose=True, load_into_memory=False, use_wandb=False):
 
     if "met_args" in data_parameters and "met_args" in datapath_args:
         merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
@@ -395,6 +400,12 @@ def load_receptor_data(data_parameters, input_variables, sampling_params, datapa
 
         try:
             data = LoadReceptorData(year, region=region, **base_params, **datapath_args, verbose=verbose, load_everything=True)
+
+            if flux_args is not None and len(flux_args) > 0:
+                # if get_flux in the dict, pop it
+                get_flux = flux_args.pop("get_flux", True)
+                if get_flux:
+                    data.get_flux(**flux_args)
 
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
         
@@ -571,8 +582,10 @@ def initialise_losses():
             "uniform": flux_metrics_dict.copy(),
             "checkerboard": flux_metrics_dict.copy(),
             "checkerboard_10": flux_metrics_dict.copy(),
-        }
+        },
+        "metrics_fluxes": flux_metrics_dict.copy()
     }
+    print("added metric fluxes!!!!")
     return losses
 
 def calculate_losses(losses, test_outputs_xr):
@@ -597,8 +610,10 @@ def calculate_losses(losses, test_outputs_xr):
 
     transformed_eval_metrics = gates_metrics.compute_footprint_metrics(
         test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, metrics=["iou", "mae", "mse","bias", "nmae"], ignore_mask=fp_mask, threshold=0, nonzero=False)
+
     
     static_mf_eval_metrics = gates_metrics.compute_static_mf_metrics(test_outputs_xr.fp_original, test_outputs_xr.fp_pred)
+
 
     for metric_name, metric_value in transformed_eval_metrics.items():
         if metric_name in losses["metrics_transformed"]:
@@ -614,9 +629,19 @@ def calculate_losses(losses, test_outputs_xr):
                 if metric_name in losses["metrics_fluxes_static"][flux_type]:
                     losses["metrics_fluxes_static"][flux_type][metric_name].append(metric_value)  
 
+    if "flux" in test_outputs_xr:
+        flux_eval_metrics = gates_metrics.compute_flux_metrics(test_outputs_xr.fp_original, test_outputs_xr.fp_pred,test_outputs_xr.flux)
+        for metric_name, metric_value in flux_eval_metrics.items():
+            if metric_name in losses["metrics_fluxes"]:
+                losses["metrics_fluxes"][metric_name].append(metric_value) 
+
+
     computed_metrics["eval_metrics"] = eval_metrics
     computed_metrics["transformed_eval_metrics"] = transformed_eval_metrics
     computed_metrics["static_mf_eval_metrics"] = static_mf_eval_metrics
+
+    if "flux" in test_outputs_xr:
+        computed_metrics["flux_eval_metrics"] = flux_eval_metrics
 
     return losses, computed_metrics
 """

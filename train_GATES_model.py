@@ -64,8 +64,10 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
         #write_to_file(f"Sent to device", paths_ctx.updates_path)
 
         if len(fp_batch.shape) == 3:
+            # the dimensions are (batch_size, latxlon, features), so we take the first feature (the actual footprint) and unsqueeze to add a channel dimension for the loss function
             true_values = fp_batch[:,:,0].unsqueeze(-1)
         else:
+            # the dimensions are (batch_size, latxlon), so we unsqueeze to add a channel dimension for the loss function 
             true_values = fp_batch.unsqueeze(-1)
         
         model_ctx.optimizer.zero_grad()
@@ -203,6 +205,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
         print("calculating losses and metrics") 
         write_to_file("calculating losses and metrics", paths_ctx.updates_path)           
+
         
         losses, computed_metrics = gates_training.calculate_losses(losses, test_fp_dataset)  
 
@@ -219,7 +222,8 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         list_of_metrics.update({f"metrics_original-{k}": v for k, v in computed_metrics["eval_metrics"].items()})
         for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items():
             list_of_metrics.update({f"metrics_fluxes_static/{flux_mode}/{k}": v for k, v in metrics.items()})
-
+        if "flux_eval_metrics" in computed_metrics:
+            list_of_metrics.update({f"metrics_fluxes/{k}": v for k, v in computed_metrics["flux_eval_metrics"].items()})
 
         if model_ctx.use_wandb:
             logging_dict = {
@@ -252,8 +256,22 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
         log_text = f"Epoch {epoch}, Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}"
         write_to_file(log_text, paths_ctx.updates_path)
-        log_text = f"    metrics: {str(losses['metrics_transformed'])}, {str(losses['metrics_original'])}, {str(losses['metrics_fluxes_static'])}"
+
+        #log_text = f"    metrics: \n {str(losses['metrics_transformed'])}, \n {str(losses['metrics_original'])}, \n {str(losses['metrics_fluxes_static'])}"
+        ## extract the last metric of each metric type for logging
+        log_text = ""
+
+        for metric_type, metrics in losses.items():
+            if metric_type.startswith("metrics_") and not metric_type.startswith("metrics_fluxes_static"):
+                last_metrics = {k: v[-1] for k, v in metrics.items()}
+                log_text += f"\n    {metric_type}: {last_metrics}"
+            elif metric_type.startswith("metrics_fluxes_static"):
+                for flux_mode, flux_metrics in metrics.items():
+                    last_flux_metrics = {k: v[-1] for k, v in flux_metrics.items()}
+                    log_text += f"\n    {metric_type}/{flux_mode}: {last_flux_metrics}"
         write_to_file(log_text, paths_ctx.updates_path)
+
+
 
         if epoch % model_ctx.epochs_visualise == 0:
             img_save_path = save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
@@ -365,6 +383,7 @@ def train_and_save_model(parameters, model_save_dir):
 
     input_variables = parameters["variables"]
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
+    flux_args = parameters.get("flux", None)
 
     client, cluster = gates_training.make_cluster()
     
@@ -381,7 +400,7 @@ def train_and_save_model(parameters, model_save_dir):
         write_to_file("[SATELLITE MODE] Load training and testing met and fp data", paths_ctx.updates_path)
 
         
-        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
+        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, flux_args=flux_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
         train_fp_data = data
 
         print(train_fp_data)
@@ -389,9 +408,9 @@ def train_and_save_model(parameters, model_save_dir):
         print("Successfully loaded training met and fp data with", train_fp_data.sizes["sample_id"], "samples")
         print("Loading test data")
 
+        print(train_data.fp_xr)
 
-
-        test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+        test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, flux_args=flux_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
         test_fp_data = test_data
 
         write_to_file(f"Successfully load test met and fp data with {test_fp_data.sizes['sample_id']} samples", paths_ctx.updates_path)
@@ -403,7 +422,7 @@ def train_and_save_model(parameters, model_save_dir):
         if sampling_params is None:
             raise ValueError("receptor_split parameters must be provided when sample_mode is 'receptors'.")
         print("going into the load receptor function")
-        fp_xr_dict, inputs_dict = gates_training.load_receptor_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, sampling_params=sampling_params, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
+        fp_xr_dict, inputs_dict = gates_training.load_receptor_data(train_load_data_params, input_variables=input_variables, flux_args=flux_args, datapath_args=datapath_args, sampling_params=sampling_params, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
 
         #### NOTE THAT HERE WE ARE IGNORING THE ACTUAL TEST!
         ## USE ONLY IN PREDICTION
