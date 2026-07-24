@@ -760,8 +760,9 @@ class LoadBaseSatelliteData:
         #print(self.fp_data_full)
         if self.verbose: print(f"Loading {self.fp_data_full.sizes['sample_id']} footprints")
         if load_fps_in_mem:
-            self.fp_data_full.fp.load()
+            self.fp_data_full.load()
             print("loaded fp variable into mem")
+            print("Dataset size (GB):", self.fp_data_full.nbytes/1e9)
         #print(self.fp_data_full)
         #self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": "auto"})
 
@@ -1411,7 +1412,7 @@ class LoadReceptorData(LoadSquareSatelliteData):
             load_everything=load_everything, **kwargs,
         )
 
-
+        self.align_domains()
 
     def _prepare_samples(self, fp_data_full):
         """Flatten (time, receptor) footprints into a unique sample_id index; see _stack_receptors_to_sample_id."""

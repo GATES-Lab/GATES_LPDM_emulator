@@ -1051,7 +1051,14 @@ def _cut_satellite_met_multi_delta(
         met_loaded = met_source.sel(time=list(all_unique_times_sorted))
     if load_into_memory:
         print("Loading selected met data into memory...")
-        met_loaded = met_loaded.compute()
+        #met_loaded = met_loaded.compute()
+
+        import gc
+
+        for var in met_loaded.data_vars:
+            print(f"    Loading {var}...")
+            met_loaded[var].load()
+            gc.collect()
 
     # --- Phase 3: spatial structure — computed once, shared across all deltas ---
     ## the bug was here - but am now skipping over release_idxs, and just using the lat_coords and lon_coords generated when cropping the footprints
