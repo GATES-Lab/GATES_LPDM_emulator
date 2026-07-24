@@ -1,0 +1,29 @@
+{
+    "NEWZEALAND": {
+        "CANTERBURY": {
+            "mountains": {
+                "center_lat": -43.168,
+                "center_lon": 171.039,
+                "half_size_lat": 0.25,
+                "half_size_lon": 0.25,
+                "description": "Box containing mountain receptors. Centred on Bonds Peak (2304m)."
+            },
+            "plains": {
+                "center_lat": -43.426,
+                "center_lon": 172.347,
+                "half_size_lat": 0.25,
+                "half_size_lon": 0.25,
+                "description": "Box containing plains receptors. Centered on Ngai Tahu Farms."
+            }
+        },
+        "TARANAKI": {
+
+        },
+        "WAIKATO": {
+
+        },
+        "SOUTHLAND": {
+
+        }
+    }
+}

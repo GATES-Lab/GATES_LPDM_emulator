@@ -408,18 +408,41 @@ def load_receptor_data(data_parameters, input_variables, sampling_params, datapa
                     data.get_flux(**flux_args)
 
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
-        
+
+            # assign region coord
+            data.fp_xr = data.fp_xr.assign_coords(region=("sample_id", [region] * data.fp_xr.sizes["sample_id"]))
+            inputs = inputs.assign_coords(region=("sample_id", [region] * inputs.sizes["sample_id"]))
+
         except Exception as e:
             print(f"Error loading data for region {region}: {e}")
             loaded_samples = 0
 
         if sampling_params["schema"] in ["random", "sequential"]:
-            split_fractions = sampling_params.get("split_fractions", {"train":0.75, "val":0.20, "test":0.05})
+            split_fractions = sampling_params.get("random_sequential_split_fractions", {"train":0.75, "val":0.05, "test":0.20})
 
-            split_dict = data.split_samples(mode=sampling_params["schema"], split_fractions=split_fractions)
-        
+            train_subsample = sampling_params.get("train_subsample", {})
+            train_freq = train_subsample.get("freq", 1)
+            train_subsample_method = train_subsample.get("method", "random")
+
+            split_dict = data.split_samples(mode=sampling_params["schema"], split_fractions=split_fractions,
+                                            train_freq=train_freq, train_subsample_method=train_subsample_method)
+
+        elif sampling_params["schema"] == "box":
+            box_params = sampling_params.get("box_params", {})
+            boxes_file = box_params.get("boxes_file", None)
+            boxes = box_params.get("boxes", None)
+            buffer_width = box_params.get("buffer_width", 0.1)
+            split_fractions = box_params.get("box_split_fractions", {"val":0.20, "test":0.80})
+
+            train_subsample = sampling_params.get("train_subsample", {})
+            train_freq = train_subsample.get("freq", 1)
+            train_subsample_method = train_subsample.get("method", "random")
+
+            split_dict = data.split_samples_box(boxes_file=boxes_file, boxes=boxes, buffer_width=buffer_width, split_fractions=split_fractions,
+                                                train_freq=train_freq, train_subsample_method=train_subsample_method)
+
         else:
-            raise ValueError(f"Unknown sampling schema: {sampling_params['schema']}. Supported schemas are 'random' and 'sequential'.")
+            raise ValueError(f"Unknown sampling schema: {sampling_params['schema']}. Supported schemas are 'random', 'sequential' and 'box'.")
         
         all_inputs = {k: all_inputs[k] + [inputs.sel(sample_id=split_dict[k])] for k in split_dict}
         all_fp_xr = {k: all_fp_xr[k] + [data.fp_xr.sel(sample_id=split_dict[k])] for k in split_dict}
@@ -440,7 +463,7 @@ def load_receptor_data(data_parameters, input_variables, sampling_params, datapa
                 "loading/loaded_region": wandb_region_counter,
                 "loading/train_time": elapsed_mins,
                 "loading/total_time": total_time,
-                "loading/samples_loaded": loaded_samples,
+                "loading/samples_loaded": samples_loaded,
                 "loading/total_samples": total_samples,
             })
         wandb_region_counter += 1
@@ -457,6 +480,15 @@ def load_receptor_data(data_parameters, input_variables, sampling_params, datapa
         fp_xr[split] = fp_xr[split].assign_coords(sample_id=sample_ids)
         inputs[split] = inputs[split].assign_coords(sample_id=sample_ids)
         first_sample_id = sample_ids[-1] + 1
+
+    # build split dict for predict
+    split_dict = {
+        split: [
+            {"region": str(r), "receptor": int(rec), "time": str(t)}
+            for r, rec, t in zip(fp_xr[split].region.values, fp_xr[split].receptor.values, fp_xr[split].time.values)
+        ]
+        for split in ["train", "val", "test"]
+    }
     
     if verbose:
         print("Total samples loaded:", total_samples)
@@ -466,7 +498,7 @@ def load_receptor_data(data_parameters, input_variables, sampling_params, datapa
         print("\n".join(f"{k} : {v:.2f}mins" for k, v in loading_times.items()))
         print("")
     
-    return fp_xr, inputs
+    return fp_xr, inputs, split_dict
 
 def _get_scaler(scaler_name, scaler_module=None):
     """

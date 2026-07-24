@@ -15,6 +15,7 @@ import sys
 import os
 import copy
 import warnings
+import json
 from pathlib import Path
 import re
 
@@ -759,8 +760,9 @@ class LoadBaseSatelliteData:
         #print(self.fp_data_full)
         if self.verbose: print(f"Loading {self.fp_data_full.sizes['sample_id']} footprints")
         if load_fps_in_mem:
-            self.fp_data_full.fp.load()
+            self.fp_data_full.load()
             print("loaded fp variable into mem")
+            print("Dataset size (GB):", self.fp_data_full.nbytes/1e9)
         #print(self.fp_data_full)
         #self.fp_data_full = self.fp_data_full.chunk({"lat": -1, "lon": -1, "time": "auto"})
 
@@ -1410,7 +1412,7 @@ class LoadReceptorData(LoadSquareSatelliteData):
             load_everything=load_everything, **kwargs,
         )
 
-
+        self.align_domains()
 
     def _prepare_samples(self, fp_data_full):
         """Flatten (time, receptor) footprints into a unique sample_id index; see _stack_receptors_to_sample_id."""
@@ -1418,13 +1420,17 @@ class LoadReceptorData(LoadSquareSatelliteData):
             print("----- Flattening (time, receptor) footprints into sample_id index")
         return _stack_receptors_to_sample_id(fp_data_full)
 
-    def split_samples(self, mode="random", split_fractions={"train":0.75, "val":0.20, "test":0.05}, return_fps=False, random_seed=None):
+    def split_samples(self, mode="random", split_fractions={"train":0.75, "val":0.20, "test":0.05}, 
+                      train_freq=1, train_subsample_method="random",
+                      return_fps=False, random_seed=42):
         """
-        Split the sample_id index into train, val and test sets. Returns a dict with keys "train", "val" and "test" and values as lists of sample_id values for each set. The split is done randomly by default, but can be changed to "sequential" to split the sample_id index sequentially (eg first 75% for train, next 20% for val, last 5% for test). The split fractions can be changed by passing a dict with keys "train", "val" and "test" and values as the fractions to use for each set. The fractions should sum to 1.0.
+        Split the sample_id index into train, val and test sets. Returns a dict with keys "train", "val" and "test" and values as lists of sample_id values for each set. 
+        The split is done randomly by default, but can be changed to "sequential" to split the sample_id index sequentially (eg first 75% for train, next 20% for val, last 5% for test). 
+        The split fractions can be changed by passing a dict with keys "train", "val" and "test" and values as the fractions to use for each set. The fractions should sum to 1.0.
         """
         if mode=="random":
-            sample_ids = self.fp_data_full.sample_id.values
-            np.random.shuffle(sample_ids)
+            rng = np.random.default_rng(random_seed)
+            sample_ids = rng.permutation(self.fp_data_full.sample_id.values)
             n_samples = len(sample_ids)
             train_end = int(split_fractions["train"] * n_samples)
             val_end = train_end + int(split_fractions["val"] * n_samples)
@@ -1445,6 +1451,20 @@ class LoadReceptorData(LoadSquareSatelliteData):
             }
         else:
             raise ValueError(f"mode {mode} not recognized. Use 'random' or 'sequential'.")
+
+        if train_freq and train_freq > 1:
+            # reduce frequency of training samples by subsampling
+            if train_subsample_method == "regular":
+                self.data_split["train"] = self.data_split["train"][::train_freq]
+            elif train_subsample_method == "random":
+                n_train = len(self.data_split["train"])
+                n_keep = -(-n_train // train_freq)  # match "regular" method's sample count
+                subsample_rng = np.random.default_rng(random_seed)
+                keep_idx = np.sort(subsample_rng.choice(n_train, size=n_keep, replace=False))
+                self.data_split["train"] = self.data_split["train"][keep_idx]
+            else:
+                raise ValueError(f"subsampling method {train_subsample_method} not recognized. Use 'regular' or 'random'.")
+
         if self.verbose:
             print(f"Data split into {len(self.data_split['train'])} train, {len(self.data_split['val'])} val and {len(self.data_split['test'])} test samples.")
         
@@ -1453,7 +1473,117 @@ class LoadReceptorData(LoadSquareSatelliteData):
         
         elif return_fps:
             return {k: self.fp_xr.sel(sample_id=v) for k, v in self.data_split.items()}
-    
+
+    def split_samples_box(self, boxes_file=None, boxes=None, buffer_width=0.1, split_fractions={"val":0.20, "test":0.80}, 
+                          train_freq=1, train_subsample_method="random",
+                          return_fps=False, random_seed=42):
+        """
+        Split the sample_id index into train, val and test sets. Returns a dict with keys "train", "val" and "test" and values as lists of sample_id values for each set. 
+        The split is done randomly by default, but can be changed to "sequential" to split the sample_id index sequentially (eg first 75% for train, next 20% for val, last 5% for test). 
+        The split is done by considering region-specific box(es) as defined in GATES_LPDM_emulator/receptor_boxes.json. 
+        Receptors inside the box(es) are split into the "val" and "test" sets based on the given fractions; all receptors outside the box(es) are used for training. Each box is separated from the training set by a buffer region.
+        The split fractions can be changed by passing a dict with keys "val" and "test" and values as the fractions to use for each set. The fractions should sum to 1.0.
+        """
+        if boxes_file is None:
+            boxes_file = Path(__file__).resolve().parents[2] / "receptor_boxes.json"
+
+        with open(boxes_file, "r") as f:
+            box_defs = json.load(f)
+
+        try:
+            region_boxes = box_defs[self.domain][self.super_region]
+        except KeyError as e:
+            raise KeyError(
+                f"No box definitions found for domain={self.domain!r}, region={self.super_region!r} "
+                f"in {boxes_file}"
+            ) from e
+
+        # get receptor_ids
+        receptor_ids, first_idx = np.unique(self.fp_data_full.receptor.values, return_index=True)
+        release_lat = self.fp_data_full.release_lat.values[first_idx]
+        release_lon = self.fp_data_full.release_lon.values[first_idx]
+
+        # define masks
+        in_box = np.zeros(len(receptor_ids), dtype=bool)
+        in_box_or_buffer = np.zeros(len(receptor_ids), dtype=bool)
+
+        for box_name in boxes:
+            # check box exists
+            try:
+                box = region_boxes[box_name]
+            except KeyError as e:
+                raise KeyError(
+                    f"Box {box_name!r} not found for domain={self.domain!r}, region={self.super_region!r} "
+                    f"in {boxes_file}. Available boxes: {list(region_boxes)}"
+                ) from e
+
+            # get box params
+            center_lat = box["center_lat"]
+            center_lon = box["center_lon"]
+            half_size_lat = box["half_size_lat"]
+            half_size_lon = box["half_size_lon"]
+
+            dlat = np.abs(release_lat - center_lat)
+            dlon = np.abs(release_lon - center_lon)
+
+            in_box |= (dlat <= half_size_lat) & (dlon <= half_size_lon)
+            in_box_or_buffer |= (
+                (dlat <= half_size_lat + buffer_width) & (dlon <= half_size_lon + buffer_width)
+            )
+
+        # check there are receptors within box(es)
+        if not in_box.any():
+            raise ValueError(
+                f"No receptors fall within box(es) {boxes} for domain={self.domain!r}, "
+                f"region={self.super_region!r} (out of {len(receptor_ids)} receptors loaded). "
+                "Check the box centre/size in the boxes file against this region's "
+                "actual receptor locations.."
+            )
+
+        # train receptors: everything outside both the box(es) and their buffer margin
+        train_receptors = receptor_ids[~in_box_or_buffer]
+
+        # val/test receptors: receptors strictly inside the box(es), split by fraction
+        box_receptors = receptor_ids[in_box]
+        rng = np.random.default_rng(random_seed)
+        shuffled_box = rng.permutation(box_receptors)
+
+        n_val = round(len(shuffled_box) * split_fractions.get("val", 0.0))
+        n_test = round(len(shuffled_box) * split_fractions.get("test", 0.0))
+        val_receptors = shuffled_box[:n_val]
+        test_receptors = shuffled_box[n_val:n_val + n_test]
+
+        all_receptor = self.fp_data_full.receptor.values
+        all_sample_ids = self.fp_data_full.sample_id.values
+
+        train_ids = all_sample_ids[np.isin(all_receptor, train_receptors)]
+        val_ids = all_sample_ids[np.isin(all_receptor, val_receptors)]
+        test_ids = all_sample_ids[np.isin(all_receptor, test_receptors)]
+
+        self.data_split = {"train": train_ids, "val": val_ids, "test": test_ids}
+
+        if train_freq and train_freq > 1:
+            # reduce frequency of training samples by subsampling
+            if train_subsample_method == "regular":
+                self.data_split["train"] = self.data_split["train"][::train_freq]
+            elif train_subsample_method == "random":
+                n_train = len(self.data_split["train"])
+                n_keep = -(-n_train // train_freq)  # match "regular" method's sample count
+                subsample_rng = np.random.default_rng(random_seed)
+                keep_idx = np.sort(subsample_rng.choice(n_train, size=n_keep, replace=False))
+                self.data_split["train"] = self.data_split["train"][keep_idx]
+            else:
+                raise ValueError(f"subsampling method {train_subsample_method} not recognized. Use 'regular' or 'random'.")
+
+        if self.verbose:
+            print(f"Data split into {len(self.data_split['train'])} train, {len(self.data_split['val'])} val and {len(self.data_split['test'])} test samples.")
+
+        if not return_fps:
+            return self.data_split
+
+        elif return_fps:
+            return {k: self.fp_xr.sel(sample_id=v) for k, v in self.data_split.items()}
+
     def plot_modelled_mf(self):
         """
         Plot the modelled mole fraction for each sample as scatter points on a map, calculated from the fluxes and footprints.
@@ -1473,10 +1603,6 @@ class LoadReceptorData(LoadSquareSatelliteData):
         cb = ax.scatter(self.fluxes.release_lon.values, self.fluxes.release_lat.values, c=self.fluxes.modelled_mf.values, cmap="viridis", s=10, transform=cartopy.crs.PlateCarree())
         cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'Modelled mole fraction', size=12)
         plt.show()
-
-
-        
-
 
 def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
     """

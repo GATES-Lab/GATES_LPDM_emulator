@@ -15,7 +15,7 @@ def plot_footprint_ax(ax_true, ax_pred, prediction_ds, plotting_labels=["fp_orig
     Parameters:
     - ax_true: Matplotlib axis for the true footprint.
     - ax_pred: Matplotlib axis for the predicted footprint.
-    - prediction_ds: xarray Dataset containing the true and predicted footprints, along with coordinates. It must have length 1 along the time dimension, and contain the variables specified in plotting_labels.
+    - prediction_ds: xarray Dataset containing the true and predicted footprints, along with coordinates. It must have length 1 along the sample dimension (time or sample_id), and contain the variables specified in plotting_labels.
     - plotting_labels: List of two strings specifying the variable names in prediction_ds for the true and predicted footprints, respectively. Defaults to ["fp_original", "fp_pred"].
     - vmin, vmax: Color scale limits for the plots. If share_minmax is True, these limits will be applied to both plots. If None, they will be determined from the data.
     - thres: Threshold below which footprint values will be masked (set to NaN) in the second contour plot. Defaults to 0.
@@ -69,11 +69,13 @@ def plot_footprint_ax(ax_true, ax_pred, prediction_ds, plotting_labels=["fp_orig
         cb = ax_true.imshow(f_plot, extent=extent, origin="lower", **plot_params, zorder=5)
 
     if title:
-        #time_str = np.datetime_as_string(mod.all_fps.time.values[idx], unit='m')
-        #formatted_time = np.datetime64(time_str).astype('datetime64[m]').astype('O').strftime('%d-%m-%Y %H:%M')
         formatted_time = prediction_ds.time.values.astype('datetime64[m]').astype('O').strftime('%d-%m-%Y %H:%M')
-        ax_true.set_title(formatted_time)
-        #ax_true.set_title(str(np.datetime_as_string(mod.all_fps.time.values[idx], unit='m'))[:10]+ " " + str(np.datetime_as_string(mod.all_fps.time.values[idx], unit='m'))[11:])
+        if "receptor" in prediction_ds.coords:
+            region = str(prediction_ds.region.values)
+            receptor = int(prediction_ds.receptor.values)
+            ax_true.set_title(f"{region} receptor {receptor}")
+        else:
+            ax_true.set_title(formatted_time)
 
 
     ax_pred.set_extent(extent, crs=cartopy.crs.PlateCarree())
@@ -113,10 +115,13 @@ def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeserie
     Plot the true and predicted footprints for multiple time steps, along with optional timeseries and flux plots.
     Parameters:
     - prediction_ds: xarray Dataset containing the true and predicted footprints, along with coordinates.
-    - idxs_list: List of integer indices along the time dimension of prediction_ds for which to plot the footprints.
+      Receptor-mode predictions have a "sample_id" dimension (no "time" dimension); satellite-mode
+      predictions have a "time" dimension. Detected automatically.
+    - idxs_list: List of integer indices along the sample dimension of prediction_ds for which to plot the footprints.
     - fig_title : Optional string for the overall figure title.
     - plot_timeseries: If True, include a row of timeseries plots showing the footprint [ still in implkementation]
     """
+    sample_dim = "sample_id" if "sample_id" in prediction_ds.dims else "time"
     _import_plotting_libs()
     
     plot_prior=False
@@ -195,8 +200,6 @@ def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeserie
     else:
         print_stats = True
     """
-    time_idxs = [prediction_ds.time.values[idx] for idx in idxs_list]
-
     if which_dataspace== "original":
         plotting_labels=["fp_original", "fp_pred"]
         log=True
@@ -212,7 +215,7 @@ def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeserie
         log=False
 
     for n, idx in enumerate(idxs_list):
-        cb = plot_footprint_ax(ax[0,n], ax[1,n], prediction_ds.sel(time=time_idxs[n]), contour=contour, share_minmax=True, nlevels=levels, title=True, return_minmax=False, vmin=vmin, vmax=vmax, print_stats=print_stats, thres=thres,plotting_labels=plotting_labels, log=log, cbar=True)
+        cb = plot_footprint_ax(ax[0,n], ax[1,n], prediction_ds.isel({sample_dim: idx}), contour=contour, share_minmax=True, nlevels=levels, title=True, return_minmax=False, vmin=vmin, vmax=vmax, print_stats=print_stats, thres=thres,plotting_labels=plotting_labels, log=log, cbar=True)
 
     """
     if plot_fluxes:
@@ -278,4 +281,4 @@ def plot_fp_predictions(prediction_ds, idxs_list, fig_title=None, plot_timeserie
     #ax[0,0].set_title(mod.all_fps.time.values[150])
     if fig_title is not None:
         #fig.suptitle(fig_title)
-        fig.text(0.3, 1, fig_title, va="center",  fontsize=21,multialignment="center")
+        fig.text(0.3, 1, fig_title, va="center", fontsize=21, multialignment="center")

@@ -290,6 +290,81 @@ def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, col
 
 
 
+def plot_receptor_split(fp_xr_dict, path, model_name, verbose=True, use_wandb=False):
+    """
+    Scatter plot of receptor release points, coloured by split assignment (train/val/
+    test), saved into the training_imgs subfolder.
+
+    Schema-agnostic: fp_xr_dict is just whatever {"train": fp_xr, "val": fp_xr,
+    "test": fp_xr, ...} came back from load_receptor_data, however it was split
+    (random, sequential or box) — this only reads release_lat/release_lon/receptor
+    off each split's fp_xr, so it doesn't need to know which schema produced them.
+
+    Args:
+        fp_xr_dict (dict): {split_name: xr.Dataset}
+            Each Dataset must carry 'receptor', 'release_lat' and 'release_lon' as
+            per-sample_id coordinates (as returned by load_receptor_data).
+        path (str): The base directory path for saving the output image.
+        model_name (str): The model name used to name the saved file.
+        verbose (bool): If True, prints the save path once the plot is written. Defaults to True.
+        use_wandb (bool): If True, logs the plot to W&B as a versioned artifact. Defaults to False.
+
+    Returns:
+        Path: the path the plot was saved to.
+    """
+    import matplotlib.pyplot as plt
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+
+    fig, ax = plt.subplots(figsize=(6, 6), subplot_kw={"projection": ccrs.PlateCarree()})
+    ax.coastlines(resolution="10m", color="black", linewidth=0.8)
+    ax.add_feature(cfeature.LAND, facecolor="whitesmoke")
+    ax.add_feature(cfeature.OCEAN, facecolor="lightblue")
+    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+
+    all_lon, all_lat = [], []
+    for split_name, split_fp in sorted(fp_xr_dict.items(), key=lambda kv: -kv[1].sizes.get("sample_id", 0)):
+        if split_fp.sizes.get("sample_id", 0) == 0:
+            continue
+        combo = np.array([f"{r}__{int(rec)}" for r, rec in zip(split_fp.region.values, split_fp.receptor.values)])
+        _, first_idx = np.unique(combo, return_index=True)
+        lon = split_fp.release_lon.values[first_idx]
+        lat = split_fp.release_lat.values[first_idx]
+        all_lon.append(lon)
+        all_lat.append(lat)
+        ax.scatter(lon, lat, s=10, alpha=0.8,
+                   label=f"{split_name} (n={len(first_idx)})",
+                   transform=ccrs.PlateCarree())
+
+    if all_lon:
+        all_lon, all_lat = np.concatenate(all_lon), np.concatenate(all_lat)
+        pad = 0.3
+        ax.set_extent(
+            [all_lon.min() - pad, all_lon.max() + pad, all_lat.min() - pad, all_lat.max() + pad],
+            crs=ccrs.PlateCarree(),
+        )
+
+    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color="gray", alpha=0.5, linestyle="--")
+    gl.top_labels = False
+    gl.right_labels = False
+
+    ax.set_title(f"Receptor split ({model_name})")
+    ax.legend(markerscale=3)
+
+    save_path = Path(path) / "training_imgs" / f"{model_name}_receptor_split.png"
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    if verbose:
+        print(f"Receptor split plot saved to: {save_path}")
+
+    if use_wandb:
+        wandb.log({"receptor_split_plot": wandb.Image(str(save_path))})
+
+    return save_path
+
+
 def export_results_to_netcdf(test_fp_dataset, path, model_name, use_wandb=True):
     """
     Reshapes model predictions and ground truth arrays into (time, lat, lon) format, writes them to
