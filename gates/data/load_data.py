@@ -323,10 +323,15 @@ class LoadBaseSatelliteData:
         else:
             self.fp_datadir=Path(str(fp_datadir)+ f"*{str(self.date)}*.nc")
 
+        # Meteorology is stored as one Zarr store per year (DOMAIN_Met_YYYY.zarr),
+        # keyed on the year (not self.date, which includes the month) so a single
+        # month load still points at the whole-year store; the month slice happens
+        # in _get_meteorology_file. A glob pattern is kept so a year pattern like
+        # "201[4-5]" resolves to multiple stores opened together.
         if met_args.get("met_datadir", None) is None:
-            self.met_datadir = Path(cfg.met_datadir) / self.domain / (self.domain + "_Met_" + str(self.date) + "*.nc")
+            self.met_datadir = Path(cfg.met_datadir) / self.domain / (self.domain + "_Met_" + str(self.year) + "*.zarr")
         else:
-            self.met_datadir = Path(str(met_args["met_datadir"])+ f"*{str(self.date)}*.nc")
+            self.met_datadir = Path(str(met_args["met_datadir"])+ f"*{str(self.year)}*.zarr")
 
         self.met_args = met_args.copy()
         self.met_args["met_datadir"] = self.met_datadir
@@ -343,37 +348,27 @@ class LoadBaseSatelliteData:
     
 
 
-    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True, parallel=False, met_chunksize=8):
+    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True, parallel=False):
         """
-        loads meteorology and selects the met levels and variables if required
+        loads meteorology (yearly Zarr store) and selects the met levels and variables if required
 
         Inputs
-            - met_datadir (str): directory for meteorology. default directs to ACRG meteorology folder. If passing as arg, the date will be automatically added, so the files should have format name_of_your_choice_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/name_of_your_choice_"
+            - met_datadir (str): glob pattern for the meteorology Zarr store(s). Default directs to the configured meteorology folder.
             - met_levels (list): met levels to select
-            - met_variables (list) : met variables to select
-            - lazy_load (bool): if True, does not load the met data into memory (lazy array),  False, loads the met data into memory. 
+            - met_variables (list) : met variables to select. Derived variables (wind_speed / wind_angle) are ignored here and computed later downstream.
+            - lazy_load (bool): if True, does not load the met data into memory (lazy array),  False, loads the met data into memory.
         """
         if self.verbose: print("\n ---- LOADING MET")
 
-        # 1) load from file
+        # 1) load from file — level/variable selection happens inside, using the
+        #    tolerant select_met_* helpers.
         self.met_file = self._get_meteorology_file(
             met_datadir,
-            parallel=parallel, met_levels=met_levels, met_variables=met_variables, met_chunksize=met_chunksize
+            parallel=parallel, met_levels=met_levels, met_variables=met_variables,
         )
 
         # 2) check domain overlap
         self._check_domain_overlap(self.fp_data_full, self.met_file, "footprint", "meteorology")
-
-        if len(met_levels)>0:
-            try:
-                self.met_file = self.met_file.sel(levels=met_levels)
-            except KeyError:
-                print(f"there was an error selecting the met levels you passed. Check! \n You passed  {met_levels} but met loaded has {self.met_file.levels}. \n Loading all levels")
-        if len(met_variables)>0:
-            try:
-                self.met_file = self.met_file[met_variables]
-            except KeyError:
-                print(f"there was an error selecting the met variables you passed. Check! \n You passed  {met_variables} but met loaded has {list(self.met_file.keys())}. \n Loading all variables")
 
         if not lazy_load:
             print("Loading met data into memory. If you only want to lazy-load, pass load=False")
@@ -431,75 +426,56 @@ class LoadBaseSatelliteData:
 
         return topog_file, landcover_file
 
-    def _get_meteorology_file(self, met_datadir, lazy_load=True, parallel=False,met_levels=[], met_variables=[], met_chunksize=8):
+    def _get_meteorology_file(self, met_datadir, lazy_load=True, parallel=False, met_levels=[], met_variables=[]):
         """
-        Load the meteorology from the directory, concatenating files along the time dimension. If met_datadir is None, uses default directory and file format. If met_datadir is passed, the date will be automatically added, so the files should have format example_name_yearmonth.nc (eg brazil_201601.nc) and you should pass met_datadir="/path/example_name_"
+        Load the meteorology from one or more yearly Zarr stores, concatenating
+        along time. ``met_datadir`` is a glob pattern (e.g. DOMAIN_Met_2016*.zarr)
+        resolved to a list of stores; usually a single year, but a year pattern
+        such as "201[4-5]" resolves to several stores opened together.
+
+        The Zarr stores are written by data_utils/convert_met_to_zarr.py, which
+        already renames latitude/longitude -> lat/lon and model_level_number ->
+        levels, drops the unused UM variables, removes duplicate/unsorted
+        timestamps, and writes native chunks {time:1, lat:-1, lon:-1, levels:3}.
+        So none of the old NetCDF-era preprocessing/renaming/rechunking is needed.
         """
 
         if self.verbose: print("Loading meteorology from " + str(met_datadir))
 
-        met_files = sorted(glob.glob(str(met_datadir)))
-        if len(met_files) == 0:
+        met_stores = sorted(glob.glob(str(met_datadir)))
+        if len(met_stores) == 0:
             raise ValueError(
-                f"No meteorology files found in the specified directory:\n {met_datadir}"
+                f"No meteorology Zarr stores found matching:\n {met_datadir}"
             )
-        print("WITH CHUNKING - met")
-        #chunk_args = {"chunks": {"time": met_time_chunk}} if met_time_chunk is not None else {}
 
-        chunk_args = {"chunks": {"time": met_chunksize, "lat":-1, "lon":-1, "model_level_number":-1}}
-        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-            met_file = xr.open_mfdataset(
-                met_files,
-                concat_dim="time",
-                combine="nested",
-                data_vars="minimal",
-                coords="minimal",
-                #combine="by_coords",
-                parallel=parallel,
-                join="inner",
-                **chunk_args,
-                drop_variables=["forecast_period", "forecast_reference_time", "level_height_0", "sigma_0"],
-                compat="override",
-                engine="h5netcdf",
-                preprocess=preprocess_met_data,
-            )
-                
-            if len(met_levels)>0:
-                try:
-                    met_file = met_file.sel(model_level_number=met_levels)
-                except KeyError:
-                    print(f"there was an error selecting the met levels you passed. Check! \n You passed  {met_levels} but met loaded has {met_file.model_level_number}. \n Loading all levels") 
-            #print(f"After open_mfdataset: {len(met_file.__dask_graph__())} tasks")
+        met_file = xr.open_mfdataset(
+            met_stores,
+            engine="zarr",
+            concat_dim="time",
+            combine="nested",
+            consolidated=True,
+        )
 
-            #met_file = select_met_levels(met_file, levels=met_levels)
-            #met_file = select_met_variables(met_file, variables=met_variables)
-            if len(met_variables)>0:
-                met_file = met_file[met_variables]
+        # Slice to a single month when one was requested (whole-year loads leave
+        # self.month unset). The whole-year store means cross-month-boundary
+        # time_deltas resolve for the year path; a single-month load keeps the
+        # month's own timestamps only.
+        if getattr(self, "month", None) is not None:
+            met_file = met_file.sel(time=met_file.time.dt.month == int(self.month))
 
+        # Tolerant selection: skips missing levels and derived variables
+        # (wind_speed / wind_angle), which are computed later downstream. Copy the
+        # lists because these helpers mutate them in place (.remove()), and the
+        # caller's met_args may be reused across years.
+        met_file = select_met_levels(met_file, levels=list(met_levels))
+        met_file = select_met_variables(met_file, variables=list(met_variables))
 
-            #print(f"After variable selection: {len(met_file.__dask_graph__())} tasks")
+        if self.verbose:
+            #print("Met file chunk stats:")
+            #print("Chunks:", met_file.chunks)
+            print("Dataset size (GB):", met_file.nbytes/1e9)
 
-            met_file = met_file.unify_chunks()
-            if self.verbose:
-                print("Met file chunk stats:")
-                print("Chunks:", met_file.chunks)
-                print("Dataset size (GB):", met_file.nbytes/1e9)
-
-            if "model_level_number" in met_file.dims:
-                met_file = met_file.rename({"model_level_number": "levels"})
-
-            met_file = _rename_latlon(met_file)
-
-            for dim in ("lat", "lon", "time"):
-                if dim in met_file.dims and met_file.get_index(dim).has_duplicates:
-                    met_file = met_file.drop_duplicates(dim=dim)
-            """
-            first_var = list(met_file.data_vars)[0]
-            if met_file[first_var].dtype != np.float32:
-                met_file = met_file.astype(np.float32)
-            print(f"After as32: {len(met_file.__dask_graph__())} tasks")
-            """
-            self.met_file = met_file
+        self.met_file = met_file
         return self.met_file
 
 

@@ -149,10 +149,10 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
         verbose (bool): Print per-region progress messages. Defaults to True.
         load_into_memory (bool): If True, call .compute() on each region's inputs before moving
             to the next region. Defaults to True to avoid cross-region Dask task graphs.
-        load_monthly (bool): If True, use load_GATES_data_v2 (month-by-month loading);
-            otherwise use load_GATES_data. Defaults to False.
+        load_monthly (bool): If True, use load_GATES_data_v2 (loads one whole year at a
+            time); otherwise use load_GATES_data. Defaults to False.
         use_wandb (bool): Passed to load_GATES_data_v2 when load_monthly=True. Enables
-            per-month W&B loading metrics with a continuous counter across all regions.
+            per-year W&B loading metrics with a continuous counter across all regions.
             Defaults to False.
 
     Returns:
@@ -163,7 +163,7 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
     train_inputs_list = []
     train_fps_list = []
     test_regions = []
-    wandb_month_counter = 1
+    wandb_year_counter = 1
 
     for region_config in region_configs:
         train_params = copy.deepcopy(region_config["train_load_data"])
@@ -179,10 +179,10 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 datapath_args=datapath_args, verbose=verbose)
             train_fp_r = data_r.fp_xr
         else:
-            data_r, train_inputs_r, wandb_month_counter = gates_training.load_GATES_data_v2(
+            data_r, train_inputs_r, wandb_year_counter = gates_training.load_GATES_data_v2(
                 train_params, input_variables=input_variables,
                 datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory,
-                use_wandb=use_wandb, wandb_month_counter=wandb_month_counter, return_wandb_month_counter=True)
+                use_wandb=use_wandb, wandb_year_counter=wandb_year_counter, return_wandb_year_counter=True)
             train_fp_r = data_r
 
         if verbose:
@@ -194,10 +194,10 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 datapath_args=datapath_args, verbose=verbose)
             test_fp_r = test_data_r.fp_xr
         else:
-            test_data_r, test_inputs_r, wandb_month_counter = gates_training.load_GATES_data_v2(
+            test_data_r, test_inputs_r, wandb_year_counter = gates_training.load_GATES_data_v2(
                 test_params, input_variables=input_variables,
                 datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory,
-                use_wandb=use_wandb, wandb_month_counter=wandb_month_counter, return_wandb_month_counter=True)
+                use_wandb=use_wandb, wandb_year_counter=wandb_year_counter, return_wandb_year_counter=True)
             test_fp_r = test_data_r
 
         if verbose:

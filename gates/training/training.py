@@ -169,41 +169,46 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=Non
     return dynamic_edge_params
 
 
-def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False, wandb_month_counter=1, return_wandb_month_counter=False):
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False, wandb_year_counter=1, return_wandb_year_counter=False):
     """
-    Loads footprints and inputs for each year-month pair specified in data_parameters,
-    returning them as concatenated xarrays rather than a LoadSquareSatelliteData object.
+    Loads footprints and inputs one whole year at a time for the years specified in
+    data_parameters, returning them as concatenated xarrays rather than a
+    LoadSquareSatelliteData object. Meteorology is read once per year from its yearly
+    Zarr store; footprints (still monthly NetCDF) are concatenated across the year.
 
     Args:
         data_parameters (dict): Controls which data to load. Recognised keys:
             - year  (int | str)        — single year
             - years (list[int | str])  — multiple years (alternative to year)
-            - month (int | str | None) — single month; omit or None for all 12
-            - months (list[int | str]) — explicit list of months (alternative to month)
-            All other keys are forwarded to LoadSquareSatelliteData.
+            - month (int | str | None) — optional single month to keep from each year
+            - months (list[int | str]) — optional explicit list of months to keep
+            If month/months is given, the whole year is still loaded (so met
+            time_deltas resolve) and then footprints/inputs are filtered to those
+            months. All other keys are forwarded to LoadSquareSatelliteData.
         input_variables (dict): Variable extraction settings forwarded to
-            get_square_satellite_inputs_v2.
+            get_square_satellite_inputs_v2. Its 'met_variables'/'met_levels' are also
+            used to populate met_args so they need not be duplicated there.
         datapath_args (dict): Path overrides merged into data_parameters before each
-            monthly load. If both contain 'met_args', they are merged with datapath_args
+            yearly load. If both contain 'met_args', they are merged with datapath_args
             taking precedence.
-        verbose (bool): Print per-month progress messages. Defaults to True.
-        load_into_memory (bool): If True, materialise each month's inputs and footprints
-            into memory before concatenating, avoiding large cross-month Dask task graphs.
+        verbose (bool): Print per-year progress messages. Defaults to True.
+        load_into_memory (bool): If True, materialise each year's inputs and footprints
+            into memory before concatenating, avoiding large cross-year Dask task graphs.
             Defaults to False.
-        use_wandb (bool): If True, log per-month loading metrics (time, sample count) to
+        use_wandb (bool): If True, log per-year loading metrics (time, sample count) to
             W&B under the 'loading/*' namespace. Defaults to False.
-        wandb_month_counter (int): Starting step value for W&B loading metrics. Defaults
+        wandb_year_counter (int): Starting step value for W&B loading metrics. Defaults
             to 1. Pass the value returned by a previous call to chain metrics continuously
             across multiple loads (e.g. train then test, or across regions).
-        return_wandb_month_counter (bool): If True, return the final counter value as a
+        return_wandb_year_counter (bool): If True, return the final counter value as a
             third return value so callers can chain it into the next call. Defaults to False
             to preserve backward compatibility.
 
     Returns:
         fp_xr (xr.Dataset): Concatenated footprints with shape (time, lat, lon).
         inputs (xr.DataArray): Concatenated met inputs with shape (fp_time, lat, lon, variable_name).
-        wandb_month_counter (int): Final counter value after all months are loaded.
-            Only returned when return_wandb_month_counter=True.
+        wandb_year_counter (int): Final counter value after all years are loaded.
+            Only returned when return_wandb_year_counter=True.
     """
     if "met_args" in data_parameters and "met_args" in datapath_args:
         merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
@@ -213,10 +218,30 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     #load_into_memory = data_parameters.get("load_into_memory", False)
     years, months = _resolve_years_months(data_parameters)
 
+    # A real month subset was requested only when month/months was given
+    # explicitly; otherwise _resolve_years_months returns all 12 as a default and
+    # we load whole years without filtering.
+    requested_months = (
+        [int(m) for m in months]
+        if ("months" in data_parameters or data_parameters.get("month") is not None)
+        else None
+    )
+
     base_params = {
         k: v for k, v in data_parameters.items()
         if k not in ("year", "years", "month", "months", "load_into_memory")
     }
+
+    # Meteorology is now one Zarr store per year, so open it once per year rather
+    # than once per month. Feed the met variable/level selection from the
+    # `variables` section (input_variables) into met_args so it no longer has to
+    # be duplicated in train_load_data.met_args; an explicit met_args entry still
+    # wins. Derived vars (wind_speed/wind_angle) passed here are ignored by the
+    # tolerant selection in load_meteorology and computed later downstream.
+    met_args = dict(base_params.get("met_args", {}))
+    met_args.setdefault("met_variables", input_variables.get("met_variables", []))
+    met_args.setdefault("met_levels", input_variables.get("met_levels", []))
+    base_params["met_args"] = met_args
 
     all_inputs = []
     all_fp_xr = []
@@ -226,69 +251,69 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     total_samples = 0
 
     if use_wandb:
-        wandb.define_metric("loading/loaded_month")
-        wandb.define_metric("loading/*", step_metric="loading/loaded_month")
-    
+        wandb.define_metric("loading/loaded_year")
+        wandb.define_metric("loading/*", step_metric="loading/loaded_year")
+
     for year in years:
-        for month in months:
-            month_start = time.perf_counter()
-            month_key = f"{year}-{month}"
-            if verbose:
-                print(f"Loading year={year}, month={month}")
-            month_params = {**base_params, "year": year, "month": month}
-            try:
-                data = LoadSquareSatelliteData(**month_params, **datapath_args, verbose=verbose)
+        year_start = time.perf_counter()
+        year_key = f"{year}"
+        if verbose:
+            print(f"Loading year={year} (whole year in one pass)")
+        year_params = {**base_params, "year": year, "month": None}
+        try:
+            data = LoadSquareSatelliteData(**year_params, **datapath_args, verbose=verbose)
 
-                inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
-                if load_into_memory:
-                    print(f"Loading data into memory for {year}-{month} before concatenation...")
-                    inputs = inputs.load()
-                    inputs.close()
-                    print("and footprints...")
-                    data.fp_xr = data.fp_xr.load()
-                    data.fp_xr.close()
-                all_inputs.append(inputs)
-                all_fp_xr.append(data.fp_xr)
+            inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
 
-                # Close the source file handles so they don't accumulate across months.
-                if hasattr(data, "met_file") and data.met_file is not None:
-                    data.met_file.close()
-                if hasattr(data, "fp_data_full") and data.fp_data_full is not None:
-                    data.fp_data_full.close()
-                
-                loaded_samples = len(data.fp_xr.fp.time)
-                
+            # Filter to the requested months, if any (met stays whole-year, so
+            # cross-month-boundary time_deltas are already resolved).
+            if requested_months is not None:
+                inputs = inputs.sel(fp_time=np.isin(inputs.fp_time.dt.month, requested_months))
+                data.fp_xr = data.fp_xr.sel(time=np.isin(data.fp_xr.time.dt.month, requested_months))
 
-            except Exception as e:
-                print(f"Error loading data for {year}-{month}: {e}")
+            if load_into_memory:
+                print(f"Loading data into memory for {year} before concatenation...")
+                inputs = inputs.load()
+                inputs.close()
+                print("and footprints...")
+                data.fp_xr = data.fp_xr.load()
+                data.fp_xr.close()
+            all_inputs.append(inputs)
+            all_fp_xr.append(data.fp_xr)
 
-                # elapsed_mins = (time.perf_counter() - month_start) / 60
-                # loading_times[month_key] = f"{elapsed_mins:.2f}mins"
-                # print(f"{month_key} : {loading_times[month_key]}")
+            # Close the source file handles so they don't accumulate across years.
+            if hasattr(data, "met_file") and data.met_file is not None:
+                data.met_file.close()
+            if hasattr(data, "fp_data_full") and data.fp_data_full is not None:
+                data.fp_data_full.close()
 
-                loaded_samples = 0
+            loaded_samples = len(data.fp_xr.fp.time)
 
-            elapsed_mins = (time.perf_counter() - month_start) / 60
-            loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+        except Exception as e:
+            print(f"Error loading data for {year}: {e}")
+            loaded_samples = 0
 
-            print(f"{month_key} : {loading_times[month_key]}")
+        elapsed_mins = (time.perf_counter() - year_start) / 60
+        loading_times[year_key] = f"{elapsed_mins:.2f}mins"
 
-            total_samples += loaded_samples
-            # sum of all loading times
-            total_time += elapsed_mins
-            if use_wandb:
-                wandb.log({
-                    "loading/loaded_month": wandb_month_counter,
-                    "loading/train_time": elapsed_mins,
-                    "loading/total_time": total_time,
-                    "loading/samples_loaded": loaded_samples,
-                    "loading/total_samples": total_samples,
-                })
-            wandb_month_counter += 1
+        print(f"{year_key} : {loading_times[year_key]}")
+
+        total_samples += loaded_samples
+        # sum of all loading times
+        total_time += elapsed_mins
+        if use_wandb:
+            wandb.log({
+                "loading/loaded_year": wandb_year_counter,
+                "loading/train_time": elapsed_mins,
+                "loading/total_time": total_time,
+                "loading/samples_loaded": loaded_samples,
+                "loading/total_samples": total_samples,
+            })
+        wandb_year_counter += 1
 
     print("")
     print("")
-    print("----- Loading times for each month -----")
+    print("----- Loading times for each year -----")
     print("\n".join(f"{k} : {v}" for k, v in loading_times.items()))
     print("")
 
@@ -296,8 +321,8 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
     inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
 
-    if return_wandb_month_counter:
-        return fp_xr, inputs, wandb_month_counter
+    if return_wandb_year_counter:
+        return fp_xr, inputs, wandb_year_counter
     return fp_xr, inputs
 
 
