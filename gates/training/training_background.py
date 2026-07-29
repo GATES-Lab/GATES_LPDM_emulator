@@ -73,7 +73,7 @@ def get_auxiliary_bc_data(bc_file, height_indeces=[4], verbose=True):
 
 
 
-def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, detrend=True, verbose=True, load_into_memory=True, use_aux_bc=True, aux_indeces=[4]):
+def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, detrend=True, verbose=True, load_into_memory=True, use_aux_bc=True, aux_indeces=[4], loading_times_out=None):
     """
     Load footprints, met inputs, and background data for each year-month pair in data_parameters.
 
@@ -86,6 +86,8 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
         load_into_memory (bool): If True, materialise each month before concatenating (default: True).
         use_aux_bc (bool): If True, extract and return auxiliary boundary condition data (default: True).
         aux_indeces (list[int]): Height indices for auxiliary boundary condition extraction (default: [4]).
+        loading_times_out (dict, optional): If given, filled with the per-month loading time in
+            minutes as floats ({"YYYY-M": mins}), so callers can log the loading summary.
     Returns:
         fp_xr (xr.Dataset): Concatenated footprints, shape (time, lat, lon).
         inputs (xr.DataArray): Concatenated met inputs, shape (fp_time, lat, lon, variable_name).
@@ -124,6 +126,8 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
                 print(f"Error loading data for {year}-{month}: {e}")
                 elapsed_mins = (time.perf_counter() - month_start) / 60
                 loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+                if loading_times_out is not None:
+                    loading_times_out[month_key] = elapsed_mins
                 print(f"{month_key} : {loading_times[month_key]}")
                 continue
 
@@ -169,6 +173,8 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
 
             elapsed_mins = (time.perf_counter() - month_start) / 60
             loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+            if loading_times_out is not None:
+                loading_times_out[month_key] = elapsed_mins
             print(f"{month_key} : {loading_times[month_key]}")
 
     print("")

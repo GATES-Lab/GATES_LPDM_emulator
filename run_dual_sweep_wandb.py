@@ -82,7 +82,7 @@ def create_sweep(sweep_yaml_path, base_params):
 def run_agent(sweep_id, base_params, count):
     # Heavy imports deferred so --create stays a lightweight API call.
     import torch
-    from train_dual_model import train_and_save_model, load_dual_data
+    from train_dual_model import train_and_save_model, load_dual_data, log_data_loading_summary_run
 
     cfg = gates.config.get_config()
     if base_params.get("model_save_dir", None) is None:
@@ -95,7 +95,12 @@ def run_agent(sweep_id, base_params, count):
     print("=" * 70)
     print("Loading shared data once from the base parameter file (reused for every trial)")
     print("=" * 70)
-    data_bundle = load_dual_data(base_params, verbose=base_params.get("verbose", True))
+    data_bundle, load_summary = load_dual_data(
+        base_params, verbose=base_params.get("verbose", True), return_summary=True)
+
+    # Record this agent's shared load in its own W&B run, finished before wandb.agent starts
+    # pulling trials (so each trial's wandb.init still starts from no active run).
+    log_data_loading_summary_run(base_params, load_summary)
 
     def run_trial():
         run = wandb.init()

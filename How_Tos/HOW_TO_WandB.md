@@ -116,7 +116,52 @@ If you are submitting jobs via SLURM or similar, W&B will still work as long as 
 
 ---
 
-## 8. Useful Links
+## 8. Hyperparameter Sweeps (dual-head model)
+
+The dual-head model has a W&B sweep setup for hyperparameter optimisation:
+
+- **Sweep space:** [`parameter_files/sweep_dual_wandb.yaml`](../parameter_files/sweep_dual_wandb.yaml) — parameter names are dotted paths into the base parameter JSON (e.g. `loss_functions.bg_loss_weight`), deep-merged onto it per trial.
+- **Driver:** [`run_dual_sweep_wandb.py`](../run_dual_sweep_wandb.py) — creates the sweep or runs an agent. Each agent loads the data **once** and reuses it for all its trials, so data-loading keys (`train_load_data`, `test_load_data`, `variables`, `background_setup`, `data_dirs`, `load_into_memory`) cannot be swept (this is checked and rejected).
+- **Launcher:** [`launch_dual_wandb_sweep.sh`](../launch_dual_wandb_sweep.sh) — SLURM job that runs one agent.
+
+### Workflow
+
+```bash
+# 1. Create the sweep (lightweight API call, fine on the login node):
+python run_dual_sweep_wandb.py parameter_template_dual.json --create sweep_dual_wandb.yaml
+# -> prints e.g. "Created sweep: my-entity/my-project/abc123"
+
+# 2. Launch agents on GPU nodes. Each pulls trials until <count> are done or the
+#    job times out. Submit the script several times to run trials in parallel:
+sbatch launch_dual_wandb_sweep.sh my-entity/my-project/abc123 10
+sbatch launch_dual_wandb_sweep.sh my-entity/my-project/abc123 10
+```
+
+Progress and the best trial appear on the sweep page under **Sweeps** in the project.
+
+### The optimisation objective
+
+The sweep minimises **`best/objective`** = `best/test_loss_fp` + `objective_bg_weight` × `best/test_loss_bg`, logged every epoch by `run_full_training` in `train_dual_model.py`. Notes:
+
+- The `best/*` metrics are **best-so-far** (monotone), so the objective is robust to when a run stops and to the bg head's late-training overfitting.
+- The two per-head bests may occur at **different epochs** — the objective assumes you select each head from its own best epoch, not a single checkpoint.
+- `objective_bg_weight` (default `1.0`) can be set under `"sweep": {"objective_bg_weight": ...}` in the base parameter file. Keep it **fixed for the whole sweep**, otherwise trials are not comparable. It is deliberately independent of the *training* weight `loss_functions.bg_loss_weight`, which the sweep can vary.
+- Trials that crash (e.g. OOM on a large config) are marked failed and the agent moves on to the next trial.
+
+### The data-loading summary run
+
+When the data is loaded **once and shared** across several runs (`run_dual_sweep_wandb.py` agents and `run_dual_experiments_shared_data.py`), the loading summary belongs to no single training run. It is therefore logged to its **own W&B run**, created right after the shared load finishes and closed *before* any training run starts:
+
+- **Name / type:** `<slurm-job-id>_<job-name>_dataload`, with `job_type="data_loading"` and an extra `data_loading` tag — filter by either to find (or hide) these runs. It joins the same `wandb.group` as the training runs it fed.
+- **Contents:** per-month loading times as the table `data_loading/month_load_mins`, plus summary scalars (`train/test/total_load_mins`, `n_train_samples`, `n_test_samples`). The run config records the data-loading keys (`train_load_data`, `test_load_data`, `variables`, `background_setup`, `load_into_memory`) so you can see exactly what was loaded.
+- One such run is created **per process/agent** (each agent loads its own copy of the data), so two sweep agents produce two data-loading runs.
+- Ordinary single runs (`train_dual_model.py` directly) are unchanged — no extra run is created.
+
+Unit-tested by [`tests/test_dataload_summary_run.py`](../tests/test_dataload_summary_run.py) (stubbed loader, offline W&B — no data or GPU needed).
+
+---
+
+## 9. Useful Links
 
 | Resource | Link |
 |---|---|

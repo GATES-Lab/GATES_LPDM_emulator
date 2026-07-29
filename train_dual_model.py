@@ -14,6 +14,7 @@ export); the background head additionally reports a denormalised MAE.
 import os
 import sys
 import copy
+import time
 import argparse
 import random
 from collections import namedtuple
@@ -169,6 +170,14 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
     bg_true_ppb = bg_pred_ppb = None
 
+    # Best-so-far per-head test losses, logged every epoch. These are monotone, so the last
+    # value equals the run's best — which makes "best/objective" a robust W&B sweep metric
+    # (see run_dual_sweep_wandb.py). The per-head bests can occur at different epochs; the
+    # objective therefore reflects per-head checkpoint selection, not a single checkpoint.
+    objective_bg_weight = training_ctx.parameters.get("sweep", {}).get("objective_bg_weight", 1.0)
+    best_test_fp = float("inf")
+    best_test_bg = float("inf")
+
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx + epoch_so_far
         print(f"\n--- Start Epoch: {epoch} ---")
@@ -187,6 +196,8 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         losses["test_fp"].append(avg_test_fp)
         losses["train_bg"].append(avg_train_bg)
         losses["test_bg"].append(avg_test_bg)
+        best_test_fp = min(best_test_fp, avg_test_fp)
+        best_test_bg = min(best_test_bg, avg_test_bg)
         if bg_mae_denorm is not None:
             losses["test_bg_mae_denorm"].append(bg_mae_denorm)
 
@@ -213,6 +224,9 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "test/loss_fp": avg_test_fp,
                 "train/loss_bg": avg_train_bg,
                 "test/loss_bg": avg_test_bg,
+                "best/test_loss_fp": best_test_fp,
+                "best/test_loss_bg": best_test_bg,
+                "best/objective": best_test_fp + objective_bg_weight * best_test_bg,
                 **list_of_metrics,
             }
             if bg_mae_denorm is not None:
@@ -305,7 +319,7 @@ def resolve_background_params(parameters):
     return background_params
 
 
-def load_dual_data(parameters, verbose=True):
+def load_dual_data(parameters, verbose=True, return_summary=False):
     """Load the raw footprint/met/background data for a dual-head run.
 
     This is the expensive step (``load_GATES_data_with_bg`` for both train and test). It is
@@ -317,6 +331,10 @@ def load_dual_data(parameters, verbose=True):
     Returns a :class:`DualDataBundle` of the raw arrays. Downstream steps (class selection,
     normalisation, scalers, dataloaders) are *not* done here, so each experiment still builds its
     own transforms from these shared arrays.
+
+    With ``return_summary=True``, returns ``(bundle, summary)`` where ``summary`` is a dict of
+    loading statistics (per-month/total wall time in minutes, sample counts) suitable for
+    :func:`log_data_loading_summary_run`.
     """
     train_load_data_params = copy.deepcopy(parameters["train_load_data"])
     test_load_data_params = copy.deepcopy(parameters["train_load_data"])
@@ -332,28 +350,96 @@ def load_dual_data(parameters, verbose=True):
     print("Loading shared met, fp AND BACKGROUND data (train + test)...")
     client, cluster = gates_training.make_cluster()
 
+    train_month_mins = {}
+    load_start = time.perf_counter()
     train_fp_data, train_inputs, train_bgs, train_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
         train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose,
         load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"],
         use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"],
+        loading_times_out=train_month_mins,
     )
+    train_load_mins = (time.perf_counter() - load_start) / 60
     print("Successfully loaded training data with", len(train_fp_data.time), "time samples")
 
+    test_month_mins = {}
+    load_start = time.perf_counter()
     test_fp_data, test_inputs, test_bgs, test_aux_cams_data = gates_training_background.load_GATES_data_with_bg(
         test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose,
         load_into_memory=parameters.get("load_into_memory", False), detrend=background_params["detrend"],
         use_aux_bc=background_params["use_auxiliary_bc"], aux_indeces=background_params["auxilary_bc_levels"],
+        loading_times_out=test_month_mins,
     )
+    test_load_mins = (time.perf_counter() - load_start) / 60
     print("Successfully loaded test data with", len(test_fp_data.time), "time samples")
 
     if cluster is not None:
         cluster.close()
         client.close()
 
-    return DualDataBundle(
+    bundle = DualDataBundle(
         train_fp_data, train_inputs, train_bgs, train_aux_cams_data,
         test_fp_data, test_inputs, test_bgs, test_aux_cams_data,
     )
+    if not return_summary:
+        return bundle
+
+    summary = {
+        "train_load_mins": train_load_mins,
+        "test_load_mins": test_load_mins,
+        "total_load_mins": train_load_mins + test_load_mins,
+        "n_train_samples": int(len(train_fp_data.time)),
+        "n_test_samples": int(len(test_fp_data.time)),
+        "train_month_mins": train_month_mins,
+        "test_month_mins": test_month_mins,
+    }
+    return bundle, summary
+
+
+def log_data_loading_summary_run(parameters, summary, run_suffix="dataload"):
+    """Log the shared data-loading summary as its OWN (immediately finished) W&B run.
+
+    Used by the shared-data drivers (run_dual_experiments_shared_data.py,
+    run_dual_sweep_wandb.py): the data is loaded once per process, so the loading summary
+    belongs to no single training run. This records it in a separate run (job_type
+    "data_loading", same group as the training runs) and calls ``wandb.finish()`` before
+    returning, so the subsequent training runs are unaffected (train_and_save_model /
+    wandb.agent each start from no active run, exactly as before).
+    """
+    wandb_cfg = parameters.get("wandb", {})
+    entity, project = wandb_cfg.get("entity"), wandb_cfg.get("project")
+    if entity is None or project is None:
+        print("Warning: no wandb.entity/project configured — skipping the data-loading summary run.")
+        return
+    if wandb.run is not None:
+        # Never hijack an existing run (would break the reuse logic in train_and_save_model).
+        print("Warning: a W&B run is already active — skipping the separate data-loading summary run.")
+        return
+
+    job_id = os.environ.get("SLURM_JOB_ID", "local")
+    job_name = os.environ.get("SLURM_JOB_NAME", "run")
+    run = wandb.init(
+        entity=entity, project=project, group=wandb_cfg.get("group", None),
+        tags=list(wandb_cfg.get("tags", [])) + ["data_loading"],
+        name=f"{job_id}_{job_name}_{run_suffix}", job_type="data_loading",
+        config={
+            "train_load_data": parameters.get("train_load_data"),
+            "test_load_data": parameters.get("test_load_data"),
+            "variables": parameters.get("variables"),
+            "background_setup": resolve_background_params(parameters),
+            "load_into_memory": parameters.get("load_into_memory", False),
+        },
+    )
+    run_name = run.name
+    try:
+        table = wandb.Table(columns=["split", "month", "load_mins"])
+        for split in ("train", "test"):
+            for month_key, mins in summary.get(f"{split}_month_mins", {}).items():
+                table.add_data(split, month_key, mins)
+        wandb.log({"data_loading/month_load_mins": table})
+        run.summary.update({k: v for k, v in summary.items() if not isinstance(v, dict)})
+    finally:
+        wandb.finish()
+    print(f"Logged data-loading summary to its own W&B run: {run_name}")
 
 
 # ---------------------------------------------------------------
@@ -386,7 +472,13 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
 
     set_reproducibility(parameters.get("seed", 34))
 
-    if use_wandb:
+    if use_wandb and wandb.run is not None:
+        # A W&B run is already active — e.g. created by wandb.agent during a sweep
+        # (run_dual_sweep_wandb.py). Reuse it instead of starting a second run, and
+        # record the fully-merged parameters on it (sweep-chosen values keep their
+        # sweep-assigned entries, hence allow_val_change).
+        wandb.config.update(parameters, allow_val_change=True)
+    elif use_wandb:
         wandb_project = parameters.get("wandb", {}).get("project", None)
         wandb_entity = parameters.get("wandb", {}).get("entity", None)
         wandb_tags = parameters.get("wandb", {}).get("tags", [])

@@ -128,13 +128,18 @@ def main():
 
     # Imported here (not at module top) so --list / arg validation work without the heavy GNN
     # dependencies. train_and_save_model's CLI is guarded by __main__, so this is safe.
-    from train_dual_model import train_and_save_model, load_dual_data
+    from train_dual_model import train_and_save_model, load_dual_data, log_data_loading_summary_run
 
     # --- Load the data ONCE, from the base parameters, and reuse it for every experiment. ---
     print("=" * 70)
     print("Loading shared data once from base file:", args.base_file)
     print("=" * 70)
-    data_bundle = load_dual_data(base_params, verbose=base_params.get("verbose", True))
+    data_bundle, load_summary = load_dual_data(
+        base_params, verbose=base_params.get("verbose", True), return_summary=True)
+
+    # Record the shared load in its own W&B run (finished immediately), before any training run.
+    if base_params.get("use_wandb", False):
+        log_data_loading_summary_run(base_params, load_summary)
 
     for i, experiment in selected:
         name, params = build_experiment_params(base_params, experiment)
