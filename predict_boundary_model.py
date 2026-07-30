@@ -12,7 +12,7 @@ Usage
         [--month 06] \\
         [--region SAHARA] \\
         [--model_path /path/to/models/] \\
-        [--checkpoint best|<epoch_int>] \\
+        [--checkpoint best|best_fp|best_bg|<epoch_int>] \\
         [--save_path /path/to/outputs/] \\
         [--model_save_name custom_name] \\
         [--dry_run]
@@ -117,11 +117,16 @@ def normalize_month(month) -> str:
 
 
 def load_checkpoint(model, model_dir, model_name, checkpoint, device):
-    """Load model weights from a checkpoint file."""
-    if checkpoint == "best":
-        path = model_dir / f"{model_name}_best.pt"
+    """Load model weights from a checkpoint file.
+
+    ``checkpoint`` is either ``"best"`` (combined-loss best), ``"best_fp"`` / ``"best_bg"``
+    (per-head bests from dual-model training — bare state dicts like ``best``), or an
+    epoch number (periodic full checkpoint dict).
+    """
+    if checkpoint in ("best", "best_fp", "best_bg"):
+        path = model_dir / f"{model_name}_{checkpoint}.pt"
         model.load_state_dict(torch.load(path, map_location=device))
-        print(f"Loaded best checkpoint from {path}")
+        print(f"Loaded {checkpoint} checkpoint from {path}")
     else:
         epoch = int(checkpoint)
         path = model_dir / f"{model_name}_{epoch}.pt"

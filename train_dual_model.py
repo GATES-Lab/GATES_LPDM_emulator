@@ -9,6 +9,12 @@ This combines the two existing pipelines:
 
 Footprint-head metrics reuse the standard GATES evaluation (``calculate_losses`` + NetCDF
 export); the background head additionally reports a denormalised MAE.
+
+The two heads peak at different epochs, so alongside the combined-loss ``*_best.pt``
+(EarlyStopping) each head's own best test loss saves a full-model snapshot
+(``*_best_fp.pt`` / ``*_best_bg.pt``); the optional ``bg_head`` parameter block can
+additionally freeze the bg head once its test loss stagnates and give it its own
+weight decay / learning rate (see ``setup_dual_model`` in ``gates.training.training_dual``).
 """
 
 import os
@@ -40,6 +46,7 @@ from gates.training.training_dataclasses import PathContext, BoundaryTrainingCon
 from gates.training.training_helperfuns import (
     load_parameter_file, save_object, write_to_file, save_training_plots,
     save_bg_timeseries_plots, export_results_to_netcdf, set_reproducibility,
+    HeadCheckpoint, save_wandb_artifact,
 )
 
 
@@ -55,8 +62,16 @@ def _fp_true_values(fp_batch):
 
 
 def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
-    """One training epoch over (inputs, fps, background) batches with the joint loss."""
+    """One training epoch over (inputs, fps, background) batches with the joint loss.
+
+    Once ``model_ctx.bg_frozen`` is set (see ``run_full_training``), the bg head is kept in
+    eval mode, its loss is dropped from the joint loss (it is still computed on detached
+    predictions for logging), and the trunk trains on the footprint objective alone.
+    """
     model.train()
+    if model_ctx.bg_frozen:
+        # keep the frozen head's dropout / norm statistics fixed
+        model.bg_decoder.eval()
     running_total = 0.0
     running_fp = 0.0
     running_bg = 0.0
@@ -77,9 +92,17 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
 
         fp_loss = model_ctx.fp_criterion(fp_pred, true_values, fp_batch)
         # Nawid - background loss
-        bg_loss = model_ctx.bg_criterion(bg_pred, bg_batch)
-        # Nawid - Made it so that it uses both the different losses
-        loss = (1-model_ctx.bg_loss_weight)*fp_loss + model_ctx.bg_loss_weight * bg_loss
+        if model_ctx.bg_frozen:
+            # Frozen bg head: log its loss on detached predictions and drop it from the
+            # joint loss — gradients would otherwise still reach the shared trunk through
+            # the frozen head. The fp term keeps its (1 - w) scaling so the fp gradient
+            # magnitude is unchanged by the freeze.
+            bg_loss = model_ctx.bg_criterion(bg_pred.detach(), bg_batch)
+            loss = (1 - model_ctx.bg_loss_weight) * fp_loss
+        else:
+            bg_loss = model_ctx.bg_criterion(bg_pred, bg_batch)
+            # Nawid - Made it so that it uses both the different losses
+            loss = (1-model_ctx.bg_loss_weight)*fp_loss + model_ctx.bg_loss_weight * bg_loss
 
         loss.backward()
         model_ctx.optimizer.step()
@@ -183,6 +206,17 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
     best_test_fp = float("inf")
     best_test_bg = float("inf")
 
+    # Per-head checkpointing: each head's own best test loss saves a full-model snapshot
+    # (the heads share the trunk, so a "head checkpoint" is a whole model — use each file
+    # for its own head's predictions). This realises the per-head selection that
+    # "best/objective" assumes; the combined-loss *_best.pt from EarlyStopping is unchanged.
+    verbose = training_ctx.parameters.get("verbose", True)
+    fp_ckpt = HeadCheckpoint("fp", paths_ctx.model_path / f"{paths_ctx.model_name}_best_fp.pt",
+                             verbose=verbose)
+    bg_ckpt = HeadCheckpoint("bg", paths_ctx.model_path / f"{paths_ctx.model_name}_best_bg.pt",
+                             delta=model_ctx.bg_freeze_min_delta, verbose=verbose)
+    bg_frozen_epoch = None
+
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx + epoch_so_far
         print(f"\n--- Start Epoch: {epoch} ---")
@@ -203,6 +237,8 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         losses["test_bg"].append(avg_test_bg)
         best_test_fp = min(best_test_fp, avg_test_fp)
         best_test_bg = min(best_test_bg, avg_test_bg)
+        fp_ckpt.step(avg_test_fp, model, epoch)
+        bg_ckpt.step(avg_test_bg, model, epoch)
         if bg_mae_denorm is not None:
             losses["test_bg_mae_denorm"].append(bg_mae_denorm)
 
@@ -232,6 +268,9 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "best/test_loss_fp": best_test_fp,
                 "best/test_loss_bg": best_test_bg,
                 "best/objective": best_test_fp + objective_bg_weight * best_test_bg,
+                "best/epoch_fp": fp_ckpt.best_epoch,
+                "best/epoch_bg": bg_ckpt.best_epoch,
+                "bg/frozen": int(model_ctx.bg_frozen),
                 **list_of_metrics,
             }
             if bg_mae_denorm is not None:
@@ -242,6 +281,21 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         if model_ctx.early_stopping.early_stop:
             print("Early stopping triggered. Ending training.")
             break
+
+        # Freeze the bg head once its test loss has stagnated (it typically peaks around
+        # epoch 50-90 and then overfits while the fp head keeps improving): from the next
+        # epoch the trunk trains on the footprint objective alone. Opt-in via
+        # parameters["bg_head"]["freeze_patience"]; its best checkpoint is already saved.
+        if (model_ctx.bg_freeze_patience is not None and not model_ctx.bg_frozen
+                and bg_ckpt.counter >= model_ctx.bg_freeze_patience):
+            gates_training_dual.freeze_bg_head(model)
+            model_ctx.bg_frozen = True
+            bg_frozen_epoch = epoch
+            freeze_msg = (f"Freezing bg head at epoch {epoch}: no improvement for "
+                          f"{bg_ckpt.counter} epochs (best {bg_ckpt.best_loss:.6f} at "
+                          f"epoch {bg_ckpt.best_epoch})")
+            print(freeze_msg)
+            write_to_file(freeze_msg, paths_ctx.updates_path)
 
         log_text = (f"Epoch {epoch}, total {avg_train_total:.4f}/{avg_test_total:.4f}, "
                     f"fp {avg_train_fp:.4f}/{avg_test_fp:.4f}, bg {avg_train_bg:.4f}/{avg_test_bg:.4f}")
@@ -294,6 +348,32 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             note = "detrended: relative to the south-boundary midpoint baseline"
             test_fp_dataset["bg_true_ppb"].attrs["note"] = note
             test_fp_dataset["bg_pred_ppb"].attrs["note"] = note
+
+    # Record where each head peaked and upload the per-head best checkpoints once (per-epoch
+    # artifact upload would spam versions; the combined best.pt already versions via
+    # EarlyStopping).
+    summary_msg = (f"Per-head bests: fp {fp_ckpt.best_loss:.6f} at epoch {fp_ckpt.best_epoch} "
+                   f"-> {Path(fp_ckpt.path).name}; bg {bg_ckpt.best_loss:.6f} at epoch "
+                   f"{bg_ckpt.best_epoch} -> {Path(bg_ckpt.path).name}")
+    if bg_frozen_epoch is not None:
+        summary_msg += f"; bg head frozen at epoch {bg_frozen_epoch}"
+    print(summary_msg)
+    write_to_file(summary_msg, paths_ctx.updates_path)
+
+    if model_ctx.use_wandb:
+        for head_ckpt in (fp_ckpt, bg_ckpt):
+            if head_ckpt.best_epoch is not None:
+                save_wandb_artifact(
+                    model_ctx.model_name, f"best_{head_ckpt.head_name}", "model",
+                    f"Best {head_ckpt.head_name}-head checkpoint (test {head_ckpt.head_name} "
+                    f"loss {head_ckpt.best_loss:.6f} at epoch {head_ckpt.best_epoch})",
+                    str(head_ckpt.path),
+                )
+        wandb.run.summary.update({
+            "best/epoch_fp": fp_ckpt.best_epoch,
+            "best/epoch_bg": bg_ckpt.best_epoch,
+            "bg/frozen_epoch": bg_frozen_epoch,
+        })
 
     export_results_to_netcdf(test_fp_dataset, paths_ctx.model_path, model_ctx.model_name, use_wandb=model_ctx.use_wandb)
     print("Finished Training.")

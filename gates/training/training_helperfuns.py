@@ -220,6 +220,59 @@ class EarlyStopping:
             _ = save_wandb_artifact(self.model_name, f"checkpoint_epoch_{self.counter}", "model", f"Best model checkpoint at epoch {self.counter} with val_loss: {val_loss:.6f}", self.path)
 
 
+class HeadCheckpoint:
+    """
+    Tracks the best validation loss of ONE head of a multi-head model. Saves a checkpoint
+    whenever that head's own loss improves, and counts the epochs since the last improvement
+    (``counter``), which the training loop can use to freeze an overfitting head.
+
+    The heads share the encoder/processor trunk, so each checkpoint is the FULL model state
+    dict (same bare format as ``EarlyStopping``'s ``*_best.pt``): at predict time, load the
+    head's own file and use only that head's output. Unlike ``EarlyStopping`` this never
+    stops training and does not log per-improvement W&B artifacts (the fp head improves
+    most epochs, which would spam artifact versions) — upload the final file once instead.
+    """
+
+    def __init__(self, head_name, path, delta=0.0, verbose=True):
+        """
+        Args:
+            head_name (str): Display name of the head (e.g. "fp", "bg").
+            path (str or Path): File path at which to save the head's best checkpoint.
+            delta (float): Minimum decrease in the head's loss to count as an improvement.
+            verbose (bool): If True, prints a message on each improvement.
+        """
+        self.head_name = head_name
+        self.path = path
+        self.delta = delta
+        self.verbose = verbose
+        self.best_loss = np.inf
+        self.best_epoch = None
+        self.counter = 0  # epochs since the last improvement
+
+    def step(self, val_loss, model, epoch):
+        """Record this epoch's head validation loss; checkpoint the model on improvement.
+
+        Args:
+            val_loss (float): The head's validation loss for the current epoch.
+            model (torch.nn.Module): The full model to checkpoint if the head improved.
+            epoch (int): Current epoch number (stored as ``best_epoch`` on improvement).
+
+        Returns:
+            bool: True if the head improved (and the checkpoint was saved).
+        """
+        if val_loss < self.best_loss - self.delta:
+            if self.verbose:
+                print(f"{self.head_name} head loss decreased ({self.best_loss:.6f} --> {val_loss:.6f}). "
+                      f"Saving {self.path}")
+            self.best_loss = val_loss
+            self.best_epoch = epoch
+            self.counter = 0
+            torch.save(model.state_dict(), self.path)
+            return True
+        self.counter += 1
+        return False
+
+
 def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, colorbar=True):
     """
     Generates and saves a 4×4 grid of images comparing model predictions against ground truth

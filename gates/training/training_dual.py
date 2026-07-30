@@ -131,6 +131,19 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
             "bg_loss_weight": 1.0
         }
 
+    The background head converges (and starts overfitting) long before the footprint head,
+    so it can optionally get its own training controls under ``parameters['bg_head']``
+    (all keys optional; the defaults reproduce the previous behaviour exactly)::
+
+        "bg_head": {
+            "freeze_patience": 25,     # freeze the bg head after this many epochs without
+                                       # improvement in its test loss (null = never freeze)
+            "freeze_min_delta": 0.0,   # minimum decrease that counts as an improvement
+            "weight_decay": 0.05,      # AdamW weight decay for bg_decoder params only
+                                       # (null = optimizer default, as for the rest)
+            "lr_scale": 1.0            # multiplier on learning_rate for bg_decoder params
+        }
+
     Returns:
         model (nn.Module), model_ctx (DualModelContext).
     """
@@ -177,7 +190,30 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
 
     bg_loss_weight = loss_cfg.get("bg_loss_weight", 1.0)
 
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
+    # --- Optional background-head-specific training controls (see docstring) ---
+    bg_head_cfg = parameters.get("bg_head", {})
+    bg_freeze_patience = bg_head_cfg.get("freeze_patience", None)
+    if bg_freeze_patience is not None:
+        # patience < 1 would freeze the head immediately after the first epoch
+        bg_freeze_patience = max(1, int(bg_freeze_patience))
+    bg_freeze_min_delta = bg_head_cfg.get("freeze_min_delta", 0.0)
+    bg_weight_decay = bg_head_cfg.get("weight_decay", None)
+    bg_lr_scale = bg_head_cfg.get("lr_scale", 1.0)
+
+    if bg_weight_decay is None and bg_lr_scale == 1.0:
+        optimizer = optim.AdamW(model.parameters(), lr=lr)
+    else:
+        # Separate parameter group so the bg head gets its own weight decay / LR while the
+        # shared trunk and fp head keep the optimizer defaults.
+        bg_decoder_params = list(model.bg_decoder.parameters())
+        bg_param_ids = {id(p) for p in bg_decoder_params}
+        shared_params = [p for p in model.parameters() if id(p) not in bg_param_ids]
+        bg_group = {"params": bg_decoder_params, "lr": lr * bg_lr_scale}
+        if bg_weight_decay is not None:
+            bg_group["weight_decay"] = bg_weight_decay
+        optimizer = optim.AdamW([{"params": shared_params}, bg_group], lr=lr)
+        print(f"bg_decoder optimizer group: lr={lr * bg_lr_scale}, "
+              f"weight_decay={bg_group.get('weight_decay', 'default')}")
 
     early_stopping = EarlyStopping(
         patience=parameters["epochs"]["patience"],
@@ -206,9 +242,23 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
         epochs_visualise=parameters["epochs"].get("visualize", 5),
         epochs_save=parameters["epochs"]["model_save"],
         epochs_patience=parameters["epochs"]["patience"],
+        bg_freeze_patience=bg_freeze_patience,
+        bg_freeze_min_delta=bg_freeze_min_delta,
     )
 
     return model, model_ctx
+
+
+def freeze_bg_head(model):
+    """Freeze the background decoder head: disable its grads so the optimizer skips it.
+
+    The training loop must ALSO drop the bg term from the joint loss and put
+    ``model.bg_decoder`` in eval mode during training (see ``train_one_epoch`` in
+    ``train_dual_model.py``): gradients would otherwise still flow *through* the frozen
+    head into the shared trunk, and its dropout/norm statistics would keep changing.
+    """
+    for p in model.bg_decoder.parameters():
+        p.requires_grad_(False)
 
 
 def initialise_dual_losses():

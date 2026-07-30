@@ -130,4 +130,11 @@ class DualModelContext:
     epochs_save: int
     epochs_patience: int
 
+    # Background-head schedule (see parameters["bg_head"] in setup_dual_model): freeze the
+    # bg head after this many epochs without improvement in its own test loss (None =
+    # never freeze). ``bg_frozen`` is flipped by the training loop once the freeze happens.
+    bg_freeze_patience: object = None
+    bg_freeze_min_delta: float = 0.0
+    bg_frozen: bool = False
+
 
