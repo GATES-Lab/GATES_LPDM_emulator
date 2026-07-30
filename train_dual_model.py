@@ -162,13 +162,18 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                       bg_detrended=True):
     """Joint training loop with footprint-head metrics and background-head MAE.
 
-    Background time-series plots and their NetCDF export are produced for single-class
-    (``num_classes=1``, summed) runs only; ``bg_detrended`` records whether the backgrounds
-    were detrended (affects only plot labels).
+    Background time-series plots (denormalised, ppb) and their NetCDF export are produced
+    for single-class (``num_classes=1``, summed) runs only; ``bg_detrended`` records whether
+    the backgrounds were detrended (affects only plot labels). The plot windows are
+    configurable via the ``bg_timeseries_plot`` parameter block (keys ``n_windows``,
+    ``window_days``; defaults 4 and 7).
     """
     write_to_file("starting dual training loop", paths_ctx.updates_path)
 
     bg_true_ppb = bg_pred_ppb = None
+    bg_plot_params = training_ctx.parameters.get("bg_timeseries_plot", {})
+    bg_plot_n_windows = bg_plot_params.get("n_windows", 4)
+    bg_plot_window_days = bg_plot_params.get("window_days", 7)
 
     # Best-so-far per-head test losses, logged every epoch. These are monotone, so the last
     # value equals the run's best — which makes "best/objective" a robust W&B sweep metric
@@ -258,11 +263,12 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 wandb.log({f"fps_epoch_{epoch}": wandb.Image(img_save_path)}, step=epoch)
 
             # Nawid - background time series (true vs predicted, denormalised, in ppb) over
-            # 4 week-long windows spread across the test period.
+            # week-long windows spread across the test period.
             if bg_true_ppb is not None:
                 bg_img_path = save_bg_timeseries_plots(
                     epoch, test_fp_dataset.time.values, bg_true_ppb, bg_pred_ppb,
                     paths_ctx.model_path, paths_ctx.model_name, detrended=bg_detrended,
+                    n_windows=bg_plot_n_windows, window_days=bg_plot_window_days,
                 )
                 if model_ctx.use_wandb:
                     wandb.log({f"bg_timeseries_epoch_{epoch}": wandb.Image(str(bg_img_path))}, step=epoch)
