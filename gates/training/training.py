@@ -282,11 +282,14 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
         print(f"datapath_args: {datapath_args}")
         try:
             data = LoadSquareSatelliteData(**year_params, **datapath_args, verbose=verbose)
-
+            print("flux args", flux_args)
             if flux_args is not None and len(flux_args) > 0:
-                get_flux = flux_args.pop("get_flux", True)
+                # Copy so we don't mutate the caller's dict (it's the same object as
+                # parameters["flux"], reused for the test load).
+                flux_kwargs = dict(flux_args)
+                get_flux = flux_kwargs.pop("get_flux", True)
                 if get_flux:
-                    data.get_flux(**flux_args)
+                    data.get_flux(**flux_kwargs)
 
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
 

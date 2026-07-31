@@ -1170,6 +1170,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         return self.topog
 
     def get_flux(self, append_to_fp=True):
+        if self.verbose: print("----- Loading and cutting flux data" + f" and appending to fp" if append_to_fp else "")
         ems = load_flux_data(self.domain, year=self.year)
         cropped_flux, nan_idxs = cut_flux_data(ems, self.fp_data_full, size=self.size)
         self.fluxes = cropped_flux
