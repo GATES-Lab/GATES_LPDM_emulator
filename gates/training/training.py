@@ -169,7 +169,26 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=Non
     return dynamic_edge_params
 
 
-def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False, wandb_year_counter=1, return_wandb_year_counter=False):
+def initialise_wandb_loading():
+    """
+    Set up W&B for logging data-loading metrics and return the shared state that
+    carries the running counter/totals across multiple load_GATES_data_v2 calls.
+
+    Call this once (after wandb.init) before loading any data, then pass the
+    returned dict as `wandb_state` to every load_GATES_data_v2 call (train, test,
+    each region...). Because the same dict is reused and mutated in place, the
+    'loading/loaded_year' step and the running totals keep increasing instead of
+    restarting at 1 on each call, so the metrics form one continuous series.
+
+    Returns:
+        dict: {"year_counter": int, "total_time": float, "total_samples": int}.
+    """
+    wandb.define_metric("loading/loaded_year")
+    wandb.define_metric("loading/*", step_metric="loading/loaded_year")
+    return {"year_counter": 1, "total_time": 0.0, "total_samples": 0}
+
+
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False, wandb_state=None):
     """
     Loads footprints and inputs one whole year at a time for the years specified in
     data_parameters, returning them as concatenated xarrays rather than a
@@ -197,20 +216,18 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
             Defaults to False.
         use_wandb (bool): If True, log per-year loading metrics (time, sample count) to
             W&B under the 'loading/*' namespace. Defaults to False.
-        wandb_year_counter (int): Starting step value for W&B loading metrics. Defaults
-            to 1. Pass the value returned by a previous call to chain metrics continuously
-            across multiple loads (e.g. train then test, or across regions).
-        return_wandb_year_counter (bool): If True, return the final counter value as a
-            third return value so callers can chain it into the next call. Defaults to False
-            to preserve backward compatibility.
+        wandb_state (dict | None): Shared loading state from initialise_wandb_loading()
+            holding the running 'year_counter' and cumulative 'total_time'/'total_samples'.
+            Pass the same dict to every load call (train, test, each region) so metrics
+            form one continuous series rather than restarting at 1. Mutated in place. If
+            None while use_wandb is True, one is created here (metrics start from 1), so a
+            standalone call still logs correctly.
 
     Returns:
         fp_xr (xr.Dataset): Concatenated footprints with shape (sample_id, lat, lon).
         inputs (xr.DataArray): Concatenated met inputs with shape (sample_id, lat, lon, variable_name).
             Both are sorted chronologically and share a fresh 1..N sample_id, since the
             per-year sample_ids collide once concatenated.
-        wandb_year_counter (int): Final counter value after all years are loaded.
-            Only returned when return_wandb_year_counter=True.
     """
     if "met_args" in data_parameters and "met_args" in datapath_args:
         merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
@@ -249,12 +266,11 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     all_fp_xr = []
     loading_times = {}
 
-    total_time=0
-    total_samples = 0
-
-    if use_wandb:
-        wandb.define_metric("loading/loaded_year")
-        wandb.define_metric("loading/*", step_metric="loading/loaded_year")
+    # W&B loading metrics accumulate across calls (train then test, or across
+    # regions) via the shared wandb_state from initialise_wandb_loading(). If the
+    # caller didn't provide one, self-initialise so a standalone call still logs.
+    if use_wandb and wandb_state is None:
+        wandb_state = initialise_wandb_loading()
 
     for year in years:
         year_start = time.perf_counter()
@@ -306,18 +322,19 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
 
         print(f"{year_key} : {loading_times[year_key]}")
 
-        total_samples += loaded_samples
-        # sum of all loading times
-        total_time += elapsed_mins
         if use_wandb:
+            # Running totals live in the shared state so they keep climbing across
+            # calls instead of resetting; the counter drives the metric's x-axis.
+            wandb_state["total_samples"] += loaded_samples
+            wandb_state["total_time"] += elapsed_mins
             wandb.log({
-                "loading/loaded_year": wandb_year_counter,
+                "loading/loaded_year": wandb_state["year_counter"],
                 "loading/train_time": elapsed_mins,
-                "loading/total_time": total_time,
+                "loading/total_time": wandb_state["total_time"],
                 "loading/samples_loaded": loaded_samples,
-                "loading/total_samples": total_samples,
+                "loading/total_samples": wandb_state["total_samples"],
             })
-        wandb_year_counter += 1
+            wandb_state["year_counter"] += 1
 
     print("")
     print("")
@@ -341,8 +358,6 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
     fp_xr = fp_xr.assign_coords(sample_id=sample_ids)
     inputs = inputs.assign_coords(sample_id=sample_ids)
 
-    if return_wandb_year_counter:
-        return fp_xr, inputs, wandb_year_counter
     return fp_xr, inputs
 
 

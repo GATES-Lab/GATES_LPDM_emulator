@@ -378,8 +378,12 @@ def train_and_save_model(parameters, model_save_dir):
     #     data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
     #     train_fp_data = data.fp_xr
 
+    # Shared loading state so W&B loading metrics form one continuous series across
+    # the train and test loads instead of the counter restarting at 1 for each.
+    wandb_loading_state = gates_training.initialise_wandb_loading() if use_wandb else None
+
     if new_data_loaders:
-        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
+        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb, wandb_state=wandb_loading_state)
         train_fp_data = data
 
     print(train_fp_data)
@@ -392,7 +396,7 @@ def train_and_save_model(parameters, model_save_dir):
     #     test_fp_data = test_data.fp_xr
 
     if new_data_loaders:
-        test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+        test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb, wandb_state=wandb_loading_state)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
         test_fp_data = test_data
         
 
