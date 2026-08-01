@@ -163,7 +163,9 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
     train_inputs_list = []
     train_fps_list = []
     test_regions = []
-    wandb_year_counter = 1
+    # Shared loading state so W&B loading metrics stay continuous across every
+    # region's train and test load rather than restarting at 1 each time.
+    wandb_loading_state = gates_training.initialise_wandb_loading() if (load_monthly and use_wandb) else None
 
     for region_config in region_configs:
         train_params = copy.deepcopy(region_config["train_load_data"])
@@ -179,10 +181,10 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 datapath_args=datapath_args, verbose=verbose)
             train_fp_r = data_r.fp_xr
         else:
-            data_r, train_inputs_r, wandb_year_counter = gates_training.load_GATES_data_v2(
+            data_r, train_inputs_r = gates_training.load_GATES_data_v2(
                 train_params, input_variables=input_variables,
                 datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory,
-                use_wandb=use_wandb, wandb_year_counter=wandb_year_counter, return_wandb_year_counter=True)
+                use_wandb=use_wandb, wandb_state=wandb_loading_state)
             train_fp_r = data_r
 
         if verbose:
@@ -194,10 +196,10 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 datapath_args=datapath_args, verbose=verbose)
             test_fp_r = test_data_r.fp_xr
         else:
-            test_data_r, test_inputs_r, wandb_year_counter = gates_training.load_GATES_data_v2(
+            test_data_r, test_inputs_r = gates_training.load_GATES_data_v2(
                 test_params, input_variables=input_variables,
                 datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory,
-                use_wandb=use_wandb, wandb_year_counter=wandb_year_counter, return_wandb_year_counter=True)
+                use_wandb=use_wandb, wandb_state=wandb_loading_state)
             test_fp_r = test_data_r
 
         if verbose:
