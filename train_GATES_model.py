@@ -219,6 +219,8 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         list_of_metrics.update({f"metrics_original-{k}": v for k, v in computed_metrics["eval_metrics"].items()})
         for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items():
             list_of_metrics.update({f"metrics_fluxes_static/{flux_mode}/{k}": v for k, v in metrics.items()})
+        if "flux_eval_metrics" in computed_metrics:
+            list_of_metrics.update({f"metrics_fluxes/{k}": v for k, v in computed_metrics["flux_eval_metrics"].items()})
 
 
         if model_ctx.use_wandb:
@@ -366,33 +368,23 @@ def train_and_save_model(parameters, model_save_dir):
 
     # the data is extracted from the config file, unless it is superced from parameters. resolve_datapath_args returns the correct path in a dictionary passed to the data objects 
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
+    flux_args = parameters.get("flux", None)
 
     print("Loading met and fp data for model", model_name)
     write_to_file("Load training and testing met and fp data", paths_ctx.updates_path)
 
     client, cluster = gates_training.make_cluster()
 
-    load_monthly = parameters.get("load_data_monthly", False)
-    
-    if not load_monthly:
-        data, train_inputs = gates_training.load_GATES_data(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)
-        train_fp_data = data.fp_xr
-
-    if load_monthly:
-        data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
-        train_fp_data = data
+    data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, flux_args=flux_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb)
+    train_fp_data = data
 
     write_to_file(f"Successfully loaded training met and fp data with {len(train_fp_data.time)} time samples. Loading test data", paths_ctx.updates_path)
     print("Successfully loaded training met and fp data with", len(train_fp_data.time), "time samples")
     print("Loading test data")
 
-    if not load_monthly:
-        test_data, test_inputs = gates_training.load_GATES_data(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
-        test_fp_data = test_data.fp_xr
-    if load_monthly:
-        test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
-        test_fp_data = test_data
-        
+    test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, flux_args=flux_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False))  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+    test_fp_data = test_data
+
 
     write_to_file(f"Successfully load test met and fp data with {len(test_fp_data.time)} time samples", paths_ctx.updates_path)
     print("Successfully load test met and fp data with", len(test_fp_data.time), "time samples")

@@ -169,7 +169,7 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=Non
     return dynamic_edge_params
 
 
-def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbose=True, load_into_memory=False, use_wandb=False, wandb_year_counter=1, return_wandb_year_counter=False):
+def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_args=None, verbose=True, load_into_memory=False, use_wandb=False, wandb_year_counter=1, return_wandb_year_counter=False):
     """
     Loads footprints and inputs one whole year at a time for the years specified in
     data_parameters, returning them as concatenated xarrays rather than a
@@ -262,6 +262,14 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, verbo
         year_params = {**base_params, "year": year, "month": None}
         try:
             data = LoadSquareSatelliteData(**year_params, **datapath_args, verbose=verbose)
+
+            if flux_args is not None and len(flux_args) > 0:
+                # Copy so we don't mutate the caller's dict (it's the same object as
+                # parameters["flux"], reused for the test load).
+                flux_kwargs = dict(flux_args)
+                get_flux = flux_kwargs.pop("get_flux", True)
+                if get_flux:
+                    data.get_flux(**flux_kwargs)
 
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
 
@@ -440,7 +448,8 @@ def initialise_losses():
             "uniform": flux_metrics_dict.copy(),
             "checkerboard": flux_metrics_dict.copy(),
             "checkerboard_10": flux_metrics_dict.copy(),
-        }
+        },
+        "metrics_fluxes": flux_metrics_dict.copy(),
     }
     return losses
 
@@ -481,11 +490,20 @@ def calculate_losses(losses, test_outputs_xr):
         if flux_type in losses["metrics_fluxes_static"]:
             for metric_name, metric_value in metrics.items():
                 if metric_name in losses["metrics_fluxes_static"][flux_type]:
-                    losses["metrics_fluxes_static"][flux_type][metric_name].append(metric_value)  
+                    losses["metrics_fluxes_static"][flux_type][metric_name].append(metric_value)
+
+    if "flux" in test_outputs_xr:
+        flux_eval_metrics = gates_metrics.compute_flux_metrics(test_outputs_xr.fp_original, test_outputs_xr.fp_pred, test_outputs_xr.flux)
+        for metric_name, metric_value in flux_eval_metrics.items():
+            if metric_name in losses["metrics_fluxes"]:
+                losses["metrics_fluxes"][metric_name].append(metric_value)
 
     computed_metrics["eval_metrics"] = eval_metrics
     computed_metrics["transformed_eval_metrics"] = transformed_eval_metrics
     computed_metrics["static_mf_eval_metrics"] = static_mf_eval_metrics
+
+    if "flux" in test_outputs_xr:
+        computed_metrics["flux_eval_metrics"] = flux_eval_metrics
 
     return losses, computed_metrics
 """
