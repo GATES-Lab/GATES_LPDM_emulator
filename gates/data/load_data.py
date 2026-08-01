@@ -1010,8 +1010,14 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.size, pad_mode="zeros")
         return self.topog
 
-    def get_flux(self, append_to_fp=True):
-        ems = load_flux_data(self.domain, year=self.year)
+    def get_flux(self, year=None, append_to_fp=True, search_others=True, convert_units=False, convert_units_args={}):
+        if year is None:
+            year = self.year
+        ems = load_flux_data(self.domain, year=year, search_others=search_others)
+        if convert_units:
+            if len(convert_units_args) == 0:
+                warnings.warn("convert_units is True but no convert_units_args were passed!")
+            ems = transform_flux(ems, **convert_units_args)
         cropped_flux, nan_idxs = cut_flux_data(ems, self.fp_data_full, size=self.size)
         self.fluxes = cropped_flux
         self.remove_indeces(nan_idxs)

@@ -55,6 +55,13 @@ def haversine(lat1, lon1, lat2, lon2, radius=6371.0, degrees=False):
     return radius * c
 
 
+def transform_flux(flux, unit_multiplier=1):
+    """
+    Multiply a flux field by a constant multiplier, e.g. to convert units."""
+    print("multiplying by ", unit_multiplier, " to convert flux units")
+    return flux * unit_multiplier
+
+
 def select_met_levels(met, levels=None):
     # subset the right levels and variables, as specified in the inputs
     if levels is not None and len(levels)>0 and "levels" in met.coords:

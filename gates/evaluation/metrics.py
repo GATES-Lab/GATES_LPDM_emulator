@@ -738,4 +738,34 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
     return results
 
 
-   
+def compute_flux_metrics(fp_true, fp_pred, flux, spatial_shape=None, transform_factor=None, ignore_mask=None):
+
+    if isinstance(fp_true, xr.Dataset) or isinstance(fp_pred, xr.Dataset) or isinstance(flux, xr.Dataset):
+        raise ValueError("xarray Datasets are not supported for fp_true or fp_pred. Use xr.DataArrays instead.")
+    elif isinstance(fp_true, xr.DataArray) and isinstance(fp_pred, xr.DataArray) and isinstance(flux, xr.DataArray):
+        spatial_shape = _spatial_shape_from_xarray(fp_true)
+        fp = _to_batched_spatial(_to_numpy(fp_true), spatial_shape)
+        fp_pred = _to_batched_spatial(_to_numpy(fp_pred), spatial_shape)
+        flux = _to_batched_spatial(_to_numpy(flux), spatial_shape)
+        H, W = spatial_shape
+
+    elif isinstance(fp_true, np.ndarray) and isinstance(fp_pred, np.ndarray) and isinstance(flux, np.ndarray):
+        fp = _to_batched_spatial(_to_numpy(fp_true), spatial_shape)
+        fp_pred = _to_batched_spatial(_to_numpy(fp_pred), spatial_shape)
+        flux = _to_batched_spatial(_to_numpy(flux), spatial_shape)
+        H, W = fp.shape[1], fp.shape[2]
+
+    else:
+        raise ValueError("Unsupported combination of input types for fp_true and fp_pred. Both must be either xarray DataArrays or numpy arrays.")
+
+    results = {}
+
+    ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
+
+    flux = np.where(ignore_np, 0, flux)
+    mf_true = calculate_mfs(fp_true, flux, transform_factor)
+    mf_pred = calculate_mfs(fp_pred, flux, transform_factor)
+
+    results = compute_mfs_metrics(mf_true, mf_pred)
+
+    return results
