@@ -601,8 +601,8 @@ class FootprintDataset:
     - LogAndShiftFpScaler: takes log of fp data where non-zero, and offsets by minimum order-of-magnitude value so its strictly positive
     """
 
-    def __init__(self, fp, scaler=None, scaler_params={}, add_nan_mask=False, verbose=False):
-        
+    def __init__(self, fp, scaler=None, scaler_params={}, add_nan_mask=False, verbose=False, keep_vars=True):
+        self.keep_vars = keep_vars
         fp = self._check_fp_format(fp)
         
         self.fp = fp.copy()
@@ -624,6 +624,10 @@ class FootprintDataset:
             if "fp" not in fp.data_vars:
                 raise ValueError("fp must be an xarray DataSet with a variable named 'fp', or an xarray DataArray")
             else:
+                if self.keep_vars:
+                    # save all other vars that are not fp but that also have dims (time, lat, lon) to the transformed dataset
+                    self.other_vars = {var: fp[var] for var in fp.data_vars if var != "fp" and set(fp[var].dims) == set(["time", "lat", "lon"])}
+
                 fp = fp["fp"]
         elif not isinstance(fp, xr.DataArray):
             raise ValueError("fp must be an xarray DataSet with a variable named 'fp', or an xarray DataArray")
@@ -654,6 +658,10 @@ class FootprintDataset:
         if self.add_nan_mask:
             ds = add_fp_nan_mask(ds, fill_nans=True, fp_var_name="fp_original", nan_mask_name="fp_nan_mask")
             if self.verbose: print("Added fp_nan_mask to the dataset, which indicates where the original fp had NaN values. The transformed_fp has been filled with zeros where the original fp had NaN values.")
+
+        if self.keep_vars and hasattr(self, "other_vars"):
+            for var, data in self.other_vars.items():
+                ds[var] = data
 
 
         # add coord linked to time index with idx
