@@ -18,7 +18,7 @@ from .load_data_helper_funs import *
 
 from .load_data import _get_release_idxs, _pad_domain
 
-def _stack_and_label_variables(ds, var_names, var_type, verbose=False):
+def _stack_and_label_variables(ds, var_names, var_type,  met_variables_dict=None, verbose=False):
     """Stack requested variables into a single ``variable_name`` dimension with tuple labels.
 
     Args:
@@ -54,6 +54,18 @@ def _stack_and_label_variables(ds, var_names, var_type, verbose=False):
             if "levels" not in ds[var].coords:
                 warnings.warn(f"variable {var} has no 'levels' coordinate and will be skipped")
                 continue
+
+            requested_levels = list(met_variables_dict.get(var, [])) if met_variables_dict is not None else []
+            available_levels = list(ds[var].levels.values)
+            valid_levels = [lev for lev in requested_levels if lev in available_levels]
+            dropped_levels = [lev for lev in requested_levels if lev not in available_levels]
+
+            if dropped_levels:
+               warnings.warn(f"requested levels {dropped_levels} for variable {var} are not available and will be skipped")
+
+            if len(valid_levels) == 0:
+               warnings.warn(f"variable {var} has no valid levels left after filtering and will be skipped")
+               continue
 
             filtered_vars.append(var)
         
