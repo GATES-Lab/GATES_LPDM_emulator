@@ -57,7 +57,13 @@ def haversine(lat1, lon1, lat2, lon2, radius=6371.0, degrees=False):
 
 def transform_flux(flux, unit_multiplier=1):
     """
-    Multiply a flux field by a constant multiplier, e.g. to convert units."""
+    Multiply a flux field by a constant multiplier, e.g. to convert units.
+    Args:
+        flux (array-like): The flux field to be transformed.
+        unit_multiplier (float, optional): The constant multiplier to apply to the flux field. Defaults to 1 (no change).
+    Returns:
+        array-like: The transformed flux field, multiplied by the unit_multiplier.
+    """
     print("multiplying by ", unit_multiplier, " to convert flux units")
     return flux * unit_multiplier
 
@@ -114,11 +120,11 @@ def select_met_variables(met, variables=None):
     return met
 
 def _static_var_topog(topog_ds, coordinate_ds):
-    """<FILL IN>
+    """Appends the topography variable from the topography dataset to the coordinate dataset. 
 
     Args:
-        topog_ds (xr.Dataset): <FILL IN>
-        coordinate_ds (xr.Dataset): <FILL IN>
+        topog_ds (xr.Dataset): Dataset from LoadSquareSatelliteData that contains the topography variable.
+        coordinate_ds (xr.Dataset): Dataset to which the topography variable will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``topog`` variable assigned.
@@ -133,11 +139,11 @@ def _static_var_topog(topog_ds, coordinate_ds):
     return coordinate_ds
 
 def _static_var_landcover(topog_ds, coordinate_ds):
-    """<FILL IN>
+    """Appends the landcover variable from the topography dataset to the coordinate dataset.
 
     Args:
-        topog_ds (xr.Dataset): <FILL IN>
-        coordinate_ds (xr.Dataset): <FILL IN>
+        topog_ds (xr.Dataset): Dataset from LoadSquareSatelliteData that contains the landcover variable.
+        coordinate_ds (xr.Dataset): Dataset to which the landcover variable will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``landcover`` variable assigned.
@@ -149,8 +155,8 @@ def _static_var_landcover_disaggregated(topog_ds, coordinate_ds):
     """Extract the ten types of landcover as separate 2D inputs.
 
     Args:
-        topog_ds (xr.Dataset): <FILL IN>
-        coordinate_ds (xr.Dataset): <FILL IN>
+        topog_ds (xr.Dataset): Dataset from LoadSquareSatelliteData that contains the disaggregated landcover variable.
+        coordinate_ds (xr.Dataset): Dataset to which the disaggregated landcover variables will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``landcover_type_{i}`` variable assigned
@@ -165,10 +171,10 @@ def _static_var_landcover_disaggregated(topog_ds, coordinate_ds):
     return coordinate_ds
 
 def _static_var_sin_lat_coords(coordinate_ds):
-    """<FILL IN>
+    """Appends the sine of the latitude coordinates to the dataset.
 
     Args:
-        coordinate_ds (xr.Dataset): <FILL IN>
+        coordinate_ds (xr.Dataset): Dataset to which the sine of the latitude coordinates will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``sin_lat_coords`` variable assigned.
@@ -178,11 +184,10 @@ def _static_var_sin_lat_coords(coordinate_ds):
     return coordinate_ds
 
 def _static_var_sin_lon_coords(coordinate_ds):
-    """<FILL IN>
+    """Appends the sine of the longitude coordinates to the dataset.
 
     Args:
-        coordinate_ds (xr.Dataset): <FILL IN>
-
+        coordinate_ds (xr.Dataset): Dataset to which the sine of the longitude coordinates will be appended. 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``sin_lon_coords`` variable assigned.
     """
@@ -191,10 +196,10 @@ def _static_var_sin_lon_coords(coordinate_ds):
     return coordinate_ds
 
 def _static_var_cos_lat_coords(coordinate_ds):
-    """<FILL IN>
+    """Appends the cosine of the latitude coordinates to the dataset.
 
     Args:
-        coordinate_ds (xr.Dataset): <FILL IN>
+        coordinate_ds (xr.Dataset): Dataset to which the cosine of the latitude coordinates will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``cos_lat_coords`` variable assigned.
@@ -204,10 +209,10 @@ def _static_var_cos_lat_coords(coordinate_ds):
     return coordinate_ds
 
 def _static_var_cos_lon_coords(coordinate_ds):
-    """<FILL IN>
+    """Appends the cosine of the longitude coordinates to the dataset.
 
     Args:
-        coordinate_ds (xr.Dataset): <FILL IN>
+        coordinate_ds (xr.Dataset): Dataset to which the cosine of the longitude coordinates will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``cos_lon_coords`` variable assigned.
@@ -219,12 +224,8 @@ def _static_var_cos_lon_coords(coordinate_ds):
 def _static_var_x_coords(coordinate_ds):
     """Create a mesh with [0,0] at the release point, in the x coordinate (longitude).
 
-    Note: despite the function name and comment describing an x/longitude coordinate,
-    this assigns the result to the ``x_coords`` variable — <FILL IN> (please confirm
-    whether this is intentional).
-
     Args:
-        coordinate_ds (xr.Dataset): <FILL IN>
+        coordinate_ds (xr.Dataset): Dataset to which the x coordinates will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``x_coords`` variable assigned.
@@ -240,12 +241,8 @@ def _static_var_x_coords(coordinate_ds):
 def _static_var_y_coords(coordinate_ds):
     """Create a mesh with [0,0] at the release point, in the y coordinate (latitude).
 
-    Note: despite the function name and comment describing a y/latitude coordinate,
-    this assigns the result to the ``y_coords`` variable — <FILL IN> (please confirm
-    whether this is intentional; see also ``_static_var_x_coords``).
-
     Args:
-        coordinate_ds (xr.Dataset): <FILL IN>
+        coordinate_ds (xr.Dataset): Dataset to which the y coordinates will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with an ``y_coords`` variable assigned.
@@ -264,7 +261,7 @@ def _domain_distance_release(fp_data, coordinate_ds):
     Args:
         fp_data (xr.Dataset): Footprint dataset with ``lat``, ``lon``, ``release_lat``,
             and ``release_lon``.
-        coordinate_ds (xr.Dataset): <FILL IN>
+        coordinate_ds (xr.Dataset): Dataset to which the distance variables will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``distance_release`` variable assigned,
@@ -297,7 +294,7 @@ def _domain_binary_release(fp_data, coordinate_ds):
     Args:
         fp_data (xr.Dataset): Footprint dataset with ``lat``, ``lon``, ``release_lat``,
             and ``release_lon``.
-        coordinate_ds (xr.Dataset): <FILL IN>
+        coordinate_ds (xr.Dataset): Dataset to which the binary release variable will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with a ``binary_release`` variable assigned, of
@@ -343,7 +340,7 @@ def _earth_distance_centre(fp_data, coordinate_ds):
     Args:
         fp_data (xr.Dataset): Footprint dataset with ``lat_coords``, ``lon_coords``,
             ``release_lat``, and ``release_lon``.
-        coordinate_ds (xr.Dataset): <FILL IN>
+        coordinate_ds (xr.Dataset): Dataset to which the earth distance variable will be appended.
 
     Returns:
         xr.Dataset: ``coordinate_ds`` with an ``earth_distance_centre`` variable
@@ -369,7 +366,7 @@ def _earth_distance_centre(fp_data, coordinate_ds):
 
 
 def _binary_centre(coordinate_ds):
-    """<FILL IN>
+    """Appends a binary variable indicating the centre grid cell to the dataset.
 
     Args:
         coordinate_ds (xr.Dataset): Square (lat.size == lon.size) coordinate dataset.
@@ -392,7 +389,7 @@ def _binary_centre(coordinate_ds):
     return coordinate_ds
 
 def _xy_distance_centre(coordinate_ds):
-    """<FILL IN>
+    """Appends the Euclidean grid distance of each cell from the centre cell to the dataset.
 
     Args:
         coordinate_ds (xr.Dataset): Square (lat.size == lon.size) coordinate dataset.

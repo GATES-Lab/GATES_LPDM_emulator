@@ -153,7 +153,7 @@ Configures transformation of the footprint (target) values.
 
 | Field | Description |
 |-------|-------------|
-| `scaler` | Class name of the footprint scaler. Options are `LogAndShiftFpScaler` (applies a log₁₀ transform to non-zero values followed by a shift) and `LogAndSiftMeanFpscaler` (which applies the same log-transform and shift by the mean) |
+| `scaler` | Class name of the footprint scaler. Options are `LogAndShiftFpScaler` (applies a log₁₀ transform to non-zero values followed by a shift) and `LogAndShiftMeanFpScaler` (which applies the same log-transform and shifts by the mean of the log) |
 | `scaler_params` | Additional keyword arguments passed to the footprint scaler constructor. |
 
 **TODO**: add info on scalers

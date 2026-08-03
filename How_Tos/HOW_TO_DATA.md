@@ -11,15 +11,15 @@ The pipeline takes LPDM footprints + meteorology + static fields, cuts them to s
 | Data | Format | Required dimensions / variables |
 |------|--------|--------------------------------|
 | **Footprints** | NetCDF `.nc`, one file per month | dims: `time`, `lat`, `lon`; vars: `fp`, `release_lat`, `release_lon` |
-| **Meteorology** | NetCDF `.nc`, one or more files per month | dims: `time`, `levels` (or `model_level_number`), `lat`/`latitude`, `lon`/`longitude` |
-| **Meteorology (WIP)** | Zarr, one store per year (migrating from monthly NetCDF — see [below](#meteorology-yearly-zarr-stores-migration-in-progress)) | dims: `time`, `levels`, `lat`, `lon` |
+| **Meteorology** | Zarr, one store per year (see [below](#meteorology-yearly-zarr-stores)) | dims: `time`, `levels`, `lat`, `lon` |
 | **Topography** | Single global NetCDF | dims: `lat`, `lon` |
 | **Land cover** | Single global NetCDF | dims: `lat`, `lon`, `pseudo_level` |
 
 **File naming conventions** (if using default paths):
 - Footprints: `*REGION*DOMAIN_*YYYYMM.nc`
-- Met: `DOMAIN_Met_*YYYYMM.nc`
-If you're not using default paths, your files still need to end in `YYYYMM.nc'`, and the path should be in the format `fp_dir = "/path/to/file/filename_"`
+- Met: `DOMAIN_Met_YYYY.zarr` (one store per year)
+
+If you're not using default paths, footprint files still need to end in `YYYYMM.nc` (path format `fp_dir = "/path/to/file/filename_"`), and met stores need to end in `YYYY.zarr` (path format `met_datadir = "/path/to/file/filename_"`).
 
 **Built-in region → domain mappings:**
 
@@ -34,25 +34,15 @@ Other regions require passing `domain` explicitly.
 
 ---
 
-## Meteorology: yearly Zarr stores *(migration in progress)*
+## Meteorology: yearly Zarr stores
 
-Meteorology is moving from monthly NetCDF (`DOMAIN_Met_YYYYMM*.nc`) to **one Zarr store per year**. ([see PR here](https://github.com/GATES-Lab/GATES_LPDM_emulator/pull/15)) Footprints, topography and land cover are unchanged (still NetCDF).
+Meteorology is loaded from **one Zarr store per year**. This is now the only supported met format — the older monthly NetCDF met files are no longer used. Footprints, topography and land cover are unchanged (still NetCDF).
 
 **Layout & naming**
 ```
 <met_datadir>/DOMAIN/DOMAIN_Met_YYYY.zarr     # one store per year
 ```
 `met_datadir` (the same config key as before) now points at the Zarr root.
-
-**What the store already contains** — the conversion bakes in, at write time,
-everything the loader used to redo on every load, so the Zarr is ready to use
-as-is:
-- dims already renamed: `latitude/longitude → lat/lon`, `model_level_number → levels`
-- unused UM variables dropped (`forecast_period`, `forecast_reference_time`,
-  `level_height_0`, `sigma_0`)
-- duplicate/unsorted timestamps and duplicate lat/lon removed
-- native chunks `{time:1, lat:-1, lon:-1, levels:3}` — tuned so a single timestep
-  (the dominant scattered-access pattern) is cheap to read
 
 ---
 
@@ -75,7 +65,7 @@ data = LoadSquareSatelliteData(
 What happens under the hood:
 - `load_fps()` opens and concatenates footprint NetCDF files; handles a hardcoded list of known malformed files automatically.
 - `_process_footprints()` cuts each footprint to a `size × size` square centred on its `release_lat`/`release_lon` (via `cut_satellite_data()`). Out-of-domain areas are filled with NaNs by default.
-- `load_meteorology()` opens met files with dask, renames `latitude`/`longitude` → `lat`/`lon`, and drops duplicates.
+- `load_meteorology()` opens the yearly met Zarr store(s) with dask (dims are already `lat`/`lon`/`levels` and duplicates already removed in the store), slices to the requested month if one was given, and selects the requested levels/variables (missing ones are skipped).
 - `_process_meteorology()` calls `cut_satellite_met()` to cut the met to the same square grid as the footprints, interpolated to each footprint timestamp.
 - `load_topog()` loads topography and land cover, interpolates both to the footprint grid.
 

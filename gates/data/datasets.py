@@ -18,14 +18,13 @@ from .load_data_helper_funs import *
 
 from .load_data import _get_release_idxs, _pad_domain
 
-def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None, verbose=False):
+def _stack_and_label_variables(ds, var_names, var_type, verbose=False):
     """Stack requested variables into a single ``variable_name`` dimension with tuple labels.
 
     Args:
-        ds (xr.Dataset): <FILL IN>
-        var_names (list[str]): <FILL IN>
+        ds (xr.Dataset): dataset containing the requested variables.
+        var_names (list[str]): List of variable names to stack. If a variable is not present in the dataset, it will be skipped with a warning.
         var_type (str): One of "met_with_levels", "surface_met", or "static".
-        met_variables_dict (dict, optional): <FILL IN>. Defaults to None.
         verbose (bool, optional): If True, prints setup information. Defaults to False.
 
     Returns:
@@ -56,19 +55,6 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
                 warnings.warn(f"variable {var} has no 'levels' coordinate and will be skipped")
                 continue
 
-            #requested_levels = list(met_variables_dict.get(var, [])) if met_variables_dict is not None else []
-            #available_levels = list(ds[var].levels.values)
-            #valid_levels = [lev for lev in requested_levels if lev in available_levels]
-            #dropped_levels = [lev for lev in requested_levels if lev not in available_levels]
-
-            #if dropped_levels:
-            #    warnings.warn(f"requested levels {dropped_levels} for variable {var} are not available and will be skipped")
-
-            #if len(valid_levels) == 0:
-            #    warnings.warn(f"variable {var} has no valid levels left after filtering and will be skipped")
-            #    continue
-
-            #filtered_vars[var] = ds[var].sel(levels=valid_levels)
             filtered_vars.append(var)
         
 
@@ -77,9 +63,6 @@ def _stack_and_label_variables(ds, var_names, var_type, met_variables_dict=None,
         
         data = ds[filtered_vars].transpose("fp_time", "lat", "lon", "levels", "time_delta")
 
-        #data = xr.Dataset(filtered_vars).transpose("fp_time", "lat", "lon", "levels", "time_delta")
-
-        #data = ds.transpose("fp_time", "lat", "lon", "levels", "time_delta")
 
     elif var_type == "surface_met":
         valid_vars = [v for v in var_names if v in ds.data_vars]
@@ -968,11 +951,20 @@ class FootprintDataset:
         verbose (bool): Whether to print information during transformation.
         scaler: The scaler instance used to fit/transform the footprints.
         filename (str): Default filename used by ``save_scaler``/``load_scaler``.
-        transformed_fp (xr.DataArray): Result of the last call to ``transform``.
+        transformed_fp (xr.DataArray): Result of the last call to ``transform`` (only after ``fit`` has been called).
+        
+    
+    Usage:
+        >>> fp_dataset = FootprintDataset(fp_dataarray, scaler=LogAndShiftMeanFpScaler)
+        >>> fp_dataset.fit()
+        >>> transformed_ds = fp_dataset.transform(fp_dataarray)
+        >>> original_fp = fp_dataset.inverse_transform(transformed_ds)
+
+
+        
     """
 
     def __init__(self, fp, scaler=None, scaler_params={}, add_nan_mask=False, verbose=False, keep_vars=True):
-        self.keep_vars = keep_vars
         """Initialize the dataset wrapper.
 
         Args:
@@ -991,6 +983,7 @@ class FootprintDataset:
                 other variables in the Dataset that have the same dimensions as ``fp``
                 (``time``, ``lat``, ``lon``) are preserved in the transformed Dataset. Defaults to True.
         """
+        self.keep_vars = keep_vars
         fp = self._check_fp_format(fp)
 
         self.fp = fp.copy()
@@ -1002,8 +995,6 @@ class FootprintDataset:
         else:
             self.scaler = scaler(**scaler_params)
 
-        #print("done")
-        #self.transformed_fp = self.transform(self.fp_dataset.fp)
 
         self.filename = "fp_scaler.joblib"
 
@@ -1397,8 +1388,8 @@ def _cut_satellite_met_multi_delta(
             from ``x_wind``/``y_wind``. Defaults to True.
         closest_tolerance (str, optional): Max allowed distance for nearest-timestamp
             lookup, e.g. "4h". Defaults to "4h".
-        verbose (bool, optional): <FILL IN>. Defaults to False.
-        load_into_memory (bool, optional): <FILL IN>. Defaults to False.
+        verbose (bool, optional): Whether to print verbose output. Defaults to False.
+        load_into_memory (bool, optional): Whether to load the met data into memory before cropping. Good for performance when the dataset is small enough to fit in memory, or when the chunks are not fit for processing. Defaults to False.
         interp_to (str or None, optional): If None (default), each fp timestamp is
             matched to the nearest met timestamp (existing behaviour). If a pandas
             offset string such as ``"1h"`` or ``"15min"``, each target time is rounded
@@ -1611,10 +1602,10 @@ def get_square_satellite_inputs_v2(
             Defaults to None.
         static_variables (list[str] or None, optional): Static fields to append, e.g.
             ``["topog", "lat_coords", "lon_coords"]``. Defaults to None.
-        verbose (bool, optional): <FILL IN>. Defaults to True.
-        add_timedelta_zero (bool, optional): <FILL IN>. Defaults to True.
-        add_wind_direction (bool, optional): <FILL IN>. Defaults to False.
-        load_into_memory (bool, optional): <FILL IN>. Defaults to False.
+        verbose (bool, optional):  Whether to print verbose output. Defaults to True.
+        add_timedelta_zero (bool, optional): Whether to add a time delta of 0. Defaults to True.
+        add_wind_direction (bool, optional): Whether to compute wind direction and speed. Defaults to False.
+        load_into_memory (bool, optional): Whether to load the met data into memory before cropping. Good for performance when the dataset is small enough to fit in memory, or when the chunks are not fit for processing. Defaults to False.
         interp_to (str or None, optional): If None (default), each fp timestamp is
             matched to the nearest met timestamp. If a pandas offset string such as
             ``"1h"`` or ``"15min"``, each target time is rounded to that resolution

@@ -507,9 +507,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         higher_res (int, optional): (do not use, needs testing). Defaults to 0.
         idx_latlon (list, optional): List of (lat_idx, lon_idx) integer tuples for
             each node, indicating the x and y index of the node in the original
-            lat-lon grid. Required if ``higher_res`` > 0 or ``better_meshnodes=True``.
-            Defaults to None.
-        better_meshnodes (bool, optional): (do not use, needs testing). Defaults to False.
+            lat-lon grid. Required if ``higher_res`` > 0. Defaults to None.
         attention (bool, optional): Whether to use attention in the processor. If
             True, an attention mask is created so that nodes only attend to their
             connected neighbours (needs testing). Defaults to False.
@@ -573,7 +571,6 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         dropout: float = 0,
         higher_res: int = 0,
         idx_latlon=None,
-        better_meshnodes: bool = False,
         attention: bool = False,
         release_coords="default",
         release_edges: bool = False,
@@ -706,17 +703,6 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         self.register_buffer('enc_edge_weights',
                              torch.tensor(edge_weights, dtype=torch.float32))
 
-        # better_meshnodes is deprecated: earth_distance_centre in the input features
-        # covers the same information via the scatter aggregation. release_edges (below)
-        # handles the "which node is the release" signalling more principled.
-        self.better_meshnodes = False
-        if better_meshnodes:
-            import warnings
-            warnings.warn(
-                "better_meshnodes is deprecated and has no effect. "
-                "Include earth_distance_centre in static_variables instead.",
-                DeprecationWarning, stacklevel=2,
-            )
 
         # --- mesh graph ---
         mesh_edge_index, mesh_edge_attr_static, release_edge_flag = self._create_mesh_edges()

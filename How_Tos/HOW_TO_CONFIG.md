@@ -10,10 +10,10 @@ The purpose of `config.yml` is to centralise configuration such as data paths, d
 
 The file is currently composed of four sections:
 ```yaml
-data_paths: paths to fp, met, topog, landcover, and flux data directories
-user_paths: placeholder in case defining a directory to save model outputs is desired
-domains: name mapping between domains and regions
-bad_files: list of problematic files
+data_paths: base_data_path plus paths to fp, met, topog, landcover, and flux data directories
+user_paths: save_models_dir (where trained models are saved) and parameter_files_dir (where training parameter files live)
+domains: name mapping between regions and domains (plus example footprint and flux suffixes)
+bad_fp_files: list of known problematic footprint files, loaded with a workaround in load_fps
 ```
 
 ---
@@ -24,7 +24,7 @@ To generate a `config.yml` file in the repository with default paths for local u
 python gates/config.py
 ```
 
-GATES has been developed on several HPC platforms including `[bp, oracle, isambard_ai]`. To get set up with appropriate paths for one of these platforms, pass the appropriate arguement using the `--platform`` flag:
+GATES has been developed on several HPC platforms including `[bp, oracle, isambard_ai]`. To get set up with appropriate paths for one of these platforms, pass the appropriate argument using the `--platform` flag:
 ```bash
 python gates/config.py --platform bp
 ```

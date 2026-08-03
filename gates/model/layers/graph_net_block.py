@@ -916,6 +916,10 @@ def build_satellite_graph_processor_block(
             ``attention_mask``. Defaults to False.
         attention_mask (torch.Tensor, optional): Attention mask forwarded to
             ``NodeSatelliteProcessorAttention`` when ``attention=True``. Defaults to None.
+        residuals (bool, optional): If True, the node update is residual (adds the
+            input node state back to the MLP output). Only applies to the default
+            ``NodeSatelliteProcessor`` (ignored when ``disaggregated`` or ``attention``
+            is True). Defaults to False.
 
     Returns:
         torch.nn.Module: ``MetaLayer`` for the graph processing block.
@@ -1120,6 +1124,10 @@ class GraphSatelliteProcessor(nn.Module):
                 Requires ``attention_mask``. Defaults to False.
             attention_mask (torch.Tensor, optional): Attention mask forwarded to each
                 block when ``attention=True``. Defaults to None.
+            residuals (bool, optional): If True, each block's node update is residual
+                (adds the input node state back to the MLP output). Only applies to the
+                default ``NodeSatelliteProcessor`` (ignored when ``disaggregated`` or
+                ``attention`` is True). Defaults to False.
         """
         super().__init__()
         #super(GraphProcessor, self).__init__()

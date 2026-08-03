@@ -207,9 +207,7 @@ def remove_duplicates(ds, dim="longitude"):
 
 
 def preprocess_met_data(ds, duplicate_dim="longitude"):
-    """<FILL IN — the previous docstring here appeared to be copy-pasted from
-    ``remove_duplicates`` and didn't mention the lat/lon renaming this function also
-    does; please write an accurate summary>.
+    """Preprocess meteorology data by renaming latitude/longitude coordinates and removing duplicates.
 
     Args:
         ds (xr.Dataset): Met dataset to preprocess.
@@ -237,8 +235,9 @@ class LoadBaseSatelliteData:
     Paths:
         The paths to the files are by default loaded from the config file, where the
         file structure is expected to be ``path/to/footprints/domain/region_*domain*_yearmonth.nc``
-        for the footprints, and ``path/to/meteorology/domain/domain_Met_yearmonth.nc``
-        for the meteorology. The config paths are superseded by passing the paths as
+        for the footprints (one NetCDF file per month/year), and
+        ``path/to/meteorology/domain/domain_Met_year.zarr`` for the meteorology (one
+        Zarr store per year). The config paths are superseded by passing the paths as
         arguments, as strings or path objects:
 
         - ``fp_datadir`` for the footprints, which should point to the folder
@@ -246,9 +245,9 @@ class LoadBaseSatelliteData:
           example_name_yearmonth.nc (e.g. brazil_201601.nc), so that the date can be
           automatically added.
         - ``met_args = {"met_datadir": "path/to/meteorology/domain/domain_Met_"}``,
-          which should point to the folder containing the files for each month/year
-          with format example_name_yearmonth.nc (e.g. brazil_201601.nc), so that the
-          date can be automatically added.
+          which should point to the folder containing the yearly Zarr stores with
+          format example_name_year.zarr (e.g. brazil_2016.zarr), so that the year can
+          be automatically added.
         - ``topog_args = {"topog_path": "path/to/topography/file.nc", "landcover_path": "path/to/landcover/file.nc"}``,
           which should point to the specific files for topography and landcover.
           These files will be interpolated to the same resolution and domain as the
@@ -270,7 +269,7 @@ class LoadBaseSatelliteData:
             interpolated to the same grid as the footprints. Dimensions are lat and
             lon. Only set if ``load_everything=True`` or after calling ``load_topog()``.
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, freq=1, freq_offset=0, verbose = False, sampling_mode="regular", fp_datadir = None, load_everything=False, met_args={}, topog_args={}, cfg=None, parallel_loading=False):
         """Initialize the class and load footprint data (and optionally meteorology/topography).
 
         Args:
@@ -318,21 +317,13 @@ class LoadBaseSatelliteData:
                 passed, this supersedes loading from the config file, and allows you
                 to pass a custom config object with custom paths and settings.
                 Defaults to None.
-            parallel_loading (bool, optional): <FILL IN>. Defaults to False.
-            load_fps_in_mem (bool, optional): <FILL IN>. Defaults to True.
+            parallel_loading (bool, optional): Whether to load fp data in parallel using dask. Defaults to False.
 
         Raises:
             FileNotFoundError: If no config is available and one is needed to resolve
                 missing paths.
             ValueError: If ``cfg`` is neither None nor a ``gates.config.Config`` instance.
 
-        Note:
-            <FILL IN> — the previous version of this docstring also documented
-            ``select_time_index`` and ``lazy_load`` as constructor arguments, but
-            neither is currently a parameter of ``__init__`` (``lazy_load`` is a
-            parameter of ``load_meteorology()`` instead). Also, ``load_fps_in_mem``
-            is accepted here but is not currently forwarded to ``_load_footprints()``,
-            so it has no effect. Please confirm whether this is expected.
         """
         self.dataset_format = "base"
         self.data_type="satellite"
@@ -459,11 +450,12 @@ class LoadBaseSatelliteData:
         """Load zarr meteorology and select the met levels and variables if required.
         
         Args:
-            met_datadir (str, optional): Directory for the meteorology zarr stores. Default directs
-                to configured meteorology folder. If passing as an argument, the date will
-                be automatically added, so the files should have format
-                name_of_your_choice_year.zarr (e.g. brazil_201601.zarr) and you
-                should pass ``met_datadir="/path/name_of_your_choice_"``. Defaults to None.
+            met_datadir (str, optional): Prefix/path for the meteorology Zarr store(s).
+                Default directs to the configured meteorology folder. If passing as an
+                argument, the year is automatically appended (as ``*year*.zarr``), so the
+                stores should have format name_of_your_choice_year.zarr (e.g.
+                brazil_2016.zarr) and you should pass
+                ``met_datadir="/path/name_of_your_choice_"``. Defaults to None.
             met_levels (list, optional): Met levels to select. Defaults to [].
             met_variables (list, optional): Met variables to select. Defaults to [].
                 Derived variables (wind_speed / wind_angle) are ignored here and computed later downstream.
@@ -560,23 +552,31 @@ class LoadBaseSatelliteData:
         return topog_file, landcover_file
 
     def _get_meteorology_file(self, met_datadir, met_levels=[], met_variables=[]):
-        """
-        Load the meteorology from the directory, concatenating files along the time dimension. 
-        If ``met_datadir`` is None, uses default directory and file format. If ``met_datadir`` is passed, the date will be automatically added, so the files should have format example_name_year.nc (eg brazil_2016.nc) and you should pass ``met_datadir="/path/example_name_"``
+        """Load the meteorology from one or more yearly Zarr stores, concatenating along time.
+
+        ``met_datadir`` is a glob pattern (e.g. ``DOMAIN_Met_2016*.zarr``) resolved
+        to a sorted list of stores. Usually this is a single year, but a year
+        pattern such as "201[4-5]" resolves to several stores opened together. If
+        a single month was requested (``self.month`` is set), the loaded met is
+        sliced to that month; whole-year loads keep every timestamp. Level and
+        variable selection is delegated to the tolerant ``select_met_levels`` /
+        ``select_met_variables`` helpers, which skip missing levels and the
+        derived variables (wind_speed / wind_angle) that are computed later
+        downstream.
+
         Args:
-            met_datadir (str or Path or None): Directory/prefix for the meteorology files.
-            parallel (bool, optional): Whether to open the met files in parallel with
-                dask. Defaults to False.
-            met_levels (list, optional): Met levels to select. Defaults to [].
-            met_variables (list, optional): Met variables to select. Defaults to [].
-            met_chunksize (int, optional): Chunk size along the time dimension used
-                when opening the met files. Defaults to 8.
+            met_datadir (str or Path or None): Glob pattern for the meteorology
+                Zarr store(s).
+            met_levels (list, optional): Met levels to select. Missing levels are
+                skipped. Defaults to [].
+            met_variables (list, optional): Met variables to select. Missing
+                variables and derived wind_speed/wind_angle are skipped. Defaults to [].
 
         Returns:
             xr.Dataset: The loaded meteorology, assigned to ``self.met_file``.
 
         Raises:
-            ValueError: If no meteorology files are found in ``met_datadir``.
+            ValueError: If no meteorology Zarr stores match ``met_datadir``.
         """
 
 
@@ -1049,8 +1049,9 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
     Paths:
         The paths to the files are by default loaded from the config file, where the
         file structure is expected to be ``path/to/footprints/domain/region_*domain*_yearmonth.nc``
-        for the footprints, and ``path/to/meteorology/domain/domain_Met_yearmonth.nc``
-        for the meteorology. The config paths are superseded by passing the paths as
+        for the footprints (one NetCDF file per month/year), and
+        ``path/to/meteorology/domain/domain_Met_year.zarr`` for the meteorology (one
+        Zarr store per year). The config paths are superseded by passing the paths as
         arguments, as strings or path objects:
 
         - ``fp_datadir`` for the footprints, which should point to the folder
@@ -1058,16 +1059,16 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
           example_name_yearmonth.nc (e.g. brazil_201601.nc), so that the date can be
           automatically added.
         - ``met_args = {"met_datadir": "path/to/meteorology/domain/domain_Met_"}``,
-          which should point to the folder containing the files for each month/year
-          with format example_name_yearmonth.nc (e.g. brazil_201601.nc), so that the
-          date can be automatically added.
+          which should point to the folder containing the yearly Zarr stores with
+          format example_name_year.zarr (e.g. brazil_2016.zarr), so that the year can
+          be automatically added.
         - ``topog_args = {"topog_path": "path/to/topography/file.nc", "landcover_path": "path/to/landcover/file.nc"}``,
           which should point to the specific files for topography and landcover.
           These files will be interpolated to the same resolution and domain as the
           footprints, so they can be from a different source and with a different
           original resolution.
     """
-    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, check_for_nans=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
+    def __init__(self, year, region = "BRAZIL", month=None, domain=None, size=10, freq=1, freq_offset=0, verbose = False, fill_outofdomain_with="nans", delete_outofdomain=False, sampling_mode="regular", fp_datadir = None, load_everything=True, lazy_load=True, met_args={}, topog_args={}, cfg=None, parallel_loading=False, crop_met=True, load_fps_in_mem=True):
         """Initialize the class and load (and, by default, process) footprint, meteorology, and topography data.
 
         Args:
@@ -1104,7 +1105,6 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
                 the domain. If False, the cut footprints are kept and the
                 out-of-domain areas are filled according to
                 ``fill_outofdomain_with``. Defaults to False.
-            check_for_nans (bool, optional): <FILL IN>. Defaults to False.
             sampling_mode (str, optional): If "regular", subsamples footprints
                 regularly (e.g. one in every two, sequentially with freq=2). If
                 "random", subsamples N/freq footprints randomly (where N is the total
@@ -1128,7 +1128,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
                 passed, this supersedes loading from the config file, and allows you
                 to pass a custom config object with custom paths and settings.
                 Defaults to None.
-            parallel_loading (bool, optional): <FILL IN>. Defaults to False.
+            parallel_loading (bool, optional): Whether to load fp data in parallel using dask. Defaults to False.
             crop_met (bool, optional): If True, crops the meteorology to a square of
                 size x size around the measurement location, following the format of
                 the footprint, and stores it as ``self.met``. If False, the
@@ -1214,19 +1214,13 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         self.met_processed = False
 
         if load_everything:
-            self.met_file = self.load_meteorology(**self.met_args,lazy_load=lazy_load, parallel=parallel_loading)
+            self.met_file = self.load_meteorology(**self.met_args,lazy_load=lazy_load)
             self.topog_file, self.landcover_file = self.load_topog(**self.topog_args)
             self.topog = self._process_topog_and_landcover()
             if crop_met:
                 self.met = self._process_meteorology(lazy_load=True)
             else:
                 print("NOT cropping met!")
-        """
-        if check_for_nans:
-            print("\n Checking if there are any nans in the data")
-            self._remove_fp_nans()
-            self._remove_met_nans()
-        """
         if verbose: print("---- All done!")       
 
     def _process_footprints(self, lazy_load):
@@ -1397,9 +1391,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             plot_wind (bool, optional): If True, overlays an arrow showing the wind
                 direction/speed at the domain centre (requires ``self.met`` to be
                 loaded). Defaults to False.
-            return_fig (bool, optional): <FILL IN> — accepted but not currently used;
-                unlike ``plot_footprint``, this function neither shows nor returns
-                the figure, so please confirm whether that's intentional. Defaults to False.
+            return_fig (bool, optional): If True, returns the fig and ax objects instead of showing the plot. Defaults to False.
         """
         import matplotlib.pyplot as plt
 
@@ -1865,7 +1857,7 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
         fp (xr.Dataset): Footprint dataset with a ``time`` dimension.
         time_delta (int): Hours to shift the target times backwards (0 = no shift).
         interp_method (str): "closest" to snap to the nearest met timestamp, or
-            <FILL IN> for other supported values/behaviour.
+            use any method supported by ``xarray.interp`` (e.g. "linear", "nearest").
         closest_tolerance (str, optional): Max allowed distance for nearest-timestamp
             lookup when ``interp_method="closest"``. Defaults to "4h".
 
@@ -2170,7 +2162,7 @@ def cut_satellite_met(met, fp, metsize, time_delta=0, relevant_levels=None,
 
 
 def getint(name):
-    """<FILL IN>
+    """\Potentially deprecated. Extract the last underscore-separated, extension-stripped number from a filename.
 
     Args:
         name (str): <FILL IN> — a filename/string ending in ``..._<number>.<ext>``.
@@ -2182,57 +2174,6 @@ def getint(name):
     num = num.split('.')[0]
     return int(num)
 
-# def get_grid(data, latlon_fp=0):
-#     """Produce a reference grid and node indices.
-
-#     Args:
-#         data (LoadSquareSatelliteData or LoadBaseSatelliteData): Data object with a
-#             ``dataset_format`` of "square" or "domain", and ``fp_lats``/``fp_lons``.
-#         latlon_fp (int, optional): Index into ``data.fp_lats``/``data.fp_lons`` (only
-#             used for "square" format, and only to print the corresponding met time).
-#             Defaults to 0.
-
-#     Returns:
-#         tuple:
-#             - latlons (list[tuple]): (lat, lon) pairs for every grid node.
-#             - idx_latlons (list[tuple]): (lat_idx, lon_idx) pairs for every grid node.
-#     """
-#     if latlon_fp is None:
-#         latlon_fp = 0
-        
-    print(f"getting grid for time {data.met.time.values[latlon_fp]}")
-    #print(f"making grid for footprint at time {data}")
-
-    if data.dataset_format == "square":
-        single_meshgrid = np.meshgrid(data.fp_lats[latlon_fp,:], data.fp_lons[latlon_fp,:])
-        latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
-
-        idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[latlon_fp,:]))), list(range(len(data.fp_lons[latlon_fp,:]))))
-        idx_meshgrid = np.array(idx_meshgrid)-int(data.size/2)
-        idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
-
-    elif data.dataset_format == "domain":
-        single_meshgrid = np.meshgrid(data.fp_lats[0], data.fp_lons[0])
-        latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])] 
-
-        # should I find a way of making sure this idx meshgrid is consistent across different domain sizes?
-        idx_meshgrid = np.meshgrid(list(range(len(data.fp_lats[0]))), list(range(len(data.fp_lons[0]))))
-
-        #idx_meshgrid = np.array(idx_meshgrid)-int(data.size/2)
-
-        idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(np.shape(data.fp_lons)[1]) for j in range(np.shape(data.fp_lats)[1])]    
-
-
-    return latlons, idx_latlons
-
-"""
-def grid_coordinates(side):
-    xx, yy = np.meshgrid(np.array(list(range(side)), dtype=np.float32), np.array(list(range(side)), dtype=np.float32))
-    z = np.empty((side**2, 2), np.float32)
-    z[:, 1] = xx.reshape(side**2)
-    z[:, 0] = yy.reshape(side**2)
-    return z
-"""
 
 def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
     """Crop topography and landcover to a size x size square centred on each footprint's release point.
@@ -2268,10 +2209,6 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
 
     Raises:
         ValueError: If ``size`` is not even.
-
-    Note:
-        <FILL IN> — the previous version of this docstring also documented a
-        ``verbose`` argument, but it is not currently a parameter of this function.
     """
     if size % 2 != 0:
         raise ValueError("size must be even so the release point is centred")
@@ -2345,10 +2282,6 @@ def get_grid(fp_xr, reference_fp=0):
     The grid is made from the lat/lon coordinates of the reference footprint, and the
     indices are centred around the reference footprint (i.e. the release point is at
     index (size//2, size//2)).
-
-    Note: this module also defines an earlier ``get_grid(data, latlon_fp=0)`` function
-    (around line 2182) with a different signature; this later definition shadows it at
-    import time, so only this one is currently callable as ``gates.data.load_data.get_grid``. <FILL IN> please confirm whether that's intentional.
 
     Args:
         fp_xr (xr.Dataset): Footprint data with variables ``lat_coords``/``lon_coords``,

@@ -774,11 +774,11 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
             raise ValueError(
                 f"Flux pattern '{label}' has shape {flux_2d.shape}, expected ({H}, {W})."
             )
-        N = fp_true.shape[0]
+        N = fp.shape[0]
         flux_tiled = np.tile(flux_2d, (N, 1, 1))  # (N, H, W)
         # multiply by ignoremask
         flux = np.where(ignore_np, 0, flux_tiled)
-        mf_true = calculate_mfs(fp_true, flux, transform_factor)
+        mf_true = calculate_mfs(fp, flux, transform_factor)
         mf_pred = calculate_mfs(fp_pred, flux, transform_factor)
 
         results[label] = compute_mfs_metrics(mf_true, mf_pred)
@@ -787,7 +787,36 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
 
 
 def compute_flux_metrics(fp_true, fp_pred, flux, spatial_shape=None, transform_factor=None, ignore_mask=None):
+    """Compute mole-fraction metrics for true vs. predicted footprints against a real flux field.
 
+    Like ``compute_static_mf_metrics``, but instead of synthetic flux patterns this
+    uses the supplied ``flux`` field: the true and predicted mole fractions are the
+    footprint-weighted flux summed over space (via ``calculate_mfs``), and the two
+    time series are compared with ``compute_mfs_metrics``.
+
+    Args:
+        fp_true (xr.DataArray or np.ndarray): Ground-truth footprints. xarray
+            Datasets are not supported.
+        fp_pred (xr.DataArray or np.ndarray): Predicted footprints, same type as
+            ``fp_true``.
+        flux (xr.DataArray or np.ndarray): Flux field, same type as ``fp_true``,
+            broadcast against the footprints.
+        spatial_shape (tuple[int, int], optional): (H, W) spatial shape, required for
+            numpy inputs; inferred from the coordinates for xarray inputs. Defaults to None.
+        transform_factor (float, optional): Optional factor forwarded to
+            ``calculate_mfs`` to convert units. Defaults to None.
+        ignore_mask (array-like, optional): Mask of cells to exclude; the flux is set
+            to zero where the mask is truthy before computing mole fractions.
+            Defaults to None.
+
+    Returns:
+        dict: The ``compute_mfs_metrics`` output — "corrcoef", "mae", "mean_bias",
+        "true_mean", "predicted_mean", and "r2_score".
+
+    Raises:
+        ValueError: If any input is an ``xr.Dataset``, or if ``fp_true``, ``fp_pred``
+            and ``flux`` are not all xarray DataArrays or all numpy arrays.
+    """
     if isinstance(fp_true, xr.Dataset) or isinstance(fp_pred, xr.Dataset) or isinstance(flux, xr.Dataset):
         raise ValueError("xarray Datasets are not supported for fp_true or fp_pred. Use xr.DataArrays instead.")
     elif isinstance(fp_true, xr.DataArray) and isinstance(fp_pred, xr.DataArray) and isinstance(flux, xr.DataArray):
@@ -811,7 +840,7 @@ def compute_flux_metrics(fp_true, fp_pred, flux, spatial_shape=None, transform_f
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
 
     flux = np.where(ignore_np, 0, flux)
-    mf_true = calculate_mfs(fp_true, flux, transform_factor)
+    mf_true = calculate_mfs(fp, flux, transform_factor)
     mf_pred = calculate_mfs(fp_pred, flux, transform_factor)
 
     results = compute_mfs_metrics(mf_true, mf_pred)

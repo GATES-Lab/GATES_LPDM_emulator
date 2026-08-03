@@ -546,8 +546,10 @@ def initialise_losses():
 
     Returns:
         dict: Dictionary with keys "train", "test", "test_criterion",
-        "metrics_transformed", "metrics_original", and "metrics_fluxes_static",
-        each initialised to empty lists/dicts ready to be appended to.
+        "metrics_transformed", "metrics_original", "metrics_fluxes_static", and
+        "metrics_fluxes" (metrics against the loaded flux, appended when a "flux"
+        variable is present), each initialised to empty lists/dicts ready to be
+        appended to.
     """
     metrics_dict = {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
     flux_metrics_dict = {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
@@ -580,9 +582,12 @@ def calculate_losses(losses, test_outputs_xr):
 
     Returns:
         tuple:
-            - losses (dict): Copy of ``losses`` with the new metrics appended.
+            - losses (dict): Copy of ``losses`` with the new metrics appended. If a
+              "flux" variable is present in ``test_outputs_xr``, flux metrics are also
+              appended under ``metrics_fluxes``.
             - computed_metrics (dict): ``{"eval_metrics", "transformed_eval_metrics", "static_mf_eval_metrics"}``
-              for this call only.
+              for this call only, plus ``"flux_eval_metrics"`` when a "flux" variable
+              is present in ``test_outputs_xr``.
     """
 
     losses = losses.copy()  # make a copy of the losses dict to avoid modifying the original
