@@ -15,6 +15,19 @@ from .graph_net_block import MLP
 
 
 def concat_group_by(x: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+    """Group and concatenate node features by ``index``, zero-padding groups to the same size.
+
+    Pads each group (as counted by ``index``) with zeros up to the largest group
+    size, sorts nodes by group, then reshapes/permutes so that each group's features
+    are concatenated along the feature dimension.
+
+    Args:
+        x (torch.Tensor): Node features, shape [n_batch, n_features, n_nodes].
+        index (torch.Tensor): Group index for each node along the last dimension of ``x``.
+
+    Returns:
+        torch.Tensor: Shape [n_batch, n_features * max_group_size, number_of_groups].
+    """
     # Step 1: Count the occurrences of each unique value in the index tensor.
     index_count = torch.bincount(index)
 
@@ -57,7 +70,7 @@ def concat_group_by(x: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
 
 
 class SatelliteEncoder(torch.nn.Module):
-    """Encoder graph model
+    """Encoder graph model.
 
     OBSOLETE: use SatelliteDynamicEncoder for all new work.
     """
@@ -78,30 +91,64 @@ class SatelliteEncoder(torch.nn.Module):
         use_checkpointing: bool = False,
         dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False, release_coords="default", release_edges=False, concat_enc_neighbours=False, initial_enc=False, initial_enc_dim=None,
     ):
-        """
-        Encode the lat/lon data inot the isohedron graph
+        """Initialize the encoder for the lat/lon data into the isohedron graph.
+
+        Modifications to original code:
+            - Adapted to work for the whole world or only for the area defined by the
+              lat/lon coords.
+
+        To add:
+            - Connect each grid node to more than one mesh node.
 
         Args:
-            lat_lons: List of (lat,lon) points
-            whole_world = Use base graph for the whole world or only nodes that contain lat/lons
-            resolution: H3 resolution level
-            input_dim: Input node dimension
-            output_dim: Output node dimension
-            output_edge_dim: Edge dimension
-            hidden_dim_processor_node: Hidden dimension of the node processors
-            hidden_dim_processor_edge: Hidden dimension of the edge processors
-            hidden_layers_processor_node: Number of hidden layers in the node processors
-            hidden_layers_processor_edge: Number of hidden layers in the edge processors
-            mlp_norm_type: Type of norm for the MLPs
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
-            use_checkpointing: Whether to use gradient checkpointing to use less memory
-            release_coords - latlon coordinates of the release point
-            release_edges - bool, if true connect all nodes in abstract layer to corresponding release node
-
-        modifications to og code:
-            - adapted to work in the whole world or only for the area defined by the lat lon coords
-        to add
-            - connect each grid node to more than one mesh node
+            lat_lons (list): List of (lat, lon) points.
+            whole_world (bool, optional): Use base graph for the whole world or only
+                nodes that contain lat/lons. Defaults to False.
+            resolution (int, optional): H3 resolution level. Defaults to 2.
+            input_dim (int, optional): Input node dimension. Defaults to 78.
+            output_dim (int, optional): Output node dimension. Defaults to 256.
+            output_edge_dim (int, optional): Edge dimension. Defaults to 256.
+            hidden_dim_processor_node (int, optional): Hidden dimension of the node
+                processors. Defaults to 256.
+            hidden_dim_processor_edge (int, optional): Hidden dimension of the edge
+                processors. Defaults to 256.
+            hidden_layers_processor_node (int, optional): Number of hidden layers in
+                the node processors. Defaults to 2.
+            hidden_layers_processor_edge (int, optional): Number of hidden layers in
+                the edge processors. Defaults to 2.
+            mlp_norm_type (str, optional): Type of norm for the MLPs, one of
+                "LayerNorm", "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm",
+                or None. Defaults to "LayerNorm".
+            use_checkpointing (bool, optional): Whether to use gradient checkpointing
+                to use less memory. Defaults to False.
+            dropout (float, optional): Dropout probability. 0 means no dropout.
+                Defaults to 0.
+            v2_edges (bool, optional): <FILL IN>. Requires ``input_names`` if True.
+                Defaults to False.
+            input_names (list, optional): Input feature names, required if
+                ``v2_edges`` is True. Defaults to None.
+            higher_res (int, optional): <FILL IN> (do not use, needs testing).
+                Defaults to 0.
+            idx_latlon (list, optional): List of (lat_idx, lon_idx) integer tuples
+                for each node, indicating the x and y index of the node in the
+                original lat-lon grid. Required if ``higher_res`` > 0 or
+                ``better_meshnodes=True``. Defaults to None.
+            better_meshnodes (bool, optional): <FILL IN> (do not use, needs testing).
+                Defaults to True.
+            attention (bool, optional): Whether to use attention in the processor. If
+                True, an attention mask is created so that nodes only attend to their
+                connected neighbours (needs testing). Defaults to False.
+            release_coords (str, optional): Latlon coordinates of the release point,
+                required if ``release_edges=True``. If "default", uses the centre
+                point of the latlon grid. Defaults to "default".
+            release_edges (bool, optional): If True, connect all nodes in the
+                abstract layer to the corresponding release node. Defaults to False.
+            concat_enc_neighbours (bool, optional): Whether to concatenate (instead
+                of mean) the features of the grid nodes connected to each mesh node
+                before encoding (needs testing). Defaults to False.
+            initial_enc (bool, optional): Whether to apply an initial encoding MLP to
+                the input features before any aggregation (needs testing).
+                Defaults to False.
         """
 
         super().__init__()
@@ -310,14 +357,14 @@ class SatelliteEncoder(torch.nn.Module):
         )
 
     def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Adds features to the encoding graph
+        """Add features to the encoding graph.
 
         Args:
-            features: Array of features in same order as lat_lon
+            features (torch.Tensor): Array of features in same order as ``lat_lons``.
 
         Returns:
-            Torch tensors of node features, latent graph edge index, and latent edge attributes
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Node features, latent
+            graph edge index, and latent edge attributes.
         """
         batch_size = features.shape[0]
         self.batch_size = batch_size
@@ -378,11 +425,11 @@ class SatelliteEncoder(torch.nn.Module):
         )  # New graph
 
     def create_mesh_graph(self) -> Data:
-        """
-        Copies over and generates a Data object for the processor to use
+        """Copy over and generate a Data object for the processor to use.
 
         Returns:
-            The connectivity and edge attributes for the latent graph
+            torch_geometric.data.Data: The connectivity and edge attributes for the
+            latent graph.
         """
         # Get connectivity of the graph
         edge_sources = []
@@ -435,35 +482,78 @@ class SatelliteDynamicEncoder(torch.nn.Module):
     - Dead self.h3_nodes parameter is not included.
 
     Args:
-        lat_lons: List of (lat,lon) points
-        whole_world = Use base graph for the whole world or only nodes that contain lat/lons
-        resolution: H3 resolution level
-        input_dim: Input node dimension
-        output_dim: Output node dimension
-        output_edge_dim: Edge dimension
-        hidden_dim_processor_node: Hidden dimension of the node processors
-        hidden_dim_processor_edge: Hidden dimension of the edge processors
-        hidden_layers_processor_node: Number of hidden layers in the node processors
-        hidden_layers_processor_edge: Number of hidden layers in the edge processors
-        mlp_norm_type: Type of norm for the MLPs
-            one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
-        use_checkpointing: Whether to use gradient checkpointing to use less memory
-        dropout: Dropout probability. 0 means no dropout.
-        higher_res: (do not use, needs testing)
-        idx_latlon: List of (lat_idx, lon_idx) integer tuples for each node, indicating the x and y index of the node in the original lat-lon grid. Required if higher_res > 0 or better_meshnodes=True.
-        better_meshnodes: (do not use, needs testing)
-        attention: Whether to use attention in the processor. If True, an attention mask is created so that nodes only attend to their connected neighbours. (needs testing)
-        release_edges: bool, if true connect all nodes in abstract layer to corresponding release node. (needs testing)
-        release_coords: latlon coordinates of the release point, required if release_edges=True. If "default", uses the centre point of the latlon grid. (needs testing)
-        concat_enc_neighbours: Whether to concatenate (instead of mean) the features of the grid nodes connected to each mesh node before encoding. Cannot be combined with dynamic_edges. (needs testing)
-        initial_enc: Whether to apply an initial encoding MLP to the input features before any aggregation. Cannot be combined with dynamic_edges.
+        lat_lons (list): List of (lat, lon) points.
+        whole_world (bool, optional): Use base graph for the whole world or only
+            nodes that contain lat/lons. Defaults to False.
+        resolution (int, optional): H3 resolution level. Defaults to 2.
+        input_dim (int, optional): Input node dimension. Defaults to 78.
+        output_dim (int, optional): Output node dimension. Defaults to 256.
+        output_edge_dim (int, optional): Edge dimension. Defaults to 256.
+        hidden_dim_processor_node (int, optional): Hidden dimension of the node
+            processors. Defaults to 256.
+        hidden_dim_processor_edge (int, optional): Hidden dimension of the edge
+            processors. Defaults to 256.
+        hidden_layers_processor_node (int, optional): Number of hidden layers in the
+            node processors. Defaults to 2.
+        hidden_layers_processor_edge (int, optional): Number of hidden layers in the
+            edge processors. Defaults to 2.
+        mlp_norm_type (str, optional): Type of norm for the MLPs, one of
+            "LayerNorm", "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or
+            None. Defaults to "LayerNorm".
+        use_checkpointing (bool, optional): Whether to use gradient checkpointing to
+            use less memory. Defaults to False.
+        dropout (float, optional): Dropout probability. 0 means no dropout.
+            Defaults to 0.
+        higher_res (int, optional): (do not use, needs testing). Defaults to 0.
+        idx_latlon (list, optional): List of (lat_idx, lon_idx) integer tuples for
+            each node, indicating the x and y index of the node in the original
+            lat-lon grid. Required if ``higher_res`` > 0 or ``better_meshnodes=True``.
+            Defaults to None.
+        better_meshnodes (bool, optional): (do not use, needs testing). Defaults to False.
+        attention (bool, optional): Whether to use attention in the processor. If
+            True, an attention mask is created so that nodes only attend to their
+            connected neighbours (needs testing). Defaults to False.
+        release_coords (str, optional): Latlon coordinates of the release point,
+            required if ``release_edges=True``. If "default", uses the centre point
+            of the latlon grid (needs testing). Defaults to "default".
+        release_edges (bool, optional): If True, connect all nodes in abstract layer
+            to the corresponding release node (needs testing). Defaults to False.
+        concat_enc_neighbours (bool, optional): Whether to concatenate (instead of
+            mean) the features of the grid nodes connected to each mesh node before
+            encoding. Cannot be combined with dynamic edges (``wind_mesh_edges`` or
+            ``latlon_mesh_edges``) (needs testing). Defaults to False.
+        initial_enc (bool, optional): Whether to apply an initial encoding MLP to the
+            input features before any aggregation. Cannot be combined with dynamic
+            edges (needs testing). Defaults to False.
         initial_enc_dim: Output dimension of the initial encoding MLP. Defaults to output_dim if not set. Setting this to a value different from output_dim gives the two MLPs distinct roles: initial_encoder compresses/transforms each grid node's raw features (input_dim → initial_enc_dim) before spatial aggregation, and node_encoder then maps the aggregated mesh-node representation to the final latent space (initial_enc_dim → output_dim).
-        wind_mesh_edges (bool): Whether to add wind features to the mesh edges.
-        wind_indices (list of ints): Indices of the input feature tensor corresponding to the wind variables to use for the mesh edge features. The mesh attribute is calculated as the mean of the wind features at the two endpoint mesh nodes. Required if wind_mesh_edges=True. Cannot be combined with concat_enc_neighbours or initial_enc.
-        latlon_mesh_edges (bool): Whether to add lat/lon features to the mesh edges. The mesh edge attributes are extended with the delta_lat and delta_lon between the two endpoint mesh nodes, calculated from the input features at the latlon_indices. 
-        latlon_indices (list of 2 ints): Indices of the input feature tensor corresponding to the latitude and longitude variables to use for calculating the lat/lon features for the mesh edges. Required if latlon_mesh_edges=True. 
-        dynamic_earthdistance (bool): Whether to replace the static haversine distance edge attribute with a dynamic one calculated from the lat/lon features. When True, the lat/lon features are removed from the input (replaced with random noise) and the mesh edge attributes are extended with a dynamic earth distance calculated from the lat/lon features at the latlon_indices. Requires latlon_mesh_edges=True.
+        wind_mesh_edges (bool, optional): Whether to add wind features to the mesh
+            edges. Defaults to False.
+        wind_indices (list[int], optional): Indices of the input feature tensor
+            corresponding to the wind variables to use for the mesh edge features.
+            The mesh attribute is calculated as the mean of the wind features at the
+            two endpoint mesh nodes. Required if ``wind_mesh_edges=True``. Cannot be
+            combined with ``concat_enc_neighbours`` or ``initial_enc``. Defaults to None.
+        latlon_mesh_edges (bool, optional): Whether to add lat/lon features to the
+            mesh edges. The mesh edge attributes are extended with the delta_lat and
+            delta_lon between the two endpoint mesh nodes, calculated from the input
+            features at ``latlon_indices``. Defaults to False.
+        latlon_indices (list[int], optional): Indices of the input feature tensor
+            (exactly 2: [lat_idx, lon_idx]) corresponding to the latitude and
+            longitude variables to use for calculating the lat/lon features for the
+            mesh edges. Required if ``latlon_mesh_edges=True``. Defaults to None.
+        dynamic_earthdistance (bool, optional): Whether to replace the static
+            haversine distance edge attribute with a dynamic one calculated from the
+            lat/lon features. When True, the lat/lon features are removed from the
+            input (replaced with random noise) and the mesh edge attributes are
+            extended with a dynamic earth distance calculated from the lat/lon
+            features at ``latlon_indices``. Requires ``latlon_mesh_edges=True``.
+            Defaults to False.
 
+    Raises:
+        ValueError: If ``wind_mesh_edges`` or ``latlon_mesh_edges`` is True together
+            with ``initial_enc`` or ``concat_enc_neighbours``; if ``wind_mesh_edges``
+            is True without ``wind_indices``; if ``latlon_mesh_edges`` is True
+            without ``latlon_indices`` or with other than 2 entries.
     """
 
     def __init__(
@@ -760,14 +850,16 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         return edge_index, edge_attr_static, release_edge_flag
 
     def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
+        """Encode input features into the latent mesh graph, with optional dynamic edge features.
+
         Args:
-            features: (batch, n_nodes, feature_dim)
+            features (torch.Tensor): Shape (batch, n_nodes, feature_dim).
 
         Returns:
-            out:             (batch * n_mesh_nodes, node_dim)
-            mesh_edge_idx:   (2, batch * E)
-            mesh_edge_attrs: (batch * E, edge_dim)
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                - out: Node features, shape (batch * n_mesh_nodes, node_dim).
+                - mesh_edge_idx: Mesh edge connectivity, shape (2, batch * E).
+                - mesh_edge_attrs: Mesh edge attributes, shape (batch * E, edge_dim).
         """
         batch_size = features.shape[0]
         self.batch_size = batch_size  # read by processor via self.encoder.batch_size

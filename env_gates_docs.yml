@@ -1,0 +1,12 @@
+name: gates_docs
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - sphinx
+  - pydata-sphinx-theme
+  - myst-parser
+  - sphinx-copybutton
+  - sphinx-autodoc-typehints
+  - sphinx-autobuild
+  - pip

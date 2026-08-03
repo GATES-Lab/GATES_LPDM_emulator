@@ -23,48 +23,128 @@ import torch_geometric
 import numpy as np
 
 def weights_init_normal_rule(m):
+    """In-place init for ``nn.Linear`` weights: normal, mean 0, std ``1/sqrt(in_features)``.
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         n = m.in_features
         y = (1.0/np.sqrt(n))
         torch.nn.init.normal_(m.weight, 0, y)
 
 def weights_init_uniform(m):
+    """In-place init for ``nn.Linear`` weights: uniform in [0, 1).
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         n = m.in_features
         y = 1.0/np.sqrt(n)
         torch.nn.init.uniform_(m.weight, 0,1)
 
 def weights_init_uniform_rule(m):
+    """In-place init for ``nn.Linear`` weights: uniform in [-1/sqrt(in_features), 1/sqrt(in_features)).
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         n = m.in_features
         y = 1.0/np.sqrt(n)
         torch.nn.init.uniform_(m.weight, -y, y)
 
 def weights_init_ones(m):
+    """In-place init for ``nn.Linear`` weights: all ones.
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         torch.nn.init.ones_(m.weight)
 
 def weights_init_xavier_uniform(m):
+    """In-place Xavier/Glorot uniform init for ``nn.Linear`` weights.
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         torch.nn.init.xavier_uniform_(m.weight)
 
 def weights_init_xavier_normal_(m):
+    """In-place Xavier/Glorot normal init for ``nn.Linear`` weights.
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         torch.nn.init.xavier_normal_(m.weight)
 
 def weights_init_kaiming_uniform_(m):
+    """In-place Kaiming/He uniform init for ``nn.Linear`` weights.
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         torch.nn.init.kaiming_uniform_(m.weight)
 
 def weights_init_kaiming_normal_(m):
+    """In-place Kaiming/He normal init for ``nn.Linear`` weights.
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         torch.nn.init.kaiming_normal_(m.weight)
 
 def bias_init_zeros(m):
+    """In-place init for ``nn.Linear`` biases: all zeros.
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         torch.nn.init.zeros_(m.bias)
 
 def bias_init_uniform_rule(m):
+    """In-place init for ``nn.Linear`` biases: uniform in [-1/sqrt(in_features), 1/sqrt(in_features)).
+
+    Intended to be passed to ``module.apply()``.
+
+    Args:
+        m (torch.nn.Module): Module being visited by ``apply()``; only acted on if
+            it is an ``nn.Linear``.
+    """
     if isinstance(m, nn.Linear):
         n = m.in_features
         y = 1.0/np.sqrt(n)
@@ -84,17 +164,25 @@ class MLP(nn.Module):
         dropout: Optional[float] = 0.,
         final_activation: Optional[str] = None,
     ):
-        """
-        MLP
+        """Initialize the MLP.
 
         Args:
-            in_dim: Input dimension
-            out_dim: Output dimension
-            hidden_dim: Number of nodes in hidden layer
-            hidden_layers: Number of hidden layers
-            norm_type: Normalization type one of 'LayerNorm', 'GraphNorm',
-                'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
-            use_checkpointing: Whether to use gradient checkpointing or not
+            in_dim (int): Input dimension.
+            out_dim (int, optional): Output dimension. Defaults to 128.
+            hidden_dim (int, optional): Number of nodes in hidden layer. Defaults to 128.
+            hidden_layers (int, optional): Number of hidden layers. Defaults to 2.
+            norm_type (str, optional): Normalization type, one of "LayerNorm",
+                "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+                Defaults to "LayerNorm".
+            use_checkpointing (bool, optional): Whether to use gradient checkpointing
+                or not. Defaults to False.
+            dropout (float, optional): Dropout probability applied before each hidden
+                layer (after the first) when > 0. Defaults to 0.
+            final_activation (str, optional): Final activation to append, one of
+                "ReLU", "Sigmoid", "LReLU", or None. Defaults to None.
+
+        Raises:
+            AssertionError: If ``norm_type`` is not a recognised normalization type.
         """
         super().__init__()
         #super(MLP, self).__init__()
@@ -152,14 +240,13 @@ class MLP(nn.Module):
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Compute the MLP
+        """Compute the MLP.
 
         Args:
-            x: Node or edge features
+            x (torch.Tensor): Node or edge features.
 
         Returns:
-            The transformed tensor
+            torch.Tensor: The transformed tensor.
         """
         if self.use_checkpointing:
             out = checkpoint(self.model, x, use_reentrant=False)
@@ -176,7 +263,7 @@ class MLP(nn.Module):
 
 
 class EdgeProcessor(nn.Module):
-    """EdgeProcessor"""
+    """Edge processor: updates edge features from their source/destination nodes, with a residual connection."""
 
     def __init__(
         self,
@@ -186,16 +273,19 @@ class EdgeProcessor(nn.Module):
         hidden_layers: int = 2,
         norm_type: str = "LayerNorm",
         dropout: float = 0, batched_data=False):
-        """
-        Edge processor
+        """Initialize the edge processor.
 
         Args:
-            in_dim_node: Input node feature dimension
-            in_dim_edge: Input edge feature dimension
-            hidden_dim: Number of nodes in hidden layers
-            hidden_layers: Number of hidden layers
-            norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            in_dim_node (int, optional): Input node feature dimension. Defaults to 128.
+            in_dim_edge (int, optional): Input edge feature dimension. Defaults to 128.
+            hidden_dim (int, optional): Number of nodes in hidden layers. Defaults to 128.
+            hidden_layers (int, optional): Number of hidden layers. Defaults to 2.
+            norm_type (str, optional): Normalization type, one of "LayerNorm",
+                "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+                Defaults to "LayerNorm".
+            dropout (float, optional): Dropout probability. Defaults to 0.
+            batched_data (bool, optional): <FILL IN> — accepted but not currently
+                used in this class. Defaults to False.
         """
         super().__init__()
         #super(EdgeProcessor, self).__init__()
@@ -208,17 +298,17 @@ class EdgeProcessor(nn.Module):
     def forward(
         self, src: torch.Tensor, dest: torch.Tensor, edge_attr: torch.Tensor,batch, u=None,
     ) -> torch.Tensor:
-        """
-        Compute the edge part of the message passing
+        """Compute the edge part of the message passing.
 
         Args:
-            src: Source node tensor
-            dest: Destination node tensor
-            edge_attr: Edge attributes
-            u: Global attributes, ignored
+            src (torch.Tensor): Source node tensor.
+            dest (torch.Tensor): Destination node tensor.
+            edge_attr (torch.Tensor): Edge attributes.
+            batch: <FILL IN> — accepted but not currently used in this method.
+            u: Global attributes, ignored.
 
         Returns:
-            The updated edge attributes
+            torch.Tensor: The updated edge attributes.
         """
         #print("in edge processor")
         #print("edge processor", src.size(), dest.size(), edge_attr.size())
@@ -227,7 +317,7 @@ class EdgeProcessor(nn.Module):
         out = cat(
             [src, dest, edge_attr], -1
         )  # concatenate source node, destination node, and edge embeddings
-        
+
         #print("doing mlp")
         #print(self.edge_mlp)
         #print(out.size())
@@ -239,7 +329,7 @@ class EdgeProcessor(nn.Module):
 
 
 class NodeProcessor(nn.Module):
-    """NodeProcessor"""
+    """Node processor: updates node features by aggregating incoming edge messages, with a residual connection."""
 
     def __init__(
         self,
@@ -250,16 +340,17 @@ class NodeProcessor(nn.Module):
         norm_type: str = "LayerNorm",
         dropout: float=0,
     ):
-        """
-        Node Processor
+        """Initialize the node processor.
 
         Args:
-            in_dim_node: Input node feature dimension
-            in_dim_edge: Input edge feature dimension
-            hidden_dim: Number of nodes in hidden layer
-            hidden_layers: Number of hidden layers
-            norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            in_dim_node (int, optional): Input node feature dimension. Defaults to 128.
+            in_dim_edge (int, optional): Input edge feature dimension. Defaults to 128.
+            hidden_dim (int, optional): Number of nodes in hidden layer. Defaults to 128.
+            hidden_layers (int, optional): Number of hidden layers. Defaults to 2.
+            norm_type (str, optional): Normalization type, one of "LayerNorm",
+                "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+                Defaults to "LayerNorm".
+            dropout (float, optional): Dropout probability. Defaults to 0.
         """
         super().__init__()
         #super(NodeProcessor, self).__init__()
@@ -272,18 +363,18 @@ class NodeProcessor(nn.Module):
     def forward(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor, batch, u=None,
     ) -> torch.Tensor:
-        """
-        Compute the node feature updates in message passing
+        """Compute the node feature updates in message passing.
 
         Args:
-            x: Input nodes
-            edge_index: Edge indicies in COO format
-            edge_attr: Edge attributes
-            u: Global attributes, ignored
-            batch: Batch IDX, ignored
+            x (torch.Tensor): Input nodes.
+            edge_index (torch.Tensor): Edge indices in COO format.
+            edge_attr (torch.Tensor): Edge attributes.
+            batch (int, optional): If not None, batch size used to reshape
+                ``edge_attr`` to (batch, n_edges, features) before scattering.
+            u: Global attributes, ignored.
 
         Returns:
-            torch.Tensor with updated node attributes
+            torch.Tensor: Updated node attributes.
         """
         #print("node batch", batch)
         row, col = edge_index
@@ -302,7 +393,10 @@ class NodeProcessor(nn.Module):
         return out
 
 class EdgeSatelliteProcessor(nn.Module):
-    """EdgeProcessor"""
+    """Edge processor: updates edge features from their source/destination nodes.
+
+    Unlike ``EdgeProcessor``, this does not apply a residual connection to the output.
+    """
 
     def __init__(
         self,
@@ -312,16 +406,19 @@ class EdgeSatelliteProcessor(nn.Module):
         hidden_layers: int = 2,
         norm_type: str = "LayerNorm",
         dropout: float = 0, batched_data=False):
-        """
-        Edge processor
+        """Initialize the edge processor.
 
         Args:
-            in_dim_node: Input node feature dimension
-            in_dim_edge: Input edge feature dimension
-            hidden_dim: Number of nodes in hidden layers
-            hidden_layers: Number of hidden layers
-            norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            in_dim_node (int, optional): Input node feature dimension. Defaults to 128.
+            in_dim_edge (int, optional): Input edge feature dimension. Defaults to 128.
+            hidden_dim (int, optional): Number of nodes in hidden layers. Defaults to 128.
+            hidden_layers (int, optional): Number of hidden layers. Defaults to 2.
+            norm_type (str, optional): Normalization type, one of "LayerNorm",
+                "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+                Defaults to "LayerNorm".
+            dropout (float, optional): Dropout probability. Defaults to 0.
+            batched_data (bool, optional): <FILL IN> — accepted but not currently
+                used in this class. Defaults to False.
         """
         super().__init__()
         #super(EdgeProcessor, self).__init__()
@@ -334,17 +431,17 @@ class EdgeSatelliteProcessor(nn.Module):
     def forward(
         self, src: torch.Tensor, dest: torch.Tensor, edge_attr: torch.Tensor,batch, u=None,
     ) -> torch.Tensor:
-        """
-        Compute the edge part of the message passing
+        """Compute the edge part of the message passing.
 
         Args:
-            src: Source node tensor
-            dest: Destination node tensor
-            edge_attr: Edge attributes
-            u: Global attributes, ignored
+            src (torch.Tensor): Source node tensor.
+            dest (torch.Tensor): Destination node tensor.
+            edge_attr (torch.Tensor): Edge attributes.
+            batch: <FILL IN> — accepted but not currently used in this method.
+            u: Global attributes, ignored.
 
         Returns:
-            The updated edge attributes
+            torch.Tensor: The updated edge attributes.
         """
         #print("in edge processor")
         #print("edge processor", src.size(), dest.size(), edge_attr.size())
@@ -353,7 +450,7 @@ class EdgeSatelliteProcessor(nn.Module):
         out = cat(
             [src, dest, edge_attr], -1
         )  # concatenate source node, destination node, and edge embeddings
-        
+
         #print("doing mlp")
         #print(self.edge_mlp)
         #print(out.size())
@@ -365,6 +462,19 @@ class EdgeSatelliteProcessor(nn.Module):
 
 
 def scatter_cat(values, indeces):
+    """Concatenate feature vectors of entries sharing the same index into fixed-size (7-neighbour) rows.
+
+    Assumes each index has at most ``n_neighbours=7`` entries; groups with fewer are
+    zero-padded.
+
+    Args:
+        values (torch.Tensor): Feature vectors, shape [n_values, features].
+        indeces (torch.Tensor): Group index for each entry in ``values``.
+
+    Returns:
+        torch.Tensor: Shape [max(indeces) + 1, 7 * features], each row the
+        concatenated (and zero-padded) feature vectors for that group.
+    """
     # Determine the maximum index value
     max_index = torch.max(indeces)
 
@@ -393,6 +503,28 @@ def scatter_cat(values, indeces):
     
 
 def scatter_cat_v2(values, indeces, idx_positions=None, chunk_length=None):
+    """Concatenate (and zero-pad) feature vectors of entries sharing the same index, without a fixed group size.
+
+    Faster alternative to ``scatter_cat`` that groups and pads via
+    ``torch.split``/``pad_sequence`` instead of a per-index Python loop over a
+    fixed-size output. ``idx_positions``/``chunk_length`` can be precomputed once
+    (e.g. via ``torch.where``/``np.unique`` on ``indeces``) and reused across calls
+    with the same grouping to skip recomputation.
+
+    Args:
+        values (torch.Tensor): Feature vectors, shape [n_values, features].
+        indeces (np.ndarray or torch.Tensor): Group index for each entry in ``values``.
+        idx_positions (list[int], optional): Precomputed flat list of row positions
+            in ``values``, grouped by index. If None, computed from ``indeces``.
+            Defaults to None.
+        chunk_length (list[int], optional): Precomputed group sizes matching
+            ``idx_positions``. Required (and used) together with ``idx_positions``.
+            Defaults to None.
+
+    Returns:
+        torch.Tensor: Shape [n_groups, max_group_size * features], each row the
+        concatenated (and zero-padded) feature vectors for that group.
+    """
     # Determine the maximum index value
 
     if idx_positions is None:
@@ -416,7 +548,10 @@ def scatter_cat_v2(values, indeces, idx_positions=None, chunk_length=None):
 
 
 class NodeSatelliteProcessorDisaggregated(nn.Module):
-    """NodeProcessor"""
+    """Node processor variant that concatenates (rather than sum/mean-aggregates) incoming edge messages per node.
+
+    Assumes each node has exactly 7 incoming edges (via ``scatter_cat_v2``).
+    """
 
     def __init__(
         self,
@@ -427,16 +562,17 @@ class NodeSatelliteProcessorDisaggregated(nn.Module):
         norm_type: str = "LayerNorm",
         dropout: float=0,
     ):
-        """
-        Node Processor
+        """Initialize the node processor.
 
         Args:
-            in_dim_node: Input node feature dimension
-            in_dim_edge: Input edge feature dimension
-            hidden_dim: Number of nodes in hidden layer
-            hidden_layers: Number of hidden layers
-            norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            in_dim_node (int, optional): Input node feature dimension. Defaults to 128.
+            in_dim_edge (int, optional): Input edge feature dimension. Defaults to 128.
+            hidden_dim (int, optional): Number of nodes in hidden layer. Defaults to 128.
+            hidden_layers (int, optional): Number of hidden layers. Defaults to 2.
+            norm_type (str, optional): Normalization type, one of "LayerNorm",
+                "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+                Defaults to "LayerNorm".
+            dropout (float, optional): Dropout probability. Defaults to 0.
         """
         super().__init__()
         #super(NodeProcessor, self).__init__()
@@ -465,18 +601,17 @@ class NodeSatelliteProcessorDisaggregated(nn.Module):
     def forward(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor, batch, u=None,
     ) -> torch.Tensor:
-        """
-        Compute the node feature updates in message passing
+        """Compute the node feature updates in message passing, via disaggregated (concatenated) edge messages.
 
         Args:
-            x: Input nodes
-            edge_index: Edge indicies in COO format
-            edge_attr: Edge attributes
-            u: Global attributes, ignored
-            batch: Batch IDX, ignored
+            x (torch.Tensor): Input nodes.
+            edge_index (torch.Tensor): Edge indices in COO format.
+            edge_attr (torch.Tensor): Edge attributes.
+            batch: Batch IDX, ignored.
+            u: Global attributes, ignored.
 
         Returns:
-            torch.Tensor with updated node attributes
+            torch.Tensor: Updated node attributes.
         """
         #print("node batch", batch)
         #print("here1")
@@ -524,7 +659,10 @@ class NodeSatelliteProcessorDisaggregated(nn.Module):
 
 
 class NodeSatelliteProcessor(nn.Module):
-    """NodeProcessor"""
+    """Node processor: updates node features by scatter-aggregating (sum or mean) incoming edge messages.
+
+    Unlike ``NodeProcessor``, this does not apply a residual connection to the output.
+    """
 
     def __init__(
         self,
@@ -537,17 +675,20 @@ class NodeSatelliteProcessor(nn.Module):
         scatter: str="mean",
         residuals: bool = False,
     ):
-        """
-        Node Processor
+        """Initialize the node processor.
 
         Args:
-            in_dim_node: Input node feature dimension
-            in_dim_edge: Input edge feature dimension
-            hidden_dim: Number of nodes in hidden layer
-            hidden_layers: Number of hidden layers
-            norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
-            residuals: If True, add x back to node_mlp_2 output (residual update)
+            in_dim_node (int, optional): Input node feature dimension. Defaults to 128.
+            in_dim_edge (int, optional): Input edge feature dimension. Defaults to 128.
+            hidden_dim (int, optional): Number of nodes in hidden layer. Defaults to 128.
+            hidden_layers (int, optional): Number of hidden layers. Defaults to 2.
+            norm_type (str, optional): Normalization type, one of "LayerNorm",
+                "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+                Defaults to "LayerNorm".
+            dropout (float, optional): Dropout probability. Defaults to 0.
+            scatter (str, optional): Aggregation to use for incoming edge messages,
+                "sum" or "mean". Defaults to "mean".
+            residuals (bool, optional): If True, add x back to node_mlp_2 output (residual update). Defaults to False.
         """
         super().__init__()
         #super(NodeProcessor, self).__init__()
@@ -572,18 +713,17 @@ class NodeSatelliteProcessor(nn.Module):
     def forward(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor, batch, u=None,
     ) -> torch.Tensor:
-        """
-        Compute the node feature updates in message passing
+        """Compute the node feature updates in message passing.
 
         Args:
-            x: Input nodes
-            edge_index: Edge indicies in COO format
-            edge_attr: Edge attributes
-            u: Global attributes, ignored
-            batch: Batch IDX, ignored
+            x (torch.Tensor): Input nodes.
+            edge_index (torch.Tensor): Edge indices in COO format.
+            edge_attr (torch.Tensor): Edge attributes.
+            batch: Batch IDX, ignored.
+            u: Global attributes, ignored.
 
         Returns:
-            torch.Tensor with updated node attributes
+            torch.Tensor: Updated node attributes.
         """
         #print("node batch", batch)
         row, col = edge_index
@@ -608,7 +748,12 @@ class NodeSatelliteProcessor(nn.Module):
         return out
 
 class NodeSatelliteProcessorAttention(nn.Module):
-    """NodeProcessor"""
+    """Node processor variant that updates node features using single-head self-attention instead of edge-based scatter aggregation.
+
+    Note: ``edge_index``/``edge_attr`` are accepted for interface compatibility with
+    the other node processors but are not used here — attention is computed over all
+    nodes, masked by ``attention_mask`` to restrict it to connected neighbours.
+    """
 
     def __init__(
         self,
@@ -620,16 +765,24 @@ class NodeSatelliteProcessorAttention(nn.Module):
         dropout: float=0,
         scatter: str="mean", attention_mask=None
     ):
-        """
-        Node Processor
+        """Initialize the node processor.
 
         Args:
-            in_dim_node: Input node feature dimension
-            in_dim_edge: Input edge feature dimension
-            hidden_dim: Number of nodes in hidden layer
-            hidden_layers: Number of hidden layers
-            norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            in_dim_node (int, optional): Input node feature dimension; also the
+                attention embedding dimension. Defaults to 128.
+            in_dim_edge (int, optional): <FILL IN> — accepted but not currently used
+                in this class. Defaults to 128.
+            hidden_dim (int, optional): Number of nodes in hidden layer. Defaults to 128.
+            hidden_layers (int, optional): Number of hidden layers. Defaults to 2.
+            norm_type (str, optional): Normalization type, one of "LayerNorm",
+                "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+                Defaults to "LayerNorm".
+            dropout (float, optional): Dropout probability. Defaults to 0.
+            scatter (str, optional): <FILL IN> — accepted but not currently used in
+                this class. Defaults to "mean".
+            attention_mask (torch.Tensor, optional): Boolean/float mask restricting
+                attention to connected neighbours (see ``SatelliteEncoder``/
+                ``SatelliteDynamicEncoder``). Defaults to None.
         """
         super().__init__()
         #super(NodeProcessor, self).__init__()
@@ -662,18 +815,17 @@ class NodeSatelliteProcessorAttention(nn.Module):
     def forward(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor, batch, u=None,
     ) -> torch.Tensor:
-        """
-        Compute the node feature updates in message passing
+        """Compute the node feature updates via masked self-attention.
 
         Args:
-            x: Input nodes
-            edge_index: Edge indicies in COO format
-            edge_attr: Edge attributes
-            u: Global attributes, ignored
-            batch: Batch IDX, ignored
+            x (torch.Tensor): Input nodes.
+            edge_index: Edge indices in COO format. Unused (see class docstring).
+            edge_attr: Edge attributes. Unused (see class docstring).
+            batch (int, optional): If not None, batch size used to reshape ``x`` for attention.
+            u: Global attributes, ignored.
 
         Returns:
-            torch.Tensor with updated node attributes
+            torch.Tensor: Updated node attributes.
         """
         #print("node batch", batch)
         self.attention_mask = self.attention_mask.bool().to(x.device)
@@ -736,20 +888,40 @@ def build_satellite_graph_processor_block(
     dropout: float=0,
     scatter: str="mean",disaggregated=False, attention=False,attention_mask=None, residuals=False
 ) -> torch.nn.Module:
-    """
-    Build the Graph Net Block
+    """Build a satellite Graph Net Block (edge model + node model) as a ``MetaLayer``.
 
     Args:
-        in_dim_node: Input node feature dimension
-        in_dim_edge: Input edge feature dimension
-        hidden_dim_node: Number of nodes in hidden layer for graph node processing
-        hidden_dim_edge: Number of nodes in hidden layer for graph edge processing
-        hidden_layers_node: Number of hidden layers for node processing
-        hidden_layers_edge: Number of hidden layers for edge processing
-        norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+        in_dim_node (int, optional): Input node feature dimension. Defaults to 128.
+        in_dim_edge (int, optional): Input edge feature dimension. Defaults to 128.
+        hidden_dim_node (int, optional): Number of nodes in hidden layer for graph
+            node processing. Defaults to 128.
+        hidden_dim_edge (int, optional): Number of nodes in hidden layer for graph
+            edge processing. Defaults to 128.
+        hidden_layers_node (int, optional): Number of hidden layers for node
+            processing. Defaults to 2.
+        hidden_layers_edge (int, optional): Number of hidden layers for edge
+            processing. Defaults to 2.
+        norm_type (str, optional): Normalization type, one of "LayerNorm",
+            "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+            Defaults to "LayerNorm".
+        dropout (float, optional): Dropout probability. Defaults to 0.
+        scatter (str, optional): Aggregation to use for incoming edge messages in the
+            (non-disaggregated, non-attention) node model, "sum" or "mean".
+            Defaults to "mean".
+        disaggregated (bool, optional): If True, uses
+            ``NodeSatelliteProcessorDisaggregated`` for the node model (concatenates
+            rather than aggregates incoming edge messages). Defaults to False.
+        attention (bool, optional): If True (and ``disaggregated`` is False), uses
+            ``NodeSatelliteProcessorAttention`` for the node model. Requires
+            ``attention_mask``. Defaults to False.
+        attention_mask (torch.Tensor, optional): Attention mask forwarded to
+            ``NodeSatelliteProcessorAttention`` when ``attention=True``. Defaults to None.
+
     Returns:
-        torch.nn.Module for the graph processing block
+        torch.nn.Module: ``MetaLayer`` for the graph processing block.
+
+    Raises:
+        AssertionError: If ``attention`` is True but ``attention_mask`` is None.
     """
     #print("build", batched_data)
     if disaggregated:
@@ -791,20 +963,26 @@ def build_graph_processor_block(
     norm_type: str = "LayerNorm",
     dropout: float=0
 ) -> torch.nn.Module:
-    """
-    Build the Graph Net Block
+    """Build a Graph Net Block (edge model + node model) as a ``MetaLayer``.
 
     Args:
-        in_dim_node: Input node feature dimension
-        in_dim_edge: Input edge feature dimension
-        hidden_dim_node: Number of nodes in hidden layer for graph node processing
-        hidden_dim_edge: Number of nodes in hidden layer for graph edge processing
-        hidden_layers_node: Number of hidden layers for node processing
-        hidden_layers_edge: Number of hidden layers for edge processing
-        norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+        in_dim_node (int, optional): Input node feature dimension. Defaults to 128.
+        in_dim_edge (int, optional): Input edge feature dimension. Defaults to 128.
+        hidden_dim_node (int, optional): Number of nodes in hidden layer for graph
+            node processing. Defaults to 128.
+        hidden_dim_edge (int, optional): Number of nodes in hidden layer for graph
+            edge processing. Defaults to 128.
+        hidden_layers_node (int, optional): Number of hidden layers for node
+            processing. Defaults to 2.
+        hidden_layers_edge (int, optional): Number of hidden layers for edge
+            processing. Defaults to 2.
+        norm_type (str, optional): Normalization type, one of "LayerNorm",
+            "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+            Defaults to "LayerNorm".
+        dropout (float, optional): Dropout probability. Defaults to 0.
+
     Returns:
-        torch.nn.Module for the graph processing block
+        torch.nn.Module: ``MetaLayer`` for the graph processing block.
     """
     #print("build", batched_data)
     return MetaLayer(
@@ -818,7 +996,7 @@ def build_graph_processor_block(
 
 
 class GraphProcessor(nn.Module):
-    """Overall graph processor"""
+    """Overall graph processor: a stack of message-passing Graph Net Blocks."""
 
     def __init__(
         self,
@@ -832,19 +1010,25 @@ class GraphProcessor(nn.Module):
         norm_type: str = "LayerNorm",
         dropout: float = 0,
     ):
-        """
-        Graph Processor
+        """Initialize the graph processor.
 
         Args:
-            mp_iterations: number of message-passing iterations (graph processor blocks)
-            in_dim_node: Input node feature dimension
-            in_dim_edge: Input edge feature dimension
-            hidden_dim_node: Number of nodes in hidden layers for node processing
-            hidden_dim_edge: Number of nodes in hidden layers for edge processing
-            hidden_layers_node: Number of hidden layers for node processing
-            hidden_layers_edge: Number of hidden layers for edge processing
-            norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            mp_iterations (int, optional): Number of message-passing iterations
+                (graph processor blocks). Defaults to 15.
+            in_dim_node (int, optional): Input node feature dimension. Defaults to 128.
+            in_dim_edge (int, optional): Input edge feature dimension. Defaults to 128.
+            hidden_dim_node (int, optional): Number of nodes in hidden layers for
+                node processing. Defaults to 128.
+            hidden_dim_edge (int, optional): Number of nodes in hidden layers for
+                edge processing. Defaults to 128.
+            hidden_layers_node (int, optional): Number of hidden layers for node
+                processing. Defaults to 2.
+            hidden_layers_edge (int, optional): Number of hidden layers for edge
+                processing. Defaults to 2.
+            norm_type (str, optional): Normalization type, one of "LayerNorm",
+                "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+                Defaults to "LayerNorm".
+            dropout (float, optional): Dropout probability. Defaults to 0.
         """
         super().__init__()
         #super(GraphProcessor, self).__init__()
@@ -870,16 +1054,16 @@ class GraphProcessor(nn.Module):
     def forward(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor, batch=None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Compute updates to the graph in message passing method
+        """Compute updates to the graph via successive message-passing blocks.
 
         Args:
-            x: Input nodes
-            edge_index: Edge indicies in COO format
-            edge_attr: Edge attributes
+            x (torch.Tensor): Input nodes.
+            edge_index (torch.Tensor): Edge indices in COO format.
+            edge_attr (torch.Tensor): Edge attributes.
+            batch (int, optional): Batch size, forwarded to each block. Defaults to None.
 
         Returns:
-            Updated nodes and edge attributes
+            tuple[torch.Tensor, torch.Tensor]: Updated nodes and edge attributes.
         """
         #print("graph block", batch)
         for block in self.blocks:
@@ -887,11 +1071,11 @@ class GraphProcessor(nn.Module):
             #print(x.size(), edge_index.size(), edge_attr.size())
             #print("in block")
             #print(edge_index[0])
-            x, edge_attr, _ = block(x, edge_index, edge_attr, batch)#, batch=torch.tensor(np.arange(x.size()[0])))                
+            x, edge_attr, _ = block(x, edge_index, edge_attr, batch)#, batch=torch.tensor(np.arange(x.size()[0])))
         return x, edge_attr
 
 class GraphSatelliteProcessor(nn.Module):
-    """Overall graph processor"""
+    """Overall graph processor: a stack of satellite message-passing Graph Net Blocks."""
 
     def __init__(
         self,
@@ -906,19 +1090,36 @@ class GraphSatelliteProcessor(nn.Module):
         dropout: float = 0,
         scatter: str="mean", disaggregated=False, attention=False, attention_mask=None, residuals: bool = False
     ):
-        """
-        Graph Processor
+        """Initialize the satellite graph processor.
 
         Args:
-            mp_iterations: number of message-passing iterations (graph processor blocks)
-            in_dim_node: Input node feature dimension
-            in_dim_edge: Input edge feature dimension
-            hidden_dim_node: Number of nodes in hidden layers for node processing
-            hidden_dim_edge: Number of nodes in hidden layers for edge processing
-            hidden_layers_node: Number of hidden layers for node processing
-            hidden_layers_edge: Number of hidden layers for edge processing
-            norm_type: Normalization type
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
+            mp_iterations (int, optional): Number of message-passing iterations
+                (graph processor blocks). Defaults to 15.
+            in_dim_node (int, optional): Input node feature dimension. Defaults to 128.
+            in_dim_edge (int, optional): Input edge feature dimension. Defaults to 128.
+            hidden_dim_node (int, optional): Number of nodes in hidden layers for
+                node processing. Defaults to 128.
+            hidden_dim_edge (int, optional): Number of nodes in hidden layers for
+                edge processing. Defaults to 128.
+            hidden_layers_node (int, optional): Number of hidden layers for node
+                processing. Defaults to 2.
+            hidden_layers_edge (int, optional): Number of hidden layers for edge
+                processing. Defaults to 2.
+            norm_type (str, optional): Normalization type, one of "LayerNorm",
+                "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm", or None.
+                Defaults to "LayerNorm".
+            dropout (float, optional): Dropout probability. Defaults to 0.
+            scatter (str, optional): Aggregation to use for incoming edge messages in
+                the (non-disaggregated, non-attention) node model, "sum" or "mean".
+                Defaults to "mean".
+            disaggregated (bool, optional): If True, uses
+                ``NodeSatelliteProcessorDisaggregated`` for the node model in each
+                block. Defaults to False.
+            attention (bool, optional): If True (and ``disaggregated`` is False), uses
+                ``NodeSatelliteProcessorAttention`` for the node model in each block.
+                Requires ``attention_mask``. Defaults to False.
+            attention_mask (torch.Tensor, optional): Attention mask forwarded to each
+                block when ``attention=True``. Defaults to None.
         """
         super().__init__()
         #super(GraphProcessor, self).__init__()
@@ -945,16 +1146,16 @@ class GraphSatelliteProcessor(nn.Module):
     def forward(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor, batch=None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Compute updates to the graph in message passing method
+        """Compute updates to the graph via successive message-passing blocks.
 
         Args:
-            x: Input nodes
-            edge_index: Edge indicies in COO format
-            edge_attr: Edge attributes
+            x (torch.Tensor): Input nodes.
+            edge_index (torch.Tensor): Edge indices in COO format.
+            edge_attr (torch.Tensor): Edge attributes.
+            batch (int, optional): Batch size, forwarded to each block. Defaults to None.
 
         Returns:
-            Updated nodes and edge attributes
+            tuple[torch.Tensor, torch.Tensor]: Updated nodes and edge attributes.
         """
         #print("graph block", batch)
         for block in self.blocks:
@@ -962,8 +1163,8 @@ class GraphSatelliteProcessor(nn.Module):
             #print(x.size(), edge_index.size(), edge_attr.size())
             #print("in block")
             #print(edge_index[0])
-            x, edge_attr, _ = block(x, edge_index, edge_attr, batch)#, batch=torch.tensor(np.arange(x.size()[0])))                
-        
+            x, edge_attr, _ = block(x, edge_index, edge_attr, batch)#, batch=torch.tensor(np.arange(x.size()[0])))
+
         return x, edge_attr
 
 

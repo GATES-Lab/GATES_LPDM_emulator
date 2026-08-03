@@ -15,6 +15,19 @@ from .graph_net_block import MLP
 
 
 def concat_group_by(x: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+    """Group and concatenate node features by ``index``, zero-padding groups to the same size.
+
+    Pads each group (as counted by ``index``) with zeros up to the largest group
+    size, sorts nodes by group, then reshapes/permutes so that each group's features
+    are concatenated along the feature dimension.
+
+    Args:
+        x (torch.Tensor): Node features, shape [n_batch, n_features, n_nodes].
+        index (torch.Tensor): Group index for each node along the last dimension of ``x``.
+
+    Returns:
+        torch.Tensor: Shape [n_batch, n_features * max_group_size, number_of_groups].
+    """
     # Step 1: Count the occurrences of each unique value in the index tensor.
     index_count = torch.bincount(index)
     
@@ -75,33 +88,58 @@ class SatelliteDecoder(torch.nn.Module):
         n_neighbours=3,
         final_activation=None, concat_neighbours=False, idx_latlon=None, append_latlon=False, concat_neighbours_2=False
     ):
-        """
-        Decoder from latent graph to lat/lon graph
+        """Initialize the decoder from latent graph to lat/lon graph.
+
+        Modifications to original code:
+            - Adapted to work for the whole world or only for the area defined by the
+              lat/lon coords.
+            - Original code connects each latlon point to the closest mesh point and
+              all of its neighbours; changed so it's only connected to the three
+              closest of these.
 
         Args:
-            lat_lons: List of (lat,lon) points
-            resolution: H3 resolution level
-            input_dim: Input node dimension
-            output_dim: Output node dimension
-            output_edge_dim: Edge dimension
-            hidden_dim_processor_node: Hidden dimension of the node processors
-            hidden_dim_processor_edge: Hidden dimension of the edge processors
-            hidden_layers_processor_node: Number of hidden layers in the node processors
-            hidden_layers_processor_edge: Number of hidden layers in the edge processors
-            hidden_dim_decoder:Number of hidden dimensions in the decoder
-            hidden_layers_decoder: Number of layers in the decoder
-            mlp_norm_type: Type of norm for the MLPs
-                one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
-            use_checkpointing: Whether to use gradient checkpointing or not
+            lat_lons (list[tuple]): List of (lat, lon) points.
+            h_grid (list, optional): Precomputed list of H3 mesh node IDs to use
+                instead of building one from ``lat_lons``/``resolution``/``whole_world``.
+                Defaults to None.
+            whole_world (bool, optional): If True (and ``h_grid`` is None), builds the
+                H3 grid for the whole world rather than just the area covered by
+                ``lat_lons``. Defaults to False.
+            resolution (int, optional): H3 resolution level. Defaults to 2.
+            input_dim (int, optional): Input node dimension. Defaults to 256.
+            output_dim (int, optional): Output node dimension. Defaults to 78.
+            mlp_norm_type (str, optional): Type of norm for the MLPs, one of
+                "LayerNorm", "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm",
+                or None. Defaults to "LayerNorm".
+            hidden_dim_decoder (int, optional): Number of hidden dimensions in the
+                decoder. Defaults to 128.
+            hidden_layers_decoder (int, optional): Number of layers in the decoder.
+                Defaults to 2.
+            residuals (bool, optional): <FILL IN>. Defaults to False.
+            use_checkpointing (bool, optional): Whether to use gradient checkpointing
+                or not. Defaults to False.
+            dropout (float, optional): Dropout probability. Defaults to 0.
+            n_neighbours (int, optional): Number of closest mesh nodes to connect
+                each latlon point to. Defaults to 3.
+            final_activation (optional): Final activation function passed to the
+                decoder MLP. Defaults to None.
+            concat_neighbours (bool, optional): If True, concatenates (rather than
+                distance-weighted-averages) the ``n_neighbours`` closest mesh node
+                features for each latlon point. Defaults to False.
+            idx_latlon (list, optional): Grid (row, col) index for each entry in
+                ``lat_lons``; required if ``append_latlon`` is True. Defaults to None.
+            append_latlon (bool, optional): If True, appends normalised
+                ``idx_latlon`` coordinates to the decoder input features. Defaults to False.
+            concat_neighbours_2 (bool, optional): <FILL IN> — an alternative
+                neighbour-concatenation mode to ``concat_neighbours``, using
+                ``concat_group_by``. Defaults to False.
 
+        Raises:
+            AssertionError: If ``append_latlon`` is True but ``idx_latlon`` is None.
 
-         modifications to og code:
-            - adapted to work in the whole world or only for the area defined by the lat lon coords 
-            - og code connects each latlon point to the closest mesh point and all of its neighbours. changed so it's only connected to the three closest of these
-        to add
-            - 
-        NEEDS UPDATING!
-
+        Note:
+            NEEDS UPDATING! (developer note kept from the previous docstring — nothing
+            further was specified about what needs updating).
         """
 
         super().__init__()
@@ -262,15 +300,15 @@ class SatelliteDecoder(torch.nn.Module):
     def forward(
         self, processor_features: torch.Tensor, start_features: torch.Tensor
     ) -> torch.Tensor:
-        """
-        Adds features to the encoding graph
+        """Decode processed latent-graph features back onto the lat/lon graph.
 
         Args:
-            processor_features: Processed features in shape [B*Nodes, Features]
-            start_features: Original input features to the encoder, with shape [B, Nodes, Features]
+            processor_features (torch.Tensor): Processed features in shape [B*Nodes, Features].
+            start_features (torch.Tensor): Original input features to the encoder,
+                with shape [B, Nodes, Features] (used only for ``batch_size`` and device).
 
         Returns:
-            Updated features for model
+            torch.Tensor: Decoded features, shape [B, Nodes, output_dim].
         """
         #print("in satellite decoder forward")
         batch_size = start_features.shape[0]
