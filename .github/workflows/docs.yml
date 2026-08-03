@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - docs
+      - zarr_stores_metonly2
   workflow_dispatch:
 
 # Allow the workflow to publish to GitHub Pages.
