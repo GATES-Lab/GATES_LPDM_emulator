@@ -2,15 +2,27 @@
 """
 Sweep launcher for GATES training jobs.
 
-Reads a parameter JSON containing a "__sweep__" section, generates all
-combinations (Cartesian product), writes one temporary parameter file per
-combination into <param_dir>/sweep_configs/, and submits a SLURM job for each.
+Reads a parameter JSON containing a "__sweep__" section, expands it into a set
+of parameter combinations, writes one temporary parameter file per combination
+into <param_dir>/sweep_configs/, and submits a SLURM job for each.
 
-Sweep section format — add this anywhere inside the parameter JSON:
-    "__sweep__": {
-        "learning_rate": [1e-4, 5e-5, 1e-5],
-        "model_parameters.num_blocks": [2, 4, 6]
-    }
+The "__sweep__" section can be given in one of two forms:
+
+1. Cartesian product — a dict mapping parameter paths to lists of values. One
+   job is launched for every combination of values:
+       "__sweep__": {
+           "learning_rate": [1e-4, 5e-5, 1e-5],
+           "model_parameters.num_blocks": [2, 4, 6]
+       }
+   → 3 x 3 = 9 jobs.
+
+2. Explicit list of configs — a list of dicts, where each dict is one job. Use
+   this to run specific combinations rather than the full grid:
+       "__sweep__": [
+           {"learning_rate": 1e-4, "model_parameters.num_blocks": 2},
+           {"learning_rate": 5e-5, "model_parameters.num_blocks": 6}
+       ]
+   → 2 jobs (only the combinations listed).
 
 Dot-notation addresses nested keys at any depth. Everything else in the JSON
 is used as-is for every job. The "__sweep__" key itself is stripped before

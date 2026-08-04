@@ -11,17 +11,61 @@ The pipeline takes LPDM footprints + meteorology + static fields, cuts them to s
 | Data | Format | Required dimensions / variables |
 |------|--------|--------------------------------|
 | **Footprints** | NetCDF `.nc`, one file per month | dims: `time`, `lat`, `lon`; vars: `fp`, `release_lat`, `release_lon` |
-| **Meteorology** | Zarr, one store per year (see [below](#meteorology-yearly-zarr-stores)) | dims: `time`, `levels`, `lat`, `lon` |
+| **Meteorology** | Zarr, one store per year | dims: `time`, `levels`, `lat`, `lon` |
 | **Topography** | Single global NetCDF | dims: `lat`, `lon` |
 | **Land cover** | Single global NetCDF | dims: `lat`, `lon`, `pseudo_level` |
 
-**File naming conventions** (if using default paths):
-- Footprints: `*REGION*DOMAIN_*YYYYMM.nc`
-- Met: `DOMAIN_Met_YYYY.zarr` (one store per year)
+### Where the data lives: `config.yml` paths
 
-If you're not using default paths, footprint files still need to end in `YYYYMM.nc` (path format `fp_dir = "/path/to/file/filename_"`), and met stores need to end in `YYYY.zarr` (path format `met_datadir = "/path/to/file/filename_"`).
+The loader builds every data path from the `data_paths` section of `config.yml` (see the [config guide](HOW_TO_CONFIG.md)). Each entry is joined onto `base_data_path`, so `base_data_path` is the single place to point at your data root:
 
-**Built-in region → domain mappings:**
+```yaml
+data_paths:
+  base_data_path:    /group/chem/acrg          # prepended to every path below
+  fp_datadir:        /LPDM/fp_NAME_pre20210701/
+  met_datadir:       /met_archive/zarr_store/
+  topog_datadir:     /LPDM/topog_NAME/TopogUMG_Mk8_global.nc
+  landcover_datadir: /LPDM/topog_NAME/land_cover.nc     # optional
+```
+
+`fp_datadir` and `met_datadir` are **directories**; `topog_datadir` and `landcover_datadir` point at **single global files**.
+
+### Expected directory structure (default paths)
+
+Inside `fp_datadir` and `met_datadir`, files are organised into a **`<DOMAIN>/` subfolder** and named so the region, domain and date can be parsed out. Meteorology is stored as **one Zarr store per year** — the older monthly NetCDF met files are no longer supported (footprints, topography and land cover remain NetCDF):
+
+```
+<base_data_path>/
+├── <fp_datadir>/
+│   └── <DOMAIN>/
+│       └── *<REGION>*<DOMAIN>_<YYYYMM>*.nc     # footprints, one file per month
+├── <met_datadir>/
+│   └── <DOMAIN>/
+│       └── <DOMAIN>_Met_<YYYY>*.zarr           # meteorology, one store per year
+├── <topog_datadir>                             # single global NetCDF file
+└── <landcover_datadir>                         # single global NetCDF file (optional)
+```
+
+For example, loading `region="BRAZIL"` (domain `SOUTHAMERICA`) for January 2018 resolves to:
+
+```
+/group/chem/acrg/LPDM/fp_NAME_pre20210701/SOUTHAMERICA/*BRAZIL*SOUTHAMERICA_201801*.nc
+/group/chem/acrg/met_archive/zarr_store/SOUTHAMERICA/SOUTHAMERICA_Met_2018*.zarr
+```
+
+When no `month` is given, the date part is just `<YYYY>`, so every month of that year matches.
+
+### Overriding the default paths
+
+To load data that doesn't follow this layout, pass a path **prefix** directly and the loader appends the date and extension itself:
+
+- **Footprints** — pass `fp_datadir="/path/to/filename_"`; the loader appends `*<YYYYMM>*.nc`, so files must end in the date (e.g. `filename_201801.nc`).
+- **Meteorology** — pass `met_args={"met_datadir": "/path/to/filename_"}`; the loader appends `*<YYYY>*.zarr` (e.g. `filename_2018.zarr`).
+- **Topography / land cover** — pass `topog_args={"topog_path": ..., "landcover_path": ...}` to point at specific files.
+
+### Built-in region → domain mappings
+
+`<DOMAIN>` above is the *domain* that a *region* belongs to. These mappings live in the `domains` section of `config.yml`:
 
 | Region | Domain |
 |--------|--------|
@@ -29,20 +73,9 @@ If you're not using default paths, footprint files still need to end in `YYYYMM.
 | `SOUTHAMERICA` | `SOUTHAMERICA` |
 | `SAHARA` | `NORTHAFRICA` |
 | `INDIA` | `SOUTHASIA` |
+| `CHINA` | `EASTASIA` |
 
-Other regions require passing `domain` explicitly.
-
----
-
-## Meteorology: yearly Zarr stores
-
-Meteorology is loaded from **one Zarr store per year**. This is now the only supported met format — the older monthly NetCDF met files are no longer used. Footprints, topography and land cover are unchanged (still NetCDF).
-
-**Layout & naming**
-```
-<met_datadir>/DOMAIN/DOMAIN_Met_YYYY.zarr     # one store per year
-```
-`met_datadir` (the same config key as before) now points at the Zarr root.
+Regions not listed in `config.yml` require passing `domain` explicitly to `LoadSquareSatelliteData`.
 
 ---
 

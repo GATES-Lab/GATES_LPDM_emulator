@@ -7,5 +7,6 @@ New to GATES? Start here to set up your environment, configure the repo, and lau
 
 environment
 config
+wandb
 launch_training
 ```
