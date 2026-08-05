@@ -131,29 +131,31 @@ def build_region_configs(regions_dict, shared_load_parameters):
     return region_configs
 
 
-def load_multiregion_data(region_configs, input_variables, datapath_args, verbose=True, load_into_memory=True, load_monthly=False, use_wandb=False):
+def load_multiregion_data(region_configs, input_variables, datapath_args, flux_args=None, verbose=True, load_into_memory=True, use_wandb=False):
     """
     Loads each region's train and test data sequentially, then returns concatenated train data
     and a per-region list of test data.
 
     Each region is loaded and optionally computed to memory before the next region begins,
     avoiding large cross-region Dask task graphs. After loading, train inputs and footprints
-    are concatenated along the time dimension with integer-reindexed coordinates to prevent
-    collisions between regions that share overlapping calendar dates.
+    are concatenated along the time dimension. Duplicate timestamps that arise when regions
+    share overlapping calendar dates are dropped (first occurrence kept), applying the same
+    positional mask to inputs and footprints so they stay aligned. Reassigning integer time
+    coordinates to keep every sample instead is left as a future improvement (see the
+    commented-out lines).
 
     Args:
         region_configs (list of dict): Each entry must have 'train_load_data' and 'test_load_data'
-            keys, matching the structure expected by load_GATES_data / load_GATES_data_v2.
+            keys, matching the structure expected by load_GATES_data_v2.
         input_variables (dict): Variable extraction settings forwarded to each data loader.
         datapath_args (dict): Path overrides forwarded to each data loader.
+        flux_args (dict, optional): Flux configuration forwarded to load_GATES_data_v2 for
+            each region. Defaults to None (no flux loading).
         verbose (bool): Print per-region progress messages. Defaults to True.
         load_into_memory (bool): If True, call .compute() on each region's inputs before moving
             to the next region. Defaults to True to avoid cross-region Dask task graphs.
-        load_monthly (bool): If True, use load_GATES_data_v2 (loads one whole year at a
-            time); otherwise use load_GATES_data. Defaults to False.
-        use_wandb (bool): Passed to load_GATES_data_v2 when load_monthly=True. Enables
-            per-year W&B loading metrics with a continuous counter across all regions.
-            Defaults to False.
+        use_wandb (bool): Passed to load_GATES_data_v2 to enable per-year W&B loading metrics
+            with a continuous counter across all regions. Defaults to False.
 
     Returns:
         all_train_inputs (xr.DataArray): Concatenated train inputs (fp_time, lat, lon, variable_name).
@@ -165,7 +167,7 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
     test_regions = []
     # Shared loading state so W&B loading metrics stay continuous across every
     # region's train and test load rather than restarting at 1 each time.
-    wandb_loading_state = gates_training.initialise_wandb_loading() if (load_monthly and use_wandb) else None
+    wandb_loading_state = gates_training.initialise_wandb_loading() if use_wandb else None
 
     for region_config in region_configs:
         train_params = copy.deepcopy(region_config["train_load_data"])
@@ -175,32 +177,22 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
 
         if verbose:
             print(f"\n--- Loading train data for region: {region_name} ---")
-        if not load_monthly:
-            data_r, train_inputs_r = gates_training.load_GATES_data(
-                train_params, input_variables=input_variables,
-                datapath_args=datapath_args, verbose=verbose)
-            train_fp_r = data_r.fp_xr
-        else:
-            data_r, train_inputs_r = gates_training.load_GATES_data_v2(
-                train_params, input_variables=input_variables,
-                datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory,
-                use_wandb=use_wandb, wandb_state=wandb_loading_state)
-            train_fp_r = data_r
+        data_r, train_inputs_r = gates_training.load_GATES_data_v2(
+            train_params, input_variables=input_variables,
+            datapath_args=datapath_args, flux_args=flux_args, verbose=verbose,
+            load_into_memory=load_into_memory,
+            use_wandb=use_wandb, wandb_state=wandb_loading_state)
+        train_fp_r = data_r
 
         if verbose:
             print(f"--- Loading test data for region: {region_name} ---")
             print("------------------------------------------")
-        if not load_monthly:
-            test_data_r, test_inputs_r = gates_training.load_GATES_data(
-                test_params, input_variables=input_variables,
-                datapath_args=datapath_args, verbose=verbose)
-            test_fp_r = test_data_r.fp_xr
-        else:
-            test_data_r, test_inputs_r = gates_training.load_GATES_data_v2(
-                test_params, input_variables=input_variables,
-                datapath_args=datapath_args, verbose=verbose, load_into_memory=load_into_memory,
-                use_wandb=use_wandb, wandb_state=wandb_loading_state)
-            test_fp_r = test_data_r
+        test_data_r, test_inputs_r = gates_training.load_GATES_data_v2(
+            test_params, input_variables=input_variables,
+            datapath_args=datapath_args, flux_args=flux_args, verbose=verbose,
+            load_into_memory=load_into_memory,
+            use_wandb=use_wandb, wandb_state=wandb_loading_state)
+        test_fp_r = test_data_r
 
         if verbose:
             # print number of samples in each dataset
@@ -238,12 +230,26 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, verbos
                 f"variable_name coords differ between region 0 and region {i} "
                 f"({test_regions[i]['name']}). Ensure all regions use identical 'variables' settings.")
 
-    # Concatenate train data; reassign to integer coords to avoid duplicate timestamps
+    # Concatenate train data across regions.
     all_train_inputs = xr.concat(train_inputs_list, dim="fp_time")
+    all_train_fps = xr.concat(train_fps_list, dim="time")
+
+    # Drop duplicate timestamps that arise when regions share overlapping calendar
+    # dates. Keep the first occurrence and apply the same positional mask to inputs
+    # (fp_time) and footprints (time) so the two stay aligned.
+    time_values = all_train_fps["time"].values
+    _, first_occurrence = np.unique(time_values, return_index=True)
+    keep_positions = np.sort(first_occurrence)
+    n_dropped = len(time_values) - len(keep_positions)
+    if n_dropped > 0:
+        all_train_inputs = all_train_inputs.isel(fp_time=keep_positions)
+        all_train_fps = all_train_fps.isel(time=keep_positions)
+        if verbose:
+            print(f"Dropped {n_dropped} duplicate timestamp(s) from concatenated train data")
+
+    # A future improvement is to instead reassign integer coords to keep every sample:
     #all_train_inputs = all_train_inputs.assign_coords(
     #    fp_time=np.arange(len(all_train_inputs.fp_time)))
-
-    all_train_fps = xr.concat(train_fps_list, dim="time")
     #all_train_fps = all_train_fps.assign_coords(
     #    time=np.arange(len(all_train_fps.time)))
 
@@ -546,16 +552,15 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
     region_configs = build_region_configs(parameters["regions"], shared_load_params)
     input_variables = parameters["variables"]
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
+    flux_args = parameters.get("flux", None)
     load_into_memory = parameters.get("load_into_memory", True)
 
     client, cluster = gates_training.make_cluster()
     write_to_file(f"loading data for {len(region_configs)} region(s)", paths_ctx.updates_path)
 
-    load_monthly = parameters.get("load_data_monthly", False)
-
     all_train_inputs, all_train_fps, test_regions = load_multiregion_data(
-        region_configs, input_variables, datapath_args,
-        verbose=verbose, load_into_memory=load_into_memory, load_monthly=load_monthly, use_wandb=use_wandb)
+        region_configs, input_variables, datapath_args, flux_args=flux_args,
+        verbose=verbose, load_into_memory=load_into_memory, use_wandb=use_wandb)
 
     num_train_samples = len(all_train_fps.time)
     num_test_samples_per_region = {r["name"]: r["inputs"].sizes["fp_time"] for r in test_regions}

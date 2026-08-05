@@ -297,13 +297,13 @@ def train_and_save_model(parameters, model_save_dir):
             - 'env' (str): Environment identifier used to select data paths from config.yml.
             - 'learning_rate' (float): Learning rate passed to the AdamW optimiser.
             - 'epochs' (dict): Epoch control settings (see run_full_training for sub-keys).
-            - 'variables' (dict): Keyword arguments forwarded to get_square_satellite_inputs().
-            - 'dataloader_parameters' (dict): Keyword arguments forwarded to FootprintsDatasetV3().
+            - 'variables' (dict): Keyword arguments forwarded to get_square_satellite_inputs_v2().
+            - 'dataloader_parameters' (dict): Keyword arguments forwarded to FootprintDataset().
             - 'model_parameters' (dict): Keyword arguments forwarded to GraphSatelliteForecaster().
             - 'loss_functions' (dict): Contains 'criterion' and 'criterion_test' as eval-able strings.
             - 'train_load_data' (dict): Keyword arguments for loading the training dataset.
             - 'test_load_data' (dict): Overrides applied on top of train_load_data for the test dataset.
-        path (str): Base directory path under which all model output folders and files will be created.
+        model_save_dir (str): Base directory path under which all model output folders and files will be created.
 
     Returns:
         None
