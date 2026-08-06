@@ -7,11 +7,12 @@ original-space outputs alongside the ground-truth footprints.
 
 Usage
 -----
-    python predict_GATES_model.py \\
+    python scripts/predict_GATES_model.py \\
         --test_year 2019 \\
         --reference_model my_model_20240115_143022 \\
         [--month 06] \\
         [--region BRAZIL] \\
+        [--size 50] \\
         [--model_path /path/to/models/] \\
         [--checkpoint best|<epoch_int>] \\
         [--save_path /path/to/outputs/] \\
@@ -54,13 +55,11 @@ import numpy as np
 import torch
 import xarray as xr
 
-sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
-sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
 
 import gates
 import gates.config
 import gates.data.datasets as gates_datasets
-from gates.training.training import load_GATES_data, make_cluster, setup_dynamic_edges
+from gates.training.training import load_GATES_data_v2, make_cluster, setup_dynamic_edges
 from gates.training.training_helperfuns import load_parameter_file
 from gates.training.training_dataclasses import PathContext
 
@@ -235,12 +234,12 @@ class GATESPredictor:
         """Build a GATESPredictor from parsed CLI arguments.
 
         All data and model configuration comes from the reference model's saved
-        training settings. If ``num_features`` is stored in the training
-        settings it is used directly; otherwise ``args.test_year`` is probed
-        month-by-month to determine the input feature dimension. Dynamic edges
-        configuration is read from the training settings and reconstructed via
-        ``setup_dynamic_edges`` before the model is instantiated. The returned
-        predictor works for any year with the same variable configuration.
+        training settings. The input feature dimension is read directly from the
+        ``num_features`` field recorded there (an error is raised if it is
+        missing). Dynamic edges configuration is read from the training settings
+        and reconstructed via ``setup_dynamic_edges`` before the model is
+        instantiated. The returned predictor works for any year with the same
+        variable configuration.
         """
         cfg = gates.config.get_config()
 
@@ -280,30 +279,15 @@ class GATESPredictor:
         data_params.pop("months", None)
         
 
-        # Check if the parameter file specifies the number of input features; if not, probe one month of data to determine it.
-        if "num_features" in training_params.keys():
-            feature_dim = training_params["num_features"]
-            print(f"Using feature_dim from training parameters: {feature_dim}")
-        else:
-            print(f"\nProbing {args.test_year} data to determine feature_dim...")
-            feature_dim = None
-            for probe_month in [f"{m:02d}" for m in range(1, 13)]:
-                try:
-                    probe_params = {**data_params, "year": str(args.test_year), "month": probe_month, "freq": 50}
-                    _, probe_inputs = load_GATES_data(
-                        probe_params, input_variables, datapath_args, verbose=False
-                    )
-                    if probe_inputs is not None and probe_inputs.sizes.get("fp_time", 0) > 0:
-                        feature_dim = probe_inputs.sizes["variable_name"]
-                        print(f"  feature_dim = {feature_dim} (from month {probe_month})")
-                        break
-                except Exception:
-                    continue
-
-        if feature_dim is None:
+        # Number of input features is recorded in the training settings by the
+        # training script; predict relies on it being present.
+        if "num_features" not in training_params:
             raise RuntimeError(
-                f"Could not load any data for {args.test_year} to determine feature_dim."
+                f"'num_features' not found in the training settings for {model_name}. "
+                "Re-run training to record it (or add it to the training_settings JSON)."
             )
+        feature_dim = training_params["num_features"]
+        print(f"Using feature_dim from training parameters: {feature_dim}")
 
         # Dynamic edges
         if training_params.get("dynamic_edges", None) is not None:
@@ -367,7 +351,7 @@ class GATESPredictor:
             monthly_params["freq"] = 1
 
         try:
-            data, inputs = load_GATES_data(
+            fp_xr, inputs = load_GATES_data_v2(
                 monthly_params, self.input_variables, self.datapath_args, verbose=verbose
             )
         except Exception as exc:
@@ -387,10 +371,10 @@ class GATESPredictor:
         # Scale footprints via a FootprintDataset wrapper with the injected
         # pre-fitted scaler, so fp_nan_mask is handled consistently with training.
         fp_wrapper = gates_datasets.FootprintDataset(
-            data.fp_xr, add_nan_mask=self.nans_to_zeros
+            fp_xr, add_nan_mask=self.nans_to_zeros
         )
         fp_wrapper.scaler = self.scalers["fp_scaler"]
-        scaled_fps_ds = fp_wrapper.transform(data.fp_xr)
+        scaled_fps_ds = fp_wrapper.transform(fp_xr)
 
         scaled_inputs, scaled_fps_ds = gates_datasets.trim_to_batch_size(
             scaled_inputs, scaled_fps_ds, self.test_batch_size
@@ -416,8 +400,8 @@ class GATESPredictor:
         fps_dataset["fp_transformed_pred"] = (("time", "lat", "lon"), preds_t.reshape(*fps_dataset.fp_original.shape))
         fps_dataset["fp_pred"] = (("time", "lat", "lon"), preds_o.reshape(*fps_dataset.fp_original.shape))
 
-        fps_dataset["lat_coords"] = data.fp_xr.sel(time=fps_dataset.time).lat_coords
-        fps_dataset["lon_coords"] = data.fp_xr.sel(time=fps_dataset.time).lon_coords
+        fps_dataset["lat_coords"] = fp_xr.sel(time=fps_dataset.time).lat_coords
+        fps_dataset["lon_coords"] = fp_xr.sel(time=fps_dataset.time).lon_coords
 
         attrs_dict={
                 "creation_date": str(datetime.now()),
@@ -607,8 +591,8 @@ def main():
         "--dry_run",
         action="store_true",
         help=(
-            "Quick diagnostic run: process only the first month with freq=20 "
-            "(every 20th sample). Useful for checking the pipeline before a full run."
+            "Quick diagnostic run: process only the first month with freq=60 "
+            "(every 60th sample). Useful for checking the pipeline before a full run."
         ),
     )
 
