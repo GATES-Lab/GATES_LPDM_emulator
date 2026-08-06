@@ -1,0 +1,55 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.05-py3
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install --assume-yes --no-install-recommends \
+        libproj-dev libgeos-dev proj-bin libnetcdf-dev
+    rm -rf /var/lib/apt/lists/*
+
+    # The base image ships a rapids-dask-dependency shim that forces distributed
+    # 2025.2.0, incompatible with the pinned dask 2024.5.0 (it imports
+    # dask._task_spec, absent in 2024.5.0). Remove it so the matching
+    # dask+distributed 2024.5.0 pair installed below is what actually loads;
+    # otherwise `from dask.distributed import Client, LocalCluster` crashes.
+    python3 -m pip uninstall -y rapids-dask-dependency
+
+    # tqdm/pyyaml/ipykernel/pytest are left unpinned: the container's PIP_CONSTRAINT
+    # already pins compatible versions of these for its own tooling, and pinning
+    # our own exact versions here fights that constraint (as pytest==8.3.5 did).
+    python3 -m pip install --no-cache-dir \
+        scipy==1.13.1 \
+        pandas==2.2.2 \
+        xarray==2025.1.2 \
+        dask==2024.5.0 \
+        distributed==2024.5.0 \
+        xbatcher==0.4.0 \
+        netcdf4==1.6.2 \
+        matplotlib==3.8.4 \
+        scikit-learn==1.5.1 \
+        einops==0.8.0 \
+        h3==3.7.7 \
+        h5netcdf \
+        h5py \
+        wandb \
+        pyyaml \
+        tqdm \
+        ipykernel \
+        pytest
+
+    # cartopy's build backend requires numpy>=2.0 to build from source (no aarch64
+    # wheel exists); the container's PIP_CONSTRAINT pins numpy==1.26.4 for ABI
+    # compatibility with the bundled PyTorch build, which only applies to the main
+    # env, not cartopy's isolated build venv, so clearing it here is safe.
+    PIP_CONSTRAINT= python3 -m pip install --no-cache-dir cartopy==0.25.0
+
+    python3 -m pip install --no-cache-dir torch_geometric==2.6.1
+    python3 -m pip install --no-cache-dir --no-build-isolation torch-scatter
+
+%environment
+    export LC_ALL=C
+
+%labels
+    Base nvcr.io/nvidia/pytorch:25.05-py3
+    Source env_gates_pytorch.yml (GATES_LPDM_emulator)
