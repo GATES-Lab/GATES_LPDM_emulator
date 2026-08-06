@@ -243,9 +243,13 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
             - years (list[int | str])  — multiple years (alternative to year)
             - month (int | str | None) — optional single month to keep from each year
             - months (list[int | str]) — optional explicit list of months to keep
-            If month/months is given, the whole year is still loaded (so met
-            time_deltas resolve) and then footprints/inputs are filtered to those
-            months. All other keys are forwarded to LoadSquareSatelliteData.
+            When a single year and a single explicit month are requested, only that
+            month is loaded (a fast path for month-by-month prediction; note met is
+            then loaded for that month alone, so time_deltas reaching into the
+            previous month are not resolved across the boundary). Otherwise the whole
+            year is still loaded (so met time_deltas across month boundaries resolve)
+            and then footprints/inputs are filtered to the requested months, if any.
+            All other keys are forwarded to LoadSquareSatelliteData.
         input_variables (dict): Variable extraction settings forwarded to
             get_square_satellite_inputs_v2. Its 'met_variables'/'met_levels' are also
             used to populate met_args so they need not be duplicated there.
@@ -289,6 +293,12 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
         else None
     )
 
+    # Fast path: when exactly one year and one explicit month are requested (e.g.
+    # month-by-month prediction), load just that month instead of the whole year.
+    # Note that met is then loaded for that month alone, so time_deltas reaching
+    # into the previous month are not resolved across the month boundary.
+    single_month = requested_months is not None and len(years) == 1 and len(months) == 1
+
     base_params = {
         k: v for k, v in data_parameters.items()
         if k not in ("year", "years", "month", "months", "load_into_memory")
@@ -318,9 +328,13 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
     for year in years:
         year_start = time.perf_counter()
         year_key = f"{year}"
+        load_month = months[0] if single_month else None
         if verbose:
-            print(f"Loading year={year} (whole year in one pass)")
-        year_params = {**base_params, "year": year, "month": None}
+            if single_month:
+                print(f"Loading year={year}, month={load_month} (single-month pass)")
+            else:
+                print(f"Loading year={year} (whole year in one pass)")
+        year_params = {**base_params, "year": year, "month": load_month}
         try:
             data = LoadSquareSatelliteData(**year_params, **datapath_args, verbose=verbose)
 
