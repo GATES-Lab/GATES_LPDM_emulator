@@ -1,0 +1,319 @@
+{
+    "air_pressure": {
+        "type": "standard",
+        "3": {
+            "mean": 90000,
+            "std": 10000
+        },
+        "9": {
+            "mean": 90000,
+            "std": 9000
+        },
+        "15": {
+            "mean": 80000,
+            "std": 7000
+        },
+        "21": {
+            "mean": 60000,
+            "std": 5000
+        },
+        "30": {
+            "mean": 45000,
+            "std": 2000
+        },
+        "42": {
+            "mean": 20000,
+            "std": 1000
+        },
+        "51": {
+            "mean": 7000,
+            "std": 100
+        }
+    },
+    "air_temperature": {
+        "type": "standard",
+        "3": {
+            "mean": 290,
+            "std": 10
+        },
+        "9": {
+            "mean": 288,
+            "std": 9
+        },
+        "15": {
+            "mean": 282,
+            "std": 8
+        },
+        "21": {
+            "mean": 274,
+            "std": 8
+        },
+        "30": {
+            "mean": 256,
+            "std": 8
+        },
+        "42": {
+            "mean": 219,
+            "std": 4
+        },
+        "51": {
+            "mean": 204,
+            "std": 5
+        }
+    },
+    "atmosphere_boundary_layer_thickness": {
+        "type": "minmax",
+        "0": {
+            "min": 0,
+            "max": 5000,
+            "feature_range": [0, 1]
+        }
+    },
+    "cos_lat_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -1,
+            "max": 1
+        }
+    },
+    "cos_lon_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -1,
+            "max": 1
+        }
+    },
+    "landcover": {
+        "type": "minmax",
+        "0": {
+            "min": 0,
+            "max": 9
+        }
+    },
+    "lat_coords": {
+        "type": "ghost",
+        "0": {
+        }
+    },
+    "lon_coords": {
+        "type": "ghost",
+        "0": {
+        }
+    },
+    "sin_lat_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -1,
+            "max": 1
+        }
+    },
+    "sin_lon_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -1,
+            "max": 1
+        }
+    },
+    "surface_air_pressure": {
+        "type": "standard",
+        "0": {
+            "mean": 90000,
+            "std": 10000
+        }
+    },
+    "topog": {
+        "type": "minmax",
+        "0": {
+            "min": 0,
+            "max": 20,
+            "log":false
+        }
+    },
+    "upward_air_velocity": {
+        "type": "standard",
+        "3": {
+            "mean": 0.0,
+            "std": 0.0172
+        },
+        "9": {
+            "mean": 0.0,
+            "std": 0.0224
+        },
+        "15": {
+            "mean": 0.0,
+            "std": 0.0288
+        },
+        "21": {
+            "mean": 0.0,
+            "std": 0.0311
+        },
+        "30": {
+            "mean": 0.0,
+            "std": 0.0329
+        },
+        "42": {
+            "mean": 0.0,
+            "std": 0.0265
+        },
+        "51": {
+            "mean": 0.0,
+            "std": 0.0123
+        }
+    },
+    "wind_angle": {
+        "type": "standard",
+        "3": {
+            "mean": 0.0,
+            "std": 1.6238
+        },
+        "9": {
+            "mean": 0.0,
+            "std": 1.5768
+        },
+        "15": {
+            "mean": 0.0,
+            "std": 1.538
+        },
+        "21": {
+            "mean": 0.0,
+            "std": 1.5098
+        },
+        "30": {
+            "mean": 0.0,
+            "std": 1.5239
+        },
+        "42": {
+            "mean": 0.0,
+            "std": 1.6911
+        },
+        "51": {
+            "mean": 0.0,
+            "std": 1.5895
+        }
+    },
+    "wind_speed": {
+        "type": "minmax",
+        "3": {
+            "min": 0,
+            "max": 8
+        },
+        "9": {
+            "min": 0,
+            "max": 12
+        },
+        "15": {
+            "min": 0,
+            "max": 12
+        },
+        "21": {
+            "min": 0,
+            "max": 16
+        },
+        "30": {
+            "min": 0,
+            "max": 24
+        },
+        "42": {
+            "min": 0,
+            "max": 54
+        },
+        "51": {
+            "min": 0,
+            "max": 24
+        }
+    },
+    "x_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -25.0,
+            "max": 24.0,
+            "feature_range": [0, 1]
+        }
+    },
+    "x_wind": {
+        "type": "standard",
+        "3": {
+            "mean": 0.0,
+            "std": 3.8697
+        },
+        "9": {
+            "mean": 0.0,
+            "std": 5.1188
+        },
+        "15": {
+            "mean": 0.0,
+            "std": 5.4962
+        },
+        "21": {
+            "mean": 0.0,
+            "std": 7
+        },
+        "30": {
+            "mean": 0.0,
+            "std": 11.18
+        },
+        "42": {
+            "mean": 0.0,
+            "std": 18.90
+        },
+        "51": {
+            "mean": 0.0,
+            "std": 11.52
+        }
+    },
+    "xy_distance_centre": {
+        "type": "minmax",
+        "0": {
+            "min": 0.0,
+            "max": 35.3553,
+            "feature_range": [0, 1]
+        }
+    },
+    "earth_distance_centre": {
+        "type": "minmax",
+        "0": {
+            "min": 0.0,
+            "max": 1200,
+            "feature_range": [0, 1]
+        }
+    },
+    "y_coords": {
+        "type": "minmax",
+        "0": {
+            "min": -25.0,
+            "max": 24.0,
+            "feature_range": [0, 1]
+        }
+    },
+    "y_wind": {
+        "type": "standard",
+        "3": {
+            "mean": 0.0,
+            "std": 3.7854
+        },
+        "9": {
+            "mean": 0.0,
+            "std": 4.8342
+        },
+        "15": {
+            "mean": 0.0,
+            "std": 4.7274
+        },
+        "21": {
+            "mean": 0.0,
+            "std": 5.3554
+        },
+        "30": {
+            "mean": 0.0,
+            "std": 7.0132
+        },
+        "42": {
+            "mean": 0.0,
+            "std": 10.9328
+        },
+        "51": {
+            "mean": 0.0,
+            "std": 4.3131
+        }
+    }
+}

@@ -9,6 +9,7 @@ import pandas as pd
 import joblib
 from pathlib import Path
 import warnings
+import json
 
 import torch
 import xbatcher as xb
@@ -135,20 +136,27 @@ class XarrayScaler:
     """
     A simple scaler for xarray DataArrays that applies the standard scaling transformation. 
     """
-    def __init__(self, compute=True, kwargs={}, mean=None, std=None):
+    def __init__(self, compute=True, kwargs={}, mean=None, std=None, log=False, verbose=True):
         self.mean = mean
         self.std = std
+        self.log = log
         self.scaler_type = "standard"
         self.scaler_name = "XarrayScaler"
         self.compute = compute
+        self.verbose = verbose
 
     def fit(self, da: xr.DataArray):
         """Compute stats over all dims except the ones you want to preserve (e.g. variable)."""
+        if self.log:
+            nonzero = (da > 0).astype(float)
+            da = xr.where(nonzero, np.log(da), 0.0)
+            if self.verbose: print("Applied log transform to data for standard scaling")
+        
         if self.mean is None:
             self.mean = da.mean()
             self.std = da.std()
             if self.compute:
-                print("Computing mean and std for scaler...")
+                if self.verbose: print("Computing mean and std for scaler...")
                 self.mean = self.mean.compute().astype("float32").values
                 self.std = self.std.compute().astype("float32").values
         self.params = {"mean": self.mean, "std": self.std}
@@ -183,36 +191,44 @@ class XarrayMinMaxScaler:
     A simple scaler for xarray DataArrays that applies minmax transformation. 
     Pass manual_min and manual_max to the constructor if you want to specify the min and max values to use for scaling, otherwise they will be computed from the data while fitting. Pass feature_range to specify the range to scale the data to, default is (0, 1).
     """
-    def __init__(self, feature_range=(0, 1), manual_min =None, manual_max=None, compute=True):
+    def __init__(self, feature_range=(0, 1), manual_min =None, manual_max=None, compute=True, log=False, verbose=True):
         self.min = manual_min
         self.max = manual_max
         self.feature_range = feature_range
         self.scaler_type = "minmax"
         self.scaler_name = "XarrayMinMaxScaler"
         self.compute = compute
+        self.log = log
+        self.verbose = verbose
 
     def fit(self, da: xr.DataArray):
         #if self.min is None or self.max is None:
             #da = da.astype("float32", copy=False)
+        print(self.log)
+        if self.log:
+            nonzero = (da > 0).astype(float)
+            da = xr.where(nonzero, np.log(da), 0.0)
+            if self.verbose: print("Applied log transform to data for minmax scaling")
+
         if self.min is None:
             self.min = da.min()
             if self.compute:
-                print("Computing min for scaler...")
+                if self.verbose: print("Computing min for scaler...")
                 self.min = self.min.compute().astype("float32").values
-                print("min:", self.min)
+                if self.verbose: print("min:", self.min)
                 if abs(self.min) > 1e25 or self.min<-50000:
                     self.min = np.min(da.values).astype("float32")
-                    print("recalculated min from values:", self.min)
+                    if self.verbose: print("recalculated min from values:", self.min)
         if self.max is None:
             self.max = da.max()
             if self.compute:
-                print("Computing max for scaler...")
+                if self.verbose: print("Computing max for scaler...")
                 self.max = self.max.compute().astype("float32").values
                 #self.max = np.max(da.values).astype("float32")
-                print("max:", self.max)
+                if self.verbose: print("max:", self.max)
                 if abs(self.max) > 1e25:
                     self.max = np.max(da.values).astype("float32")
-                    print("recalculated max from values:", self.max)
+                    if self.verbose: print("recalculated max from values:", self.max)
 
 
         self.params = {"min": self.min, "max": self.max, "feature_range": self.feature_range}
@@ -220,6 +236,11 @@ class XarrayMinMaxScaler:
 
     def transform(self, da: xr.DataArray) -> xr.DataArray:
         #da = da.astype("float32", copy=False)
+        if self.log:
+            nonzero = (da > 0).astype(float)
+            da = xr.where(nonzero, np.log(da), 0.0)
+            if self.verbose: print("Applied log transform to data for minmax scaling")
+
         scale = self.feature_range[1] - self.feature_range[0]
         return self.feature_range[0] + scale * (da - self.min) / (self.max - self.min + 1e-8)
 
@@ -418,51 +439,104 @@ class DefaultInputsScaler:
 
 class HandcraftedInputsScaler:
     """
-    IN DEVELOPMENT - NOT READY FOR USE
     Input scaler using pre-determined statistics rather than computing them from data.
 
-    ``stats`` is a path to a JSON file or a dict. Each variable entry has a ``"type"`` key
-    (``"standard"`` or ``"minmax"``) plus per-level statistics::
+    ``stats_file`` is a path to a JSON file or a dict. Example stats files can be found in
+    the ``scaler_files/`` folder. Each variable entry has a ``"type"`` key
+    (``"standard"``, ``"minmax"``, or ``"ghost"``) plus per-level statistics::
 
         {
-            "x_wind":   {"type": "standard", "3": {"mean": 5.21, "std": 3.14}},
-            "topog":    {"type": "minmax",   "0": {"min": -50.0, "max": 3200.0}}
+            "x_wind": {
+                "type": "standard",
+                "3": {"mean": 5.21, "std": 3.14}
+            },
+            "topog": {
+                "type": "minmax",
+                "0": {"min": -50.0, "max": 3200.0, "feature_range": [0, 1]}
+            },
+            "atmosphere_boundary_layer_thickness": {
+                "type": "minmax",
+                "0": {"min": 0, "max": 5000, "feature_range": [0, 1]}
+            },
+            "topog": {
+                "type": "ghost"
+            }
         }
+
+    Supported types:
+    - ``"standard"``: standardises using provided ``mean`` and ``std`` per level.
+    - ``"minmax"``: scales to ``feature_range`` (default ``[0, 1]``) using provided ``min``/``max`` per level.
+      Optionally pass ``"log": true`` to apply a log transform before scaling.
+    - ``"ghost"``: passes the variable through unchanged (no transformation applied). No level key needed.
+
+    ``"standard"`` and ``"minmax"`` require a level key for every level used. This applies to static
+    variables too — they are assigned level ``0`` by default, so their entry must include a ``"0"`` key.
 
     Level keys are strings (JSON requirement) and are cast to int internally.
     ``fit()`` populates ``self.scalers`` without touching the data — all stats come from the dict.
+    If a variable or level is missing from the stats file, a data-driven standard scaler is fitted instead.
     """
-    def __init__(self, stats):
-        if isinstance(stats, str):
-            import json
-            with open(stats) as f:
+    def __init__(self, stats_file, verbose=True):
+        if isinstance(stats_file, str):
+            with open(stats_file) as f:
                 stats = json.load(f)
         self.stats = stats
         self.compute = False # no computation needed since stats are provided, but keeping the attribute for compatibility with the XarrayScaler interface
         self.scalers = {}
         self.scaler_name = "HandcraftedInputsScaler"
+        self.verbose = verbose
 
     def fit(self, inputs: xr.DataArray):
         variable_names = inputs.variable_name.values
         self.fitted_variable_names = list(variable_names)
 
-        for varname, var_stats in self.stats.items():
+        for vc in variable_names:
+            varname, level, _ = vc
+            var_stats = self.stats.get(varname)
+
+            if var_stats is None:
+                if self.verbose:
+                    print(f"Variable {varname} not in stats file, fitting data-driven standard scaler.")
+                scaler = XarrayScaler(compute=self.compute)
+                scaler.fit(inputs.sel(variable_name=vc))
+                self.scalers[vc] = scaler
+                continue
+
             scaler_type = var_stats.get("type", "standard")
+            if scaler_type == "ghost":
+                if self.verbose:
+                    print(f"Assigning GhostScaler for {vc}")
+                self.scalers[vc] = GhostScaler()
+                continue
+
             level_entries = {k: v for k, v in var_stats.items() if k != "type"}
+            level_str = str(level)
+
+            if level_str not in level_entries:
+                if self.verbose:
+                    print(f"Level {level} not found in stats for {varname}, fitting data-driven standard scaler.")
+                scaler = XarrayScaler(compute=self.compute)
+                scaler.fit(inputs.sel(variable_name=vc))
+                self.scalers[vc] = scaler
+                continue
+
+            s = level_entries[level_str]
 
             if scaler_type == "minmax":
-                s = next(iter(level_entries.values()))
-                scaler = XarrayMinMaxScaler(manual_min=s["min"], manual_max=s["max"], compute=self.compute)
-                for vc in variable_names:
-                    if vc[0] == varname and len(vc) == 3:
-                        self.scalers[vc] = scaler
-            else:
-                for level_str, s in level_entries.items():
-                    level = int(level_str)
-                    scaler = XarrayScaler(compute=self.compute, mean=s["mean"], std=s["std"])
-                    for vc in variable_names:
-                        if vc[0] == varname and vc[1] == level and len(vc) == 3:
-                            self.scalers[vc] = scaler
+                if self.verbose:
+                    print(f"Setting up minmax scaler for {vc}")
+                feature_range = tuple(s.get("feature_range", (0, 1)))
+                log= s.get("log", False)
+                self.scalers[vc] = XarrayMinMaxScaler(
+                    manual_min=s["min"], manual_max=s["max"],
+                    feature_range=feature_range,
+                    compute=self.compute, log=log
+                )
+            else:  # standard
+                if self.verbose:
+                    print(f"Setting up standard scaler for {vc}")
+                log= s.get("log", False)
+                self.scalers[vc] = XarrayScaler(compute=self.compute, mean=s["mean"], std=s["std"], log=log)
 
         return self
 
@@ -473,15 +547,11 @@ class HandcraftedInputsScaler:
                 raise ValueError(f"Variable name {varname} in inputs is not in the variable names that were fitted on: {self.fitted_variable_names}.")
 
         transformed_variables = []
-        for varname in np.unique(variable_names):
-            var_data = inputs.sel(variable_name=varname)
-            scaler = self.scalers.get(varname, None)
-            if scaler is None:
-                print(f"No scaler found for variable {varname}, skipping transformation.")
-                transformed_variables.append(var_data)
-                continue
+        for vc in variable_names:
+            var_data = inputs.sel(variable_name=vc)
+            scaler = self.scalers[vc]
             transformed_data = scaler.transform(var_data)
-            transformed_data = transformed_data.rename(varname)
+            transformed_data = transformed_data.rename(vc)
             transformed_variables.append(transformed_data)
 
         transformed = xr.concat(transformed_variables, dim="variable_name")
