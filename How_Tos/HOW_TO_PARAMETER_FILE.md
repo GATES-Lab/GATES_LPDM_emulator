@@ -51,10 +51,6 @@ Controls which data is loaded for training.
     "freq": 3,
     "region": "SAHARA",
     "size": 50,
-    "met_args": {
-        "met_levels": [3, 9, 15, 21, 30, 42, 51],
-        "met_variables": ["x_wind", "y_wind", ...]
-    },
     "crop_met": false
 }
 ```
@@ -66,9 +62,15 @@ Controls which data is loaded for training.
 | `freq` | (recommended) Controls sampling frequency by loading every nth sample. Must be a positive int. If not present, `freq` defaults to 1, which might lead to very large data. Increase the frequency to run a smaller subset of the data.|
 | `region` | (required) Geographic domain name. Must match a known domain in `config.yml`. |
 | `size` | (required) Side length (in grid cells) of the square patch cut around each satellite release point. Must be a positive, *even* int.|
-| `met_args.met_levels` | (recommended) Vertical model levels to load from the meteorological data files. |
+| `met_args.met_path` | (recommended) Vertical model levels to load from the meteorological data files. |
 | `met_args.met_variables` | (recommended) Meteorological variables to load at the data loading stage (before the `variables` section further selects from these). Selecting met levels and variables during data loading reduces computational load. |
 | `crop_met` | (do not change) Controls whether to `crop_met` during data loading, which is redundant when running the training pipeline (but is useful when only loading data to examine it) |
+
+> **Note:  Adding custom paths**: Add your own paths with `"met_args" :{"met_datadir": "/path/to/filename_"}`, `"fp_datadi":"/path/to/filename_"` and `"topog_args":{"topog_path": /path/to/file.nc, "landcover_path": /path/to/file.nc}`
+
+
+> **Note:**: `met_args.met_levels` and `met_args.met_variables` (passed before to select variables and levels at load, saving memory) are now routed directly from the `variables` block to avoid redundancy. 
+
 
 ---
 
