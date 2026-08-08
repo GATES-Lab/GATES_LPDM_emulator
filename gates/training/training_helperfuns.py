@@ -340,57 +340,48 @@ def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, col
     return save_path
 
 
-def save_bg_timeseries_plots(epoch, times, bg_true, bg_pred, path, model_name,
-                             n_windows=4, window_days=7, detrended=True):
+def save_bg_timeseries_plots(epoch, bg_true, bg_pred, path, model_name,
+                             n_windows=4, detrended=True):
     """
-    Plot the single-class ('summed') denormalised background time series (truth vs prediction,
-    in ppb) over several week-long windows spread across the test period, and save the figure.
+    Plot the single-class ('summed') denormalised background series (truth vs prediction,
+    in ppb) against test-sample index, split into consecutive index windows, and save the figure.
 
     Args:
         epoch (int): Current epoch number, used in the output filename.
-        times (array-like of np.datetime64): Time coordinate of the test samples, in order.
         bg_true (np.ndarray): Denormalised true backgrounds in ppb, shape (time,).
         bg_pred (np.ndarray): Denormalised predicted backgrounds in ppb, same shape as bg_true.
         path (str or Path): Base directory for saving output images.
         model_name (str): Model name used to name the saved file.
-        n_windows (int): Number of time windows to plot (default: 4).
-        window_days (int): Length of each window in days (default: 7).
+        n_windows (int): Number of consecutive index windows the samples are split into
+            (default: 4). Together the windows cover every test sample.
         detrended (bool): If True, label the values as corrections relative to the south-boundary
             baseline; otherwise as absolute background mole fractions.
 
     Returns:
         Path: The path the figure was saved to.
     """
-    times = np.asarray(times)
-    order = np.argsort(times)
-    times = times[order]
-    bg_true = np.asarray(bg_true).reshape(-1)[order]
-    bg_pred = np.asarray(bg_pred).reshape(-1)[order]
-
-    # Pick n_windows window start times evenly spread across the test period. If the test
-    # period is shorter than n_windows non-overlapping windows, the windows simply overlap.
-    t_start = pd.Timestamp(times.min())
-    t_end = pd.Timestamp(times.max())
-    window = pd.Timedelta(days=window_days)
-    last_start = max(t_end - window, t_start)
-    window_starts = pd.date_range(t_start, last_start, periods=n_windows)
+    bg_true = np.asarray(bg_true).reshape(-1)
+    bg_pred = np.asarray(bg_pred).reshape(-1)
+    n = len(bg_true)
+    idx = np.arange(n)
+    edges = np.linspace(0, n, n_windows + 1, dtype=int)
 
     ylabel = ("background correction \nvs. south baseline (ppb)" if detrended
               else "background mole \nfraction (ppb)")
 
     fig, ax = plt.subplots(n_windows, 1, figsize=(9, 2.6 * n_windows), squeeze=False, sharey=True)
 
-    times_pd = pd.DatetimeIndex(times)
-    for row, start in enumerate(window_starts):
+    for row in range(n_windows):
         a = ax[row, 0]
-        mask = (times_pd >= start) & (times_pd <= start + window)
-        if mask.sum() == 0:
+        lo, hi = edges[row], edges[row + 1]
+        if lo == hi:
             a.set_visible(False)
             continue
-        a.plot(times_pd[mask], bg_true[mask], c="k", lw=1.2, marker=".", ms=3, label="truth")
-        a.plot(times_pd[mask], bg_pred[mask], c="tab:red", lw=1.2, marker=".", ms=3, label="prediction")
-        a.tick_params(axis="x", labelrotation=30, labelsize=8)
+        a.plot(idx[lo:hi], bg_true[lo:hi], c="k", lw=1.2, marker=".", ms=3, label="truth")
+        a.plot(idx[lo:hi], bg_pred[lo:hi], c="tab:red", lw=1.2, marker=".", ms=3, label="prediction")
         a.set_ylabel(ylabel, fontsize=9)
+        if row == n_windows - 1:
+            a.set_xlabel("test sample index", fontsize=9)
         if row == 0:
             a.legend(fontsize=8)
 

@@ -40,6 +40,7 @@ import gates
 import gates.training.training as gates_training
 import gates.training.training_background as gates_training_background
 import gates.training.training_dual as gates_training_dual
+import gates.training.dual_analysis as dual_analysis  # ANALYSIS-ONLY diagnostics (opt-in)
 from gates.data.load_data import get_grid
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
@@ -61,12 +62,16 @@ def _fp_true_values(fp_batch):
     return fp_batch.unsqueeze(-1)
 
 
-def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
+def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None, analyser=None):
     """One training epoch over (inputs, fps, background) batches with the joint loss.
 
     Once ``model_ctx.bg_frozen`` is set (see ``run_full_training``), the bg head is kept in
     eval mode, its loss is dropped from the joint loss (it is still computed on detached
     predictions for logging), and the trunk trains on the footprint objective alone.
+
+    ``analyser`` (optional ``dual_analysis.TrunkGradAnalyser``) is ANALYSIS ONLY: it
+    measures each head's gradient norm on the shared trunk on selected batches without
+    affecting the training step (see ``gates/training/dual_analysis.py``).
     """
     model.train()
     if model_ctx.bg_frozen:
@@ -103,6 +108,13 @@ def train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None):
             bg_loss = model_ctx.bg_criterion(bg_pred, bg_batch)
             # Nawid - Made it so that it uses both the different losses
             loss = (1-model_ctx.bg_loss_weight)*fp_loss + model_ctx.bg_loss_weight * bg_loss
+
+        # ANALYSIS ONLY (gates/training/dual_analysis.py): per-head trunk-gradient
+        # diagnostics, measured before backward via autograd.grad — the training step
+        # (loss, grads, optimizer state) is unaffected.
+        if analyser is not None and analyser.should_measure(i):
+            analyser.measure(fp_loss, bg_loss, model_ctx.bg_loss_weight,
+                             bg_frozen=model_ctx.bg_frozen)
 
         loss.backward()
         model_ctx.optimizer.step()
@@ -187,16 +199,15 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
     Background time-series plots (denormalised, ppb) and their NetCDF export are produced
     for single-class (``num_classes=1``, summed) runs only; ``bg_detrended`` records whether
-    the backgrounds were detrended (affects only plot labels). The plot windows are
-    configurable via the ``bg_timeseries_plot`` parameter block (keys ``n_windows``,
-    ``window_days``; defaults 4 and 7).
+    the backgrounds were detrended (affects only plot labels). The plots are indexed by
+    test-sample index and split into consecutive windows, configurable via the
+    ``bg_timeseries_plot`` parameter block (key ``n_windows``; default 4).
     """
     write_to_file("starting dual training loop", paths_ctx.updates_path)
 
     bg_true_ppb = bg_pred_ppb = None
     bg_plot_params = training_ctx.parameters.get("bg_timeseries_plot", {})
     bg_plot_n_windows = bg_plot_params.get("n_windows", 4)
-    bg_plot_window_days = bg_plot_params.get("window_days", 7)
 
     # Best-so-far per-head test losses, logged every epoch. These are monotone, so the last
     # value equals the run's best — which makes "best/objective" a robust W&B sweep metric
@@ -217,17 +228,34 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                              delta=model_ctx.bg_freeze_min_delta, verbose=verbose)
     bg_frozen_epoch = None
 
+    # --- ANALYSIS ONLY: optional dual-model diagnostics (loss ratios + per-head trunk
+    # gradient norms), logged under the "analysis/" prefix. Off unless
+    # parameters["dual_analysis"]["enabled"] is true; see gates/training/dual_analysis.py.
+    analysis_cfg = training_ctx.parameters.get("dual_analysis", {})
+    analyser = None
+    if analysis_cfg.get("enabled", False):
+        analyser = dual_analysis.TrunkGradAnalyser(model, every=analysis_cfg.get("grad_norm_every", 50))
+        print("dual_analysis enabled: logging loss ratios and trunk grad norms under 'analysis/'")
+
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx + epoch_so_far
         print(f"\n--- Start Epoch: {epoch} ---")
         # Nawid - get the training losses
         avg_train_total, avg_train_fp, avg_train_bg = train_one_epoch(
-            model, train_loader, model_ctx, epoch, paths_ctx=paths_ctx
+            model, train_loader, model_ctx, epoch, paths_ctx=paths_ctx, analyser=analyser
         )
         # Nawid- get the validation parameters
         avg_test_total, avg_test_fp, avg_test_bg, bg_mae_denorm, fp_test_out, bg_test_out, bg_test_true = validate_and_predict(
             model, test_loader, model_ctx, output_norm=output_norm
         )
+
+        # ANALYSIS ONLY: collect this epoch's diagnostics (empty dict when disabled).
+        analysis_metrics = {}
+        if analyser is not None:
+            analysis_metrics = dual_analysis.loss_ratio_metrics(
+                avg_train_fp, avg_train_bg, avg_test_fp, avg_test_bg, model_ctx.bg_loss_weight)
+            analysis_metrics.update(analyser.epoch_means())
+            analyser.reset()
 
         losses["train"].append(avg_train_total)
         losses["test"].append(avg_test_total)
@@ -271,6 +299,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "best/epoch_fp": fp_ckpt.best_epoch,
                 "best/epoch_bg": bg_ckpt.best_epoch,
                 "bg/frozen": int(model_ctx.bg_frozen),
+                **analysis_metrics,
                 **list_of_metrics,
             }
             if bg_mae_denorm is not None:
@@ -301,6 +330,10 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                     f"fp {avg_train_fp:.4f}/{avg_test_fp:.4f}, bg {avg_train_bg:.4f}/{avg_test_bg:.4f}")
         if bg_mae_denorm is not None:
             log_text += f", bg MAE(denorm) {bg_mae_denorm:.4e}"
+        if "analysis/trunk_grad_norm_fp" in analysis_metrics:
+            log_text += (f", trunk grad fp/bg {analysis_metrics['analysis/trunk_grad_norm_fp']:.3e}"
+                         f"/{analysis_metrics['analysis/trunk_grad_norm_bg']:.3e}"
+                         f", cos {analysis_metrics['analysis/trunk_grad_cosine']:.3f}")
         write_to_file(log_text, paths_ctx.updates_path)
 
         # Nawid - denormalise the background head outputs and convert mol/mol -> ppb so the
@@ -316,13 +349,13 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             if model_ctx.use_wandb:
                 wandb.log({f"fps_epoch_{epoch}": wandb.Image(img_save_path)}, step=epoch)
 
-            # Nawid - background time series (true vs predicted, denormalised, in ppb) over
-            # week-long windows spread across the test period.
+            # Nawid - background series (true vs predicted, denormalised, in ppb) plotted
+            # against test-sample index, split into consecutive index windows.
             if bg_true_ppb is not None:
                 bg_img_path = save_bg_timeseries_plots(
-                    epoch, test_fp_dataset.time.values, bg_true_ppb, bg_pred_ppb,
+                    epoch, bg_true_ppb, bg_pred_ppb,
                     paths_ctx.model_path, paths_ctx.model_name, detrended=bg_detrended,
-                    n_windows=bg_plot_n_windows, window_days=bg_plot_window_days,
+                    n_windows=bg_plot_n_windows,
                 )
                 if model_ctx.use_wandb:
                     wandb.log({f"bg_timeseries_epoch_{epoch}": wandb.Image(str(bg_img_path))}, step=epoch)
