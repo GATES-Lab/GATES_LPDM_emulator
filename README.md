@@ -26,10 +26,12 @@ gates_LPDM_emulator/
 ```
 
 Please check the following HowTos for info on different aspects!
-- [HOWTO_CONFIG.md](How_Tos/HOWTO_CONFIG.md) for info on setting up the `config.yml` with your paths
-- [HOWTO_DATA.md](How_Tos/HOWTO_DATA.md) for info on the data structures and loading
-- [HOWTO_EVALUATION.md](How_Tos/HOWTO_EVALUATION.md) for info on the metrics and loss functions
-- [HOWTO_WandB.md](How_Tos/HOWTO_WandB.md) for info on how to set up tracking and logging of your models with the Weights and Biases package
+- [HOW_TO_CONFIG.md](How_Tos/HOW_TO_CONFIG.md) for info on setting up the `config.yml` with your paths
+- [HOW_TO_PARAMETER_FILE.md](How_Tos/HOW_TO_PARAMETER_FILE.md) for a full reference on the training parameter JSON
+- [HOW_TO_DATA.md](How_Tos/HOW_TO_DATA.md) for info on the data structures and loading
+- [HOW_TO_evaluation.md](How_Tos/HOW_TO_evaluation.md) for info on the metrics and loss functions
+- [HOW_TO_WandB.md](How_Tos/HOW_TO_WandB.md) for info on how to set up tracking and logging of your models with the Weights and Biases package
+- [HOW_TO_BOUNDARIES.md](How_Tos/HOW_TO_BOUNDARIES.md)
 
 ## Setting up
 
@@ -52,7 +54,22 @@ To install an editable version of this package in your repository, run the follo
 pip install --no-build-isolation --no-deps -e .
 ```
 
- 
+### Config
+
+Generate a `config.yml` at the repo root with default local paths:
+
+```bash
+python gates/config.py
+```
+
+For HPC platforms (`bp`, `oracle`, `isambard_ai`), pass the `--platform` flag:
+
+```bash
+python gates/config.py --platform bp
+```
+
+Then edit `config.yml` to point to your data directories (`fp_datadir`, `met_datadir`, etc.). See [HOW_TO_CONFIG.md](How_Tos/HOW_TO_CONFIG.md) for full details.
+
 ## Model
 Check `model_description.md` for more info on the architecture!
 
@@ -61,11 +78,35 @@ In the current setup, the model builts a grid and mesh pair using the location o
 grid, _ = get_grid(data, parameters.get("grid_reference_fp"))
 
 ## Parameter file
-This section needs to be written up!
+
+The parameter file is a JSON that controls data loading, variable selection, model architecture, and training schedule. A template is in `parameter_files/NEW_parameter_template_gpu_new3b.json`.
+
+Key top-level fields to set for a new run:
+
+| Field | Description |
+|-------|-------------|
+| `model_name` | Unique experiment identifier |
+| `train_load_data.years` / `test_load_data.years` | Years used for training and evaluation |
+| `train_load_data.region` | Geographic domain (must match a domain in `config.yml`) |
+| `train_load_data.size` | Side length (grid cells) of the patch cut per footprint |
+| `variables.met_variables` / `variables.met_levels` | Met variables and vertical levels used as inputs |
+| `model_parameters` | GNN architecture (num_blocks, node_dim, edge_dim, resolution, …) |
+| `epochs.training` | Total training epochs |
+| `use_wandb` | Set to `true` to enable Weights & Biases logging |
+
+See [HOW_TO_PARAMETER_FILE.md](How_Tos/HOW_TO_PARAMETER_FILE.md) for a full field reference.
 
 ## Training
-python train_GATES_model.py NEW_parameter_template_gpu_new.json
-Use the `train_GATES_model.py` file to train a model. Set up all your model parameters using the NEW_parameter_template_gpu_new.json file. A new folder will be created, and populated with the following:
+
+```bash
+python train_GATES_model.py parameter_file.json
+# if the file is not in parameter_files_dir from config.yml:
+python train_GATES_model.py --file_path /path/to/folder/ parameter_file.json
+# on a SLURM cluster:
+sbatch launch_train.sh
+```
+
+Use the `train_GATES_model.py` file to train a model. Set up all your model parameters using a parameter JSON (see [Parameter file](#parameter-file) above). A new folder will be created in the `save_models_dir` set in `config.yml`, populated with the following:
 ```
 .
 └── model_name/
@@ -83,7 +124,10 @@ Use the `train_GATES_model.py` file to train a model. Set up all your model para
 ```
 
 ### Predicting: same model and size
-This section needs to be written up!
+
+```bash
+python predict_GATES_model.py training_settings_<model_name>.json --file_path /path/to/trained_models/
+```
 
 ### Predicting: different size, different domain etc 
 This is still not implemented in the new version
@@ -94,7 +138,9 @@ This is still not implemented in the new version
 
 
 ## See Also
-- [HOW_TO_CONFIG.md](./gates/HOW_TO_CONFIG.md)
-- [HOW_TO_DATA.md](./gates/data/HOW_TO_DATA.md)
-- [HOW_TO_TESTS.md](./tests/HOW_TO_TESTS.md)
+- [HOW_TO_CONFIG.md](How_Tos/HOW_TO_CONFIG.md)
+- [HOW_TO_PARAMETER_FILE.md](How_Tos/HOW_TO_PARAMETER_FILE.md)
+- [HOW_TO_DATA.md](How_Tos/HOW_TO_DATA.md)
+- [HOW_TO_WandB.md](How_Tos/HOW_TO_WandB.md)
+- [HOW_TO_evaluation.md](How_Tos/HOW_TO_evaluation.md)
 

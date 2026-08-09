@@ -1,5 +1,12 @@
 wandb
 config.yml
+graph_weather/
+model_runs/
+*.npz
+CLAUDE.md
+principles.md
+my_gates_env/
+training_output/
 __pycache__/
 *.pkl
 *.npy
@@ -9,11 +16,10 @@ __pycache__/
 *.png
 *.eps
 *.pyc
-graph_weather/
-model_runs/
-*.npz
-CLAUDE.md
-principles.md
-my_gates_env/
-training_output/
+
+# Keep docs static assets (the blanket *.png rule above would ignore the logo).
+!docs/source/_static/**
+
+# Built docs are published by CI, not committed.
+docs/build/
 

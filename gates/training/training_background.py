@@ -15,6 +15,16 @@ from .training_dataclasses import ModelContext
 from model.forecast import GraphSatelliteBackgroundPredictor
 
 
+class LoadSquareSatelliteDataWithBCs(LoadSquareSatelliteData):
+    """LoadSquareSatelliteData that also loads the boundary-condition
+    particle_locations_* variables from the footprint files, via the
+    ``load_bcs`` instance attribute checked in ``_load_footprints``."""
+
+    def __init__(self, *args, **kwargs):
+        self.load_bcs = True
+        super().__init__(*args, **kwargs)
+
+
 def calculate_detrending_factor(bc_file, boundary="south", height_index=1):
     """
     Compute the mean boundary condition value at a given height index, used to detrend background corrections.
@@ -121,7 +131,7 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
                 print(f"Loading year={year}, month={month}")
             month_params = {**base_params, "year": year, "month": month}
             try:
-                data = LoadSquareSatelliteData(**month_params, **datapath_args, verbose=verbose, load_bcs=True)
+                data = LoadSquareSatelliteDataWithBCs(**month_params, **datapath_args, verbose=verbose)
             except Exception as e:
                 print(f"Error loading data for {year}-{month}: {e}")
                 elapsed_mins = (time.perf_counter() - month_start) / 60
