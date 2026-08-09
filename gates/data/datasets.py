@@ -1190,68 +1190,6 @@ def make_inputs_batcher(inputs, batch_size=10, flatten=False):
     )
     return X_bgen
 
-def make_boundary_batcher(outputs, batch_size=5):
-    """
-    Build an xbatcher BatchGenerator for boundary condition outputs.
-
-    Unlike footprint outputs which have spatial dimensions (time, lat, lon),
-    boundary condition outputs are 1D per sample with shape (time, num_classes).
-
-    Inputs:
-    - outputs: xarray DataArray of size (time, num_classes)
-    - batch_size: int, batch size
-
-    Returns:
-    - y_bgen: xbatcher BatchGenerator
-    - output_labels: list of output label names, one per class
-    """
-    if not isinstance(outputs, xr.DataArray):
-        raise ValueError(
-            f"outputs must be an xarray DataArray of shape (time, num_classes), "
-            f"got {type(outputs).__name__}"
-        )
-
-    if "time" not in outputs.dims:
-        raise ValueError("outputs must have a 'time' dimension")
-
-    if "lat" in outputs.dims or "lon" in outputs.dims:
-        raise ValueError(
-            "outputs should not have spatial dimensions (lat/lon). "
-            "For footprint outputs use make_fps_batcher instead."
-        )
-
-    # Find the output dimension (everything that is not time)
-    output_dims = [d for d in outputs.dims if d != "time"]
-    if len(output_dims) != 1:
-        raise ValueError(
-            f"outputs should have exactly 2 dimensions (time, num_classes), "
-            f"got dims: {outputs.dims}"
-        )
-    output_dim = output_dims[0]
-
-    # Extract labels from the coordinate values if they are strings,
-    # otherwise generate default names
-    # coord_vals = outputs[output_dim].values
-    # if coord_vals.dtype == object or np.issubdtype(coord_vals.dtype, np.str_):
-    #     output_labels = list(coord_vals)
-    # else:
-    #     output_labels = [f"output_{i}" for i in range(outputs.sizes[output_dim])]
-
-    if outputs.dtype != "float32":
-        outputs = outputs.astype("float32", copy=False)
-
-    outputs = outputs.chunk(time=batch_size)
-    outputs = outputs.transpose("time", output_dim)
-
-    y_bgen = xb.BatchGenerator(
-        outputs,
-        input_dims={output_dim: outputs.sizes[output_dim]},
-        batch_dims={"time": batch_size},
-        preload_batch=True,
-    )
-
-    return y_bgen #, output_labels
-
 def make_fps_batcher(fps, batch_size=10, flatten=False):
     """Build an xbatcher BatchGenerator for the footprint labels.
 
@@ -1314,6 +1252,68 @@ def make_fps_batcher(fps, batch_size=10, flatten=False):
 
 
 
+
+def make_boundary_batcher(outputs, batch_size=5):
+    """
+    Build an xbatcher BatchGenerator for boundary condition outputs.
+
+    Unlike footprint outputs which have spatial dimensions (time, lat, lon),
+    boundary condition outputs are 1D per sample with shape (time, num_classes).
+
+    Inputs:
+    - outputs: xarray DataArray of size (time, num_classes)
+    - batch_size: int, batch size
+
+    Returns:
+    - y_bgen: xbatcher BatchGenerator
+    - output_labels: list of output label names, one per class
+    """
+    if not isinstance(outputs, xr.DataArray):
+        raise ValueError(
+            f"outputs must be an xarray DataArray of shape (time, num_classes), "
+            f"got {type(outputs).__name__}"
+        )
+
+    if "time" not in outputs.dims:
+        raise ValueError("outputs must have a 'time' dimension")
+
+    if "lat" in outputs.dims or "lon" in outputs.dims:
+        raise ValueError(
+            "outputs should not have spatial dimensions (lat/lon). "
+            "For footprint outputs use make_fps_batcher instead."
+        )
+
+    # Find the output dimension (everything that is not time)
+    output_dims = [d for d in outputs.dims if d != "time"]
+    if len(output_dims) != 1:
+        raise ValueError(
+            f"outputs should have exactly 2 dimensions (time, num_classes), "
+            f"got dims: {outputs.dims}"
+        )
+    output_dim = output_dims[0]
+
+    # Extract labels from the coordinate values if they are strings,
+    # otherwise generate default names
+    # coord_vals = outputs[output_dim].values
+    # if coord_vals.dtype == object or np.issubdtype(coord_vals.dtype, np.str_):
+    #     output_labels = list(coord_vals)
+    # else:
+    #     output_labels = [f"output_{i}" for i in range(outputs.sizes[output_dim])]
+
+    if outputs.dtype != "float32":
+        outputs = outputs.astype("float32", copy=False)
+
+    outputs = outputs.chunk(time=batch_size)
+    outputs = outputs.transpose("time", output_dim)
+
+    y_bgen = xb.BatchGenerator(
+        outputs,
+        input_dims={output_dim: outputs.sizes[output_dim]},
+        batch_dims={"time": batch_size},
+        preload_batch=True,
+    )
+
+    return y_bgen #, output_labels
 
 def trim_to_batch_size(inputs, fps, batch_size):
     """Trim the last N timepoints from inputs and fps so that the number of

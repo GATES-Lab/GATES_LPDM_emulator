@@ -716,7 +716,8 @@ class LoadBaseSatelliteData:
             load_fps_in_mem (bool, optional): If True, loads the ``fp`` variable into
                 memory. Defaults to True.
         """
-        if self.verbose: print("Loading footprint data from " + str(fp_datadir))
+        #### load footprint (fp) data from file
+        if self.verbose: print("Loading footprint data from " + str(fp_datadir) )
 
         vars_to_load = [
                 "fp",
