@@ -7,11 +7,12 @@ original-space outputs alongside the ground-truth footprints.
 
 Usage
 -----
-    python predict_GATES_model.py \\
+    python scripts/predict_GATES_model.py \\
         --test_year 2019 \\
         --reference_model my_model_20240115_143022 \\
-        [--month 06] \
-        [--region BRAZIL] \
+        [--month 06] \\
+        [--region BRAZIL] \\
+        [--size 50] \\
         [--model_path /path/to/models/] \\
         [--checkpoint best|<epoch_int>] \\
         [--save_path /path/to/outputs/] \\
@@ -27,14 +28,18 @@ Notes
   (e.g. ``my_model_20240115_143022``) or a base name (e.g. ``my_model``),
   in which case the most recently created matching directory is used.
 - ``month`` accepts either an integer month or a zero-padded string and
-    restricts prediction to that single month.
+  restricts prediction to that single month.
 - ``region`` overrides the region stored in the training settings before data
-    loading and path resolution.
+  loading and path resolution.
 - ``model_save_name`` defaults to the reference model's base name (timestamp
   stripped). Pass an explicit name when predicting on a different region or size.
+- Dynamic edges configuration is read from the training settings and
+  reconstructed automatically; no extra arguments are needed.
 - Output NetCDF files are written to
-  ``{save_path}/{model_save_name}/predictions/predictions_{year}_{month}.nc``
-  If the region or prediction size are different from the training settings, the prediction folder name is automatically suffixed with the region and size (e.g. ``predictions_BRAZIL``
+  ``{save_path}/{model_save_name}/predictions/predictions_{year}_{month}.nc``.
+  If the region or prediction size differ from the training settings, the
+  prediction folder name is automatically suffixed with the region and/or size
+  (e.g. ``predictions_BRAZIL``).
 """
 
 import sys
@@ -50,17 +55,15 @@ import numpy as np
 import torch
 import xarray as xr
 
-sys.path.insert(0, "/user/work/ef17148/GCN/graphnet/")
-sys.path.insert(1, "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/")
 
 import gates
 import gates.config
 import gates.data.datasets as gates_datasets
-from gates.training.training import load_GATES_data, make_cluster
+from gates.training.training import load_GATES_data_v2, make_cluster, setup_dynamic_edges
 from gates.training.training_helperfuns import load_parameter_file
 from gates.training.training_dataclasses import PathContext
 
-from model.forecast import GraphSatelliteForecaster
+from gates.model.forecast import GraphSatelliteForecaster
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +184,13 @@ class GATESPredictor:
         Name used to organise output NetCDF files.
     save_path : Path
         Root directory under which ``{model_save_name}/`` is created.
+    dynamic_edges_params : dict
+        Keyword arguments reconstructed from the training settings and unpacked
+        into ``GraphSatelliteForecaster`` at construction. Empty dict when the
+        training run did not use dynamic edges.
+    dry_run : bool
+        When True, only the first month is processed with a coarse sampling
+        frequency (``freq=60``) for fast pipeline verification.
     """
 
     def __init__(
@@ -199,6 +209,7 @@ class GATESPredictor:
         test_batch_size: int,
         checkpoint: str,
         parameter_file: str,
+        dynamic_edges_params: dict,
         dry_run: bool = False,
     ):
         self.model = model
@@ -215,6 +226,7 @@ class GATESPredictor:
         self.test_batch_size = test_batch_size
         self.checkpoint = checkpoint
         self.parameter_file = parameter_file
+        self.dynamic_edges_params = dynamic_edges_params
         self.dry_run = dry_run
 
     @classmethod
@@ -222,9 +234,12 @@ class GATESPredictor:
         """Build a GATESPredictor from parsed CLI arguments.
 
         All data and model configuration comes from the reference model's saved
-        training settings. ``args.test_year`` is used only to probe one month
-        for the input feature dimension; the returned predictor works for any
-        year with the same variable configuration.
+        training settings. The input feature dimension is read directly from the
+        ``num_features`` field recorded there (an error is raised if it is
+        missing). Dynamic edges configuration is read from the training settings
+        and reconstructed via ``setup_dynamic_edges`` before the model is
+        instantiated. The returned predictor works for any year with the same
+        variable configuration.
         """
         cfg = gates.config.get_config()
 
@@ -239,7 +254,7 @@ class GATESPredictor:
 
         # Save name and output path
         model_save_name = determine_save_name(args.model_save_name, model_dir)
-        save_path = Path(args.save_path) if args.save_path else model_dir 
+        save_path = Path(args.save_path) / model_save_name if args.save_path else model_dir 
         ## attach args.region or args.size to prediction_folder_name if provided
         prediction_folder_name = "predictions" + (f"_{args.region}" if args.region else "") + (f"_size{args.size}" if args.size else "")
 
@@ -264,30 +279,26 @@ class GATESPredictor:
         data_params.pop("months", None)
         
 
-        # Check if the parameter file specifies the number of input features; if not, probe one month of data to determine it.
-        if "num_features" in training_params.keys():
-            feature_dim = training_params["num_features"]
-            print(f"Using feature_dim from training parameters: {feature_dim}")
-        else:
-            print(f"\nProbing {args.test_year} data to determine feature_dim...")
-            feature_dim = None
-            for probe_month in [f"{m:02d}" for m in range(1, 13)]:
-                try:
-                    probe_params = {**data_params, "year": str(args.test_year), "month": probe_month, "freq": 50}
-                    _, probe_inputs = load_GATES_data(
-                        probe_params, input_variables, datapath_args, verbose=False
-                    )
-                    if probe_inputs is not None and probe_inputs.sizes.get("fp_time", 0) > 0:
-                        feature_dim = probe_inputs.sizes["variable_name"]
-                        print(f"  feature_dim = {feature_dim} (from month {probe_month})")
-                        break
-                except Exception:
-                    continue
-
-        if feature_dim is None:
+        # Number of input features is recorded in the training settings by the
+        # training script; predict relies on it being present.
+        if "num_features" not in training_params:
             raise RuntimeError(
-                f"Could not load any data for {args.test_year} to determine feature_dim."
+                f"'num_features' not found in the training settings for {model_name}. "
+                "Re-run training to record it (or add it to the training_settings JSON)."
             )
+        feature_dim = training_params["num_features"]
+        print(f"Using feature_dim from training parameters: {feature_dim}")
+
+        # Dynamic edges
+        if training_params.get("dynamic_edges", None) is not None:
+            if isinstance(training_params["dynamic_edges"], dict):
+                dynamic_edges_params = setup_dynamic_edges(input_names=scalers["input_names"], **training_params["dynamic_edges"])
+            elif training_params.get("dynamic_edges") is True:
+                dynamic_edges_params = setup_dynamic_edges(input_names=scalers["input_names"])
+            else:
+                dynamic_edges_params = {}
+        else:
+            dynamic_edges_params = {}
 
         # Model
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -296,6 +307,7 @@ class GATESPredictor:
         model = GraphSatelliteForecaster(
             grid, whole_world=False, feature_dim=feature_dim,
             **training_params["model_parameters"],
+            **dynamic_edges_params,
         )
         model = model.to(device)
         load_checkpoint(model, model_dir, model_name, args.checkpoint, device)
@@ -319,6 +331,7 @@ class GATESPredictor:
             test_batch_size=training_params.get("dataloader", {}).get("test_batch_size", 5),
             checkpoint=args.checkpoint,
             parameter_file=training_settings_path,
+            dynamic_edges_params=dynamic_edges_params,
             dry_run=args.dry_run,
         )
 
@@ -338,7 +351,7 @@ class GATESPredictor:
             monthly_params["freq"] = 1
 
         try:
-            data, inputs = load_GATES_data(
+            fp_xr, inputs = load_GATES_data_v2(
                 monthly_params, self.input_variables, self.datapath_args, verbose=verbose
             )
         except Exception as exc:
@@ -358,10 +371,10 @@ class GATESPredictor:
         # Scale footprints via a FootprintDataset wrapper with the injected
         # pre-fitted scaler, so fp_nan_mask is handled consistently with training.
         fp_wrapper = gates_datasets.FootprintDataset(
-            data.fp_xr, add_nan_mask=self.nans_to_zeros
+            fp_xr, add_nan_mask=self.nans_to_zeros
         )
         fp_wrapper.scaler = self.scalers["fp_scaler"]
-        scaled_fps_ds = fp_wrapper.transform(data.fp_xr)
+        scaled_fps_ds = fp_wrapper.transform(fp_xr)
 
         scaled_inputs, scaled_fps_ds = gates_datasets.trim_to_batch_size(
             scaled_inputs, scaled_fps_ds, self.test_batch_size
@@ -387,8 +400,8 @@ class GATESPredictor:
         fps_dataset["fp_transformed_pred"] = (("time", "lat", "lon"), preds_t.reshape(*fps_dataset.fp_original.shape))
         fps_dataset["fp_pred"] = (("time", "lat", "lon"), preds_o.reshape(*fps_dataset.fp_original.shape))
 
-        fps_dataset["lat_coords"] = data.fp_xr.sel(time=fps_dataset.time).lat_coords
-        fps_dataset["lon_coords"] = data.fp_xr.sel(time=fps_dataset.time).lon_coords
+        fps_dataset["lat_coords"] = fp_xr.sel(time=fps_dataset.time).lat_coords
+        fps_dataset["lon_coords"] = fp_xr.sel(time=fps_dataset.time).lon_coords
 
         attrs_dict={
                 "creation_date": str(datetime.now()),
@@ -442,9 +455,10 @@ class GATESPredictor:
         #     },
         # )
 
-        out_dir = self.save_path / self.model_save_name / self.prediction_folder_name
+        out_dir = self.save_path / self.prediction_folder_name
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"predictions_{test_year}_{month_str}.nc"
+        filename = f"predictions_{test_year}_{month_str}.nc" if not self.dry_run else f"predictions_{test_year}_{month_str}_DRYRUN.nc"
+        out_path = out_dir / filename
         fps_dataset.to_netcdf(out_path)
         print(f"  Saved → {out_path}")
         return True
@@ -468,7 +482,7 @@ class GATESPredictor:
             months = months[:1]
             print(f"Dry run: processing only month {months[0]} with freq=60.")
 
-        out_dir = self.save_path / self.model_save_name / self.prediction_folder_name
+        out_dir = self.save_path / self.prediction_folder_name
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Write run record before predictions start so there is always a trace,
@@ -577,8 +591,8 @@ def main():
         "--dry_run",
         action="store_true",
         help=(
-            "Quick diagnostic run: process only the first month with freq=20 "
-            "(every 20th sample). Useful for checking the pipeline before a full run."
+            "Quick diagnostic run: process only the first month with freq=60 "
+            "(every 60th sample). Useful for checking the pipeline before a full run."
         ),
     )
 

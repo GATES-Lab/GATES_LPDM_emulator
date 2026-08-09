@@ -42,26 +42,44 @@ On an HPC cluster you may need to run this once in an interactive session before
 The training code integrates W&B in three main ways:
 
 ### Experiment Initialisation
-At the start of `train_and_save_model()`, a run is created with:
+W&B logging is opt-in: set `"use_wandb": true` in the parameter file and provide a
+`wandb` section with `project`, `entity`, and (optionally) `tags` — see
+[HOW_TO_PARAMETER_FILE.md](HOW_TO_PARAMETER_FILE.md). If `use_wandb` is true but
+`project` or `entity` is missing, the run prints a warning and continues with W&B
+disabled.
+
+At the start of `train_and_save_model()`, a run is created from those values:
 ```python
 wandb.init(
-    project="BoundaryCondition-Prediction",
-    config=parameters
+    entity=wandb_entity,   # from parameters["wandb"]["entity"]
+    project=wandb_project,  # from parameters["wandb"]["project"]
+    config=parameters,      # the full parameter file is logged as run config
+    tags=wandb_tags,        # from parameters["wandb"]["tags"]
 )
 ```
-This creates a new run inside the `BoundaryCondition-Prediction` (different names can be used) project on your W&B account, and automatically logs all values in `parameters` as the run configuration.
+This creates a new run inside the project you named on your W&B account, and
+automatically logs all values in `parameters` as the run configuration.
 
 ### Metric Logging
 Inside the training loop in `run_full_training()`, metrics are logged each epoch:
 ```python
 wandb.log({
+    "epoch": epoch + 1,
+    "MSE/train": avg_train_loss,
+    "MSE/test": avg_test_loss,
     "train/loss": avg_train_loss,
     "test/loss": avg_test_loss,
-    "test/NMAE": nmae_val,
-    ...
-}, step=epoch)
+    "LossFn/train": avg_train_transformed_loss,
+    # plus the evaluation metrics dicts, flattened with prefixes:
+    #   "metrics_transformed-<name>"        (transformed-space eval metrics)
+    #   "metrics_original-<name>"           (original-space eval metrics)
+    #   "metrics_fluxes_static/<mode>/<name>"  (static-flux metrics per mode)
+    #   "metrics_fluxes/<name>"             (flux metrics, when a flux var is present)
+})
 ```
-These appear as live charts on your run page as training progresses.
+These appear as live charts on your run page as training progresses. The
+`metrics_fluxes*` families are the flux-evaluation metrics — see
+[HOW_TO_evaluation.md](HOW_TO_evaluation.md).
 
 ### Artifact Versioning
 Model checkpoints, predictions, grids, and transform parameters are all saved as W&B **artifacts** — versioned files you can download or compare across runs. For example:
@@ -75,7 +93,7 @@ wandb.log_artifact(artifact)
 
 ## 5. Viewing Your Results
 
-Once a run has started, go to [https://wandb.ai](https://wandb.ai) and navigate to your project (`BoundaryCondition-Prediction`) to see:
+Once a run has started, go to [https://wandb.ai](https://wandb.ai) and navigate to your project (the name you set in the `wandb` section of the parameter file) to see:
 
 - **Charts** — live training and validation loss curves, NMAE, IoU, flux metrics, and more.
 - **Config** — the full `parameters` dict logged at the start of the run.

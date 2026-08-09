@@ -3,7 +3,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import random
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -35,15 +35,14 @@ def write_to_file(message, file_path):
 
 
 def load_parameter_file(file_path):
-    """
-    Loads and parses a JSON file from a given path.
+    """Load and parse a JSON file from a given path.
 
     Args:
-        file_name (str): The name of the file to load (including extension).
-        file_path (str or bool): The directory path containing the file. If False, a hardcoded default path is used.
+        file_path (str or Path): The path of the file to load (including extension).
 
     Returns:
-        dict or list: The parsed JSON contents of the file, or None if the file was not found or an error occurred.
+        dict or list: The parsed JSON contents of the file, or None if the file was
+        not found or an error occurred.
     """
     try:
         with open(file_path, 'r') as file:
@@ -61,6 +60,20 @@ def load_parameter_file(file_path):
         return None
     
 def save_wandb_artifact(model_name, name, file_type, description, path):
+    """Log a file to Weights & Biases as a versioned artifact.
+
+    Args:
+        model_name (str): Model name, used as a prefix for the artifact name.
+        name (str): Descriptive name for the artifact (underscores are replaced with
+            hyphens in the final artifact name).
+        file_type (str): W&B artifact "type" to tag the artifact with (e.g. "model",
+            "dataset").
+        description (str): Description attached to the W&B artifact.
+        path (str or Path): Local path of the file to log.
+
+    Returns:
+        wandb.Artifact: The logged artifact.
+    """
     artifact = wandb.Artifact(
         name=f"{model_name}-{name.replace('_', '-')}",
         type=file_type,
@@ -274,22 +287,29 @@ class HeadCheckpoint:
 
 
 def save_training_plots(epoch, test_dataset, training_ctx, path, model_name, colorbar=True):
-    """
-    Generates and saves a 4×4 grid of images comparing model predictions against ground truth
-    at a selection of test samples, for visual inspection during training.
+    """Generate and save a 4x4 grid of images comparing model predictions against ground truth.
+
+    Plots a selection of test samples (transformed and original-space predictions vs.
+    truth) for visual inspection during training.
 
     Args:
         epoch (int): The current epoch number, used in the output filename.
-        test_dataset: A dataset object exposing fp, fp_untransformed, and predictions attributes.
-        training_ctx (TrainingContext): The training context object containing configuration and state information.
-        size (tuple of int): The spatial dimensions (height, width) used to reshape flat arrays into images.
-        path (str): The base directory path for saving output images.
-        model_name (str): The model name used to locate the output subfolder and name the saved file.
-        colorbar (bool): If True, adds a shared colorbar per row aligned across all four columns.
+        test_dataset (xr.Dataset): Dataset with ``fp_transformed_pred``,
+            ``fp_transformed``, ``fp_pred``, and ``fp_original`` variables, selectable
+            by ``time``.
+        training_ctx (TrainingContext): Training context; uses ``image_plots``,
+            ``image_dates``, and ``size``.
+        path (str or Path): The base directory path for saving output images (the
+            image is saved under ``path/training_imgs/``).
+        model_name (str): The model name, used to name the saved file.
+        colorbar (bool, optional): If True, adds a shared colorbar per row, scaled to
+            that row's min/max. Defaults to True.
 
     Returns:
-        None
+        Path: The path the image was saved to.
     """
+    import matplotlib.pyplot as plt
+
     image_plots = training_ctx.image_plots
     image_dates = training_ctx.image_dates
     size = training_ctx.size
@@ -396,21 +416,26 @@ def save_bg_timeseries_plots(epoch, bg_true, bg_pred, path, model_name,
 
 
 def export_results_to_netcdf(test_fp_dataset, path, model_name, use_wandb=True):
-    """
-    Reshapes model predictions and ground truth arrays into (time, lat, lon) format, writes them to
-    a NetCDF file via Xarray, and logs the file to Weights & Biases as a versioned dataset artifact.
+    """Write model predictions and ground truth to a NetCDF file, and log it to W&B.
 
     Args:
-        test_out (np.ndarray): Raw model predictions in transformed space, shape (N, flat_spatial).
-        transformed_preds (np.ndarray): Predictions mapped back to the original space, shape (N, flat_spatial).
-        test_dataset: A dataset object exposing fp (transformed truth) and fp_untransformed attributes.
-        test_data: An object exposing met.time.values, providing the time coordinates for the NetCDF file.
-        size (tuple of int): The spatial dimensions (height, width) used to reshape flat arrays into (lat, lon) grids.
-        path (str): The base directory path for saving the NetCDF file.
-        model_name (str): The model name used to locate the output subfolder and tag the artifact.
-        use_wandb (bool): If True, logs the NetCDF file to W&B as a versioned artifact. Defaults to True.
-    Returns:
-        None
+        test_fp_dataset (xr.Dataset): Dataset of predictions/ground truth with
+            "time", "lat", and "lon" coordinates.
+        path (str or Path): The base directory path for saving the NetCDF file (saved
+            as ``path/sample_predictions_test.nc``).
+        model_name (str): The model name, recorded in the dataset attrs and used to
+            tag the W&B artifact.
+        use_wandb (bool, optional): If True, logs the NetCDF file to W&B as a
+            versioned artifact. Defaults to True.
+
+    Raises:
+        ValueError: If ``test_fp_dataset`` is not an ``xr.Dataset``.
+
+    Note:
+        <FILL IN> — the previous version of this docstring documented a very
+        different signature (``test_out``, ``transformed_preds``, ``test_dataset``,
+        ``test_data``, ``size``), which no longer matches this function; please
+        confirm the description above is accurate.
     """
 
     if not isinstance(test_fp_dataset, xr.Dataset):
@@ -425,7 +450,7 @@ def export_results_to_netcdf(test_fp_dataset, path, model_name, use_wandb=True):
 
     netcdf_save_path = f"{path}/sample_predictions_test.nc"
     test_fp_dataset.to_netcdf(netcdf_save_path)
-    print("NetCDF file saved.")
+    print("NetCDF file saved at path:", netcdf_save_path)
 
     if use_wandb:
         save_wandb_artifact(model_name, "predictions", "dataset", f"Sample predictions saved during training for model {model_name}", netcdf_save_path)

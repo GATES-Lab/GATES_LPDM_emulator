@@ -114,13 +114,41 @@ Accepts xarray DataArrays (must share the same `time` coordinate) or 1D numpy ar
 from gates.evaluation.metrics import compute_mfs_metrics
 
 results = compute_mfs_metrics(mf_true, mf_pred)
-# {"corrcoef": ..., "mean_absolute_error": ..., "mean_bias": ...,
+# {"corrcoef": ..., "mae": ..., "mean_bias": ...,
 #  "true_mean": ..., "predicted_mean": ..., "r2_score": ...}
 ```
 
 ### Quick diagnostics without flux data: `compute_static_mf_metrics`
 
 Evaluates mole-fraction metrics using synthetic flux patterns (uniform, checkerboard at 1-, 10-, 25-, and 50-cell scales) — no real flux data required. Useful for fast model comparison. Returns `{pattern_label: metrics_dict}`. Signature: `compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_patterns=None, transform_factor=None)`.
+
+### Against a real flux field: `compute_flux_metrics`
+
+`compute_flux_metrics` is the real-flux counterpart of `compute_static_mf_metrics`: instead of synthetic patterns it weights the footprints by a supplied `flux` field. It computes the true and predicted mole fractions with `calculate_mfs`, then compares the two time series with `compute_mfs_metrics`.
+
+```python
+from gates.evaluation.metrics import compute_flux_metrics
+
+results = compute_flux_metrics(fp_true, fp_pred, flux)
+# same keys as compute_mfs_metrics:
+# {"corrcoef": ..., "mae": ..., "mean_bias": ...,
+#  "true_mean": ..., "predicted_mean": ..., "r2_score": ...}
+```
+
+- `fp_true`, `fp_pred`, `flux` must **all** be xarray DataArrays **or** all numpy arrays — `xr.Dataset` is rejected. For numpy inputs, pass `spatial_shape=(H, W)`.
+- `transform_factor` is forwarded to `calculate_mfs` for unit conversion (see Step 1).
+- `ignore_mask` (`True` = exclude) zeroes the flux at masked cells before summing, so out-of-domain padding does not contribute to the mole fraction.
+
+Signature: `compute_flux_metrics(fp_true, fp_pred, flux, spatial_shape=None, transform_factor=None, ignore_mask=None)`.
+
+### Flux metrics during training / evaluation
+
+Both flux-metric functions are called automatically each evaluation epoch inside `calculate_losses` (see [training.py](../gates/training/training.py)):
+
+- `compute_static_mf_metrics(fp_original, fp_pred)` **always** runs (no flux data needed). Its per-pattern metrics are logged to W&B under `metrics_fluxes_static/<pattern>/<metric>`.
+- `compute_flux_metrics(fp_original, fp_pred, flux)` runs **only when a `"flux"` variable is present** in the evaluation outputs — i.e. when `"flux"` was loaded into the footprint labels (add it to the `fp_scaler`/dataloader footprint variables and load flux via `get_flux` / `flux_args`). Its metrics are logged under `metrics_fluxes/<metric>`.
+
+Only `corrcoef`, `mae`, `mean_bias`, and `r2_score` are accumulated across epochs (the `true_mean`/`predicted_mean` diagnostics are computed but not tracked over training). These are the `metrics_fluxes*` charts referenced in [HOW_TO_WandB.md](HOW_TO_WandB.md).
 
 ---
 

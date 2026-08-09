@@ -25,27 +25,23 @@ from gates.utils.shape_utils import _to_numpy, _spatial_shape_from_xarray, _to_b
 def iou(true, pred, *, threshold=0, spatial_shape=None, ignore_mask=None, reduce="mean", nonzero=None):
     """Intersection-over-Union for binary footprint masks.
 
-    Parameters
-    ----------
-    true, pred:
-        Footprint arrays. Accepted types: numpy, tensor, xarray DataArray.
-        Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
-    threshold:
-        Value above which a cell is considered "active". Default 0.
-    spatial_shape:
-        (H, W) — required only for flat (HW,) or (N, HW) inputs that are
-        not xarray DataArrays.
-    ignore_mask:
-        Areas to exclude. Same type/shape flexibility as true/pred.
-        True means ignore.
-    reduce:
-        "mean" to return a scalar, None to return per-sample (N,) array.
-    nonzero:
-        Ignored. For compatibility with compute_metrics kwargs.
+    Args:
+        true (np.ndarray, torch.Tensor, or xr.DataArray): Ground truth footprint
+            array(s). Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
+        pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint
+            array(s), same type/shape flexibility as ``true``.
+        threshold (float, optional): Value above which a cell is considered
+            "active". Defaults to 0.
+        spatial_shape (tuple, optional): (H, W) — required only for flat (HW,) or
+            (N, HW) inputs that are not xarray DataArrays. Defaults to None.
+        ignore_mask (optional): Areas to exclude. Same type/shape flexibility as
+            ``true``/``pred``. True means ignore. Defaults to None.
+        reduce (str, optional): "mean" to return a scalar, None to return
+            per-sample (N,) array. Defaults to "mean".
+        nonzero: Ignored. For compatibility with ``compute_metrics`` kwargs.
 
-    Returns
-    -------
-    float or np.ndarray of shape (N,).
+    Returns:
+        float or np.ndarray: Scalar if ``reduce="mean"``, else shape (N,) array.
     """
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
 
@@ -81,24 +77,24 @@ def iou(true, pred, *, threshold=0, spatial_shape=None, ignore_mask=None, reduce
 def bias(true, pred, *, spatial_shape=None, ignore_mask=None, reduce="mean", nonzero=False, threshold=None):
     """Mean bias: mean(pred - true) over valid cells.
 
-    Parameters:
-    true, pred:
-        Footprint arrays. Accepted types: numpy, tensor, xarray DataArray.
-        Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW). 
-    spatial_shape:
-        (H, W) — required only for flat inputs that are not xarray DataArrays.
-    ignore_mask:
-        Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
-    reduce:
-        "mean" to return a scalar, None to return per-sample (N,) array.
-    nonzero:
-        If True, exclude cells where either array is zero.
-    threshold:
-        Ignored. For compatibility with compute_metrics kwargs.
+    Args:
+        true (np.ndarray, torch.Tensor, or xr.DataArray): Ground truth footprint
+            array(s). Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
+        pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint
+            array(s), same type/shape flexibility as ``true``.
+        spatial_shape (tuple, optional): (H, W) — required only for flat inputs that
+            are not xarray DataArrays. Defaults to None.
+        ignore_mask (optional): Areas to exclude. Same type/shape flexibility as
+            ``true``/``pred``. True means ignore. Defaults to None.
+        reduce (str, optional): "mean" to return a scalar, None to return
+            per-sample (N,) array. Defaults to "mean".
+        nonzero (bool, optional): If True, exclude cells where either array is zero.
+            Defaults to False.
+        threshold: Ignored. For compatibility with ``compute_metrics`` kwargs.
 
     Returns:
-    float or np.ndarray of shape (N,).
-    """    
+        float or np.ndarray: Scalar if ``reduce="mean"``, else shape (N,) array.
+    """
 
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
@@ -121,27 +117,26 @@ def mse(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask=None
         nonzero=False, reduce="mean", threshold=None):
     """Mean Squared Error, computed on valid cells.
 
-    Parameters
-    ----------
-    true, pred:
-        Footprint arrays. Accepted types: numpy, tensor, xarray DataArray.
-        Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
-    log_transform:
-        If True, apply log10 before computing MSE. Requires positive valid values.
-    spatial_shape:
-        (H, W) — required only for flat inputs that are not xarray DataArrays.
-    ignore_mask:
-        Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
-    nonzero:
-        If True, exclude cells where either array is zero. It is also forced to be True when log_transform is True, since log10(0) is undefined.
-    reduce:
-        "mean" to return a scalar, None to return per-sample (N,) array.
-    threshold:
-        Ignored. For compatibility with compute_metrics kwargs.
+    Args:
+        true (np.ndarray, torch.Tensor, or xr.DataArray): Ground truth footprint
+            array(s). Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
+        pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint
+            array(s), same type/shape flexibility as ``true``.
+        log_transform (bool, optional): If True, apply log10 before computing MSE.
+            Requires positive valid values. Defaults to False.
+        spatial_shape (tuple, optional): (H, W) — required only for flat inputs that
+            are not xarray DataArrays. Defaults to None.
+        ignore_mask (optional): Areas to exclude. Same type/shape flexibility as
+            ``true``/``pred``. True means ignore. Defaults to None.
+        nonzero (bool, optional): If True, exclude cells where either array is zero.
+            It is also forced to be True when ``log_transform`` is True, since
+            log10(0) is undefined. Defaults to False.
+        reduce (str, optional): "mean" to return a scalar, None to return
+            per-sample (N,) array. Defaults to "mean".
+        threshold: Ignored. For compatibility with ``compute_metrics`` kwargs.
 
-    Returns
-    -------
-    float or np.ndarray of shape (N,).
+    Returns:
+        float or np.ndarray: Scalar if ``reduce="mean"``, else shape (N,) array.
     """
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
@@ -173,25 +168,23 @@ def mae(true, pred, *, spatial_shape=None, ignore_mask=None,
         nonzero=False, reduce="mean", threshold=None):
     """Mean Absolute Error, computed on valid cells.
 
-    Parameters
-    ----------
-    true, pred:
-        Footprint arrays. Accepted types: numpy, tensor, xarray DataArray.
-        Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
-    spatial_shape:
-        (H, W) — required only for flat inputs that are not xarray DataArrays.
-    ignore_mask:
-        Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
-    nonzero:
-        If True, exclude cells where either array is zero.
-    reduce:
-        "mean" to return a scalar, None to return per-sample (N,) array.
-    threshold:
-        Ignored. For compatibility with compute_metrics kwargs.
+    Args:
+        true (np.ndarray, torch.Tensor, or xr.DataArray): Ground truth footprint
+            array(s). Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
+        pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint
+            array(s), same type/shape flexibility as ``true``.
+        spatial_shape (tuple, optional): (H, W) — required only for flat inputs that
+            are not xarray DataArrays. Defaults to None.
+        ignore_mask (optional): Areas to exclude. Same type/shape flexibility as
+            ``true``/``pred``. True means ignore. Defaults to None.
+        nonzero (bool, optional): If True, exclude cells where either array is zero.
+            Defaults to False.
+        reduce (str, optional): "mean" to return a scalar, None to return
+            per-sample (N,) array. Defaults to "mean".
+        threshold: Ignored. For compatibility with ``compute_metrics`` kwargs.
 
-    Returns
-    -------
-    float or np.ndarray of shape (N,).
+    Returns:
+        float or np.ndarray: Scalar if ``reduce="mean"``, else shape (N,) array.
     """
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
@@ -217,25 +210,23 @@ def nmae(true, pred, *, spatial_shape=None, ignore_mask=None,
     Normalising by the sum of true values makes this scale-independent and
     interpretable as the fractional total error relative to the true signal.
 
-    Parameters
-    ----------
-    true, pred:
-        Footprint arrays. Accepted types: numpy, tensor, xarray DataArray.
-        Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
-    spatial_shape:
-        (H, W) — required only for flat inputs that are not xarray DataArrays.
-    ignore_mask:
-        Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
-    nonzero:
-        If True, exclude cells where either array is zero.
-    reduce:
-        "mean" to return a scalar, None to return per-sample (N,) array.
-    threshold:
-        Ignored. For compatibility with compute_metrics kwargs.
+    Args:
+        true (np.ndarray, torch.Tensor, or xr.DataArray): Ground truth footprint
+            array(s). Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
+        pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint
+            array(s), same type/shape flexibility as ``true``.
+        spatial_shape (tuple, optional): (H, W) — required only for flat inputs that
+            are not xarray DataArrays. Defaults to None.
+        ignore_mask (optional): Areas to exclude. Same type/shape flexibility as
+            ``true``/``pred``. True means ignore. Defaults to None.
+        nonzero (bool, optional): If True, exclude cells where either array is zero.
+            Defaults to False.
+        reduce (str, optional): "mean" to return a scalar, None to return
+            per-sample (N,) array. Defaults to "mean".
+        threshold: Ignored. For compatibility with ``compute_metrics`` kwargs.
 
-    Returns
-    -------
-    float or np.ndarray of shape (N,).
+    Returns:
+        float or np.ndarray: Scalar if ``reduce="mean"``, else shape (N,) array.
     """
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
@@ -263,27 +254,25 @@ def corrcoef(true, pred, *, log_transform=False, spatial_shape=None, ignore_mask
              nonzero=False, reduce="mean"):
     """Pearson correlation coefficient, computed on valid cells.
 
-    Parameters
-    ----------
-    true, pred:
-        Footprint arrays. Accepted types: numpy, tensor, xarray DataArray.
-        Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
-    log_transform:
-        If True, apply log10 before computing the correlation. Requires positive valid values.
-    spatial_shape:
-        (H, W) — required only for flat inputs that are not xarray DataArrays.
-    ignore_mask:
-        Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
-    nonzero:
-        If True, exclude cells where either array is zero. Also forced True when log_transform=True.
-    reduce:
-        "mean" to return a scalar, None to return per-sample (N,) array.
-    threshold:
-        Ignored. For compatibility with compute_metrics kwargs.
+    Args:
+        true (np.ndarray, torch.Tensor, or xr.DataArray): Ground truth footprint
+            array(s). Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
+        pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint
+            array(s), same type/shape flexibility as ``true``.
+        log_transform (bool, optional): If True, apply log10 before computing the
+            correlation. Requires positive valid values. Defaults to False.
+        spatial_shape (tuple, optional): (H, W) — required only for flat inputs that
+            are not xarray DataArrays. Defaults to None.
+        ignore_mask (optional): Areas to exclude. Same type/shape flexibility as
+            ``true``/``pred``. True means ignore. Defaults to None.
+        threshold: Ignored. For compatibility with ``compute_metrics`` kwargs.
+        nonzero (bool, optional): If True, exclude cells where either array is zero.
+            Also forced True when ``log_transform=True``. Defaults to False.
+        reduce (str, optional): "mean" to return a scalar, None to return
+            per-sample (N,) array. Defaults to "mean".
 
-    Returns
-    -------
-    float or np.ndarray of shape (N,).
+    Returns:
+        float or np.ndarray: Scalar if ``reduce="mean"``, else shape (N,) array.
     """
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
@@ -323,15 +312,28 @@ _all_metrics = {
 
 def compute_footprint_metrics(true, pred, metrics=list(_all_metrics.keys()), spatial_shape=None, ignore_mask=None, **kwargs):
     """Compute multiple metrics at once and return as a dictionary.
-    
-    Args:
-        true: Ground truth footprint, or footprint dataset (as array, xarray or tensor).
-        pred: Predicted footprint array (as above)
-        metrics: List of metric names to compute. Supported: "iou", "mse", "mae", "nmae", "corrcoef", "corrcoef_log", "bias".
-        spatial_shape: (H, W) tuple, required if true/pred are flat arrays that are not xarray DataArrays. Recommended when possible for better error checking, but will be inferred from dims if not provided. 
-        ignore_mask: Array indicating areas to ignore.
-        **kwargs: Additional keyword arguments to pass to each metric function (e.g. threshold, ignore_mask).
 
+    Args:
+        true (np.ndarray, torch.Tensor, or xr.DataArray): Ground truth footprint, or
+            footprint dataset.
+        pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint array
+            (as above).
+        metrics (list[str], optional): List of metric names to compute. Supported:
+            "iou", "mse", "mae", "nmae", "corrcoef", "corrcoef_log", "bias".
+            Defaults to all keys in ``_all_metrics``.
+        spatial_shape (tuple, optional): (H, W) tuple, required if true/pred are flat
+            arrays that are not xarray DataArrays. Recommended when possible for
+            better error checking, but will be inferred from dims if not provided.
+            Defaults to None.
+        ignore_mask (optional): Array indicating areas to ignore. Defaults to None.
+        **kwargs: Additional keyword arguments to pass to each metric function (e.g.
+            threshold, nonzero, log_transform, reduce).
+
+    Returns:
+        dict[str, float or np.ndarray]: Maps each requested metric name to its result.
+
+    Raises:
+        ValueError: If ``metrics`` contains an unsupported metric name.
     """
 
     results = {}
@@ -362,38 +364,38 @@ def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ign
     within each bin. IoU is computed using each bin's lower bound as the
     activation threshold over the full spatial domain.
 
-    Parameters
-    ----------
-    true, pred:
-        Footprint arrays. Accepted types: numpy, tensor, xarray DataArray.
-        Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
-    thresholds:
-        A single number or list/array of numbers defining bin edges. Values
-        are inserted between -inf and +inf, e.g. [a, b] produces bins
-        (-inf, a], (a, b], (b, +inf).
-    spatial_shape:
-        (H, W) — required only for flat inputs that are not xarray DataArrays.
-    ignore_mask:
-        Areas to exclude. Same type/shape flexibility as true/pred. True means ignore.
-    metrics:
-        Optional list of metric names to compute within each threshold bin.
-        If None, uses all metrics in _all_metrics.
+    Usage::
+        >>> compute_metrics_by_threshold(true_fp, pred_fp, thresholds=[0, 1e-4, 1e-2], spatial_shape=(H, W))
+        {
+            "-inf_to_0": {"iou": ..., "mse": ..., ...},
+            "0_to_0.0001": {"iou": ..., "mse": ..., ...},
+            "0.0001_to_0.01": {"iou": ..., "mse": ..., ...},
+            "0.01_to_inf": {"iou": ..., "mse": ..., ...},
+        }
 
-    Usage:
-    >>> compute_metrics_by_threshold(true_fp, pred_fp, thresholds=[0, 1e-4, 1e-2], spatial_shape=(H, W))
-    {
-        "-inf_to_0": {"iou": ..., "mse": ..., ...},
-        "0_to_0.0001": {"iou": ..., "mse": ..., ...},
-        "0.0001_to_0.01": {"iou": ..., "mse": ..., ...},
-        "0.01_to_inf": {"iou": ..., "mse": ..., ...},
-    }
+    Args:
+        true (np.ndarray, torch.Tensor, or xr.DataArray): Ground truth footprint
+            array(s). Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
+        pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint
+            array(s), same type/shape flexibility as ``true``.
+        thresholds (float or list[float]): A single number or list/array of numbers
+            defining bin edges. Values are inserted between -inf and +inf, e.g.
+            [a, b] produces bins (-inf, a], (a, b], (b, +inf).
+        spatial_shape (tuple, optional): (H, W) — required only for flat inputs that
+            are not xarray DataArrays. Defaults to None.
+        ignore_mask (optional): Areas to exclude. Same type/shape flexibility as
+            ``true``/``pred``. True means ignore. Defaults to None.
+        metrics (list[str], optional): Metric names to compute within each threshold
+            bin. If None, uses all metrics in ``_all_metrics``. Defaults to None.
 
-    Returns
-    -------
-    dict[str, dict]
-        Keys are bin range strings (e.g. "-inf_to_0.01"). Each value is a
-        metrics dict from compute_footprint_metrics plus "iou" and
+    Returns:
+        dict[str, dict]: Keys are bin range strings (e.g. "-inf_to_0.01"). Each value
+        is a metrics dict from ``compute_footprint_metrics`` plus "iou" and
         "threshold_range" keys.
+
+    Raises:
+        ValueError: If ``thresholds`` is not a number or list/array, or if
+            ``metrics`` contains an unsupported metric name.
     """
     if isinstance(thresholds, (int, float)):
         thresholds = [thresholds]
@@ -459,21 +461,28 @@ def compute_metrics_by_threshold(true, pred, thresholds, spatial_shape=None, ign
 def compute_mfs_metrics(mf_true, mf_pred):
     """Compute summary metrics for two aligned mole-fraction time series.
 
-    Parameters
-    ----------
-    mf_true, mf_pred:
-        xarray DataArrays with a shared time coordinate or two 1D numpy arrays of the same shape.
+    Args:
+        mf_true (xr.DataArray or np.ndarray): Ground truth mole fractions; an xarray
+            DataArray with a shared time coordinate with ``mf_pred``, or a 1D numpy array.
+        mf_pred (xr.DataArray or np.ndarray): Predicted mole fractions, same type and
+            shape/time coordinate as ``mf_true``.
 
-    Returns
-    -------
-    dict
-        Dictionary with keys:
-        - "corrcoef": Pearson correlation coefficient from ``numpy.corrcoef``.
-        - "mean_absolute_error": mean of ``|mf_pred - mf_true|``.
-        - "mean_bias": mean of ``mf_pred - mf_true``.
-        - "true_mean": mean of ``mf_true``.
-        - "predicted_mean": mean of ``mf_pred``.
-        - "r2_score" from sklearn 
+    Returns:
+        dict: Dictionary with keys:
+
+            - "corrcoef": Pearson correlation coefficient from ``numpy.corrcoef``.
+            - "mae": mean of ``|mf_pred - mf_true|``.
+            - "mean_bias": mean of ``mf_pred - mf_true``.
+            - "true_mean": mean of ``mf_true``.
+            - "predicted_mean": mean of ``mf_pred``.
+            - "r2_score": from sklearn.
+
+    Raises:
+        ValueError: If inputs are xarray DataArrays with mismatched time coordinates,
+            numpy arrays with mismatched or non-1D shapes, or if fewer than 2 valid
+            (finite) points are available.
+        NotImplementedError: If inputs are not both xarray DataArrays or both 1D
+            numpy arrays.
     """
     if isinstance(mf_true, xr.DataArray) and isinstance(mf_pred, xr.DataArray):
         if not mf_true.time.equals(mf_pred.time):
@@ -522,17 +531,34 @@ def compute_mfs_metrics(mf_true, mf_pred):
 ##### Flux related metrics 
 
 def calculate_mfs(fp, fluxes, transform_factor=None, spatial_shape=None):
-    """
-    Calculate the mole fraction (mf) by multiplying the footprint (fp) with the fluxes and summing over the spatial dimensions (lat, lon). 
+    """Calculate the mole fraction (mf) by multiplying the footprint (fp) with the fluxes and summing over the spatial dimensions (lat, lon).
 
-    Inputs:
-    - fp: Footprint array. Can be a numpy array, xarray DataArray, or xarray Dataset. If xarray Dataset, variables containing 'fp' in their name will be included in the calculation (e.g. 'fp', 'fp_pred') and treated separately.
-    - fluxes: Flux array. Can be a numpy array, xarray DataArray, or xarray Dataset. If xarray Dataset, it must contain a variable named 'flux' which will be used in the calculation. The spatial dimensions (lat, lon) must match those of the footprint. Use cut_flux_data() to crop the fluxes to match the footprint dimensions.
-    - transform_factor: Optional factor to change the units of the resulting mole fraction. If "default", it will be attempted to extract the factor from the fluxes units. If None, no transformation is applied.
-    - spatial_shape: (H, W) tuple, required if fp and fluxes are flat numpy arrays. Recommended when possible for better error checking.
+    Args:
+        fp (np.ndarray, xr.DataArray, or xr.Dataset): Footprint array. If an xarray
+            Dataset, variables containing 'fp' in their name will be included in the
+            calculation (e.g. 'fp', 'fp_pred') and treated separately.
+        fluxes (np.ndarray, xr.DataArray, or xr.Dataset): Flux array. If an xarray
+            Dataset, it must contain a variable named 'flux' which will be used in
+            the calculation. The spatial dimensions (lat, lon) must match those of
+            the footprint. Use ``cut_flux_data()`` to crop the fluxes to match the
+            footprint dimensions.
+        transform_factor (float or "default", optional): Factor to change the units
+            of the resulting mole fraction. If "default", it will be attempted to
+            extract the factor from the fluxes units. If None, no transformation is
+            applied. Defaults to None.
+        spatial_shape (tuple, optional): (H, W) tuple, required if ``fp`` and
+            ``fluxes`` are flat numpy arrays. Recommended when possible for better
+            error checking. Defaults to None.
 
     Returns:
-    - If inputs are xarray DataArrays or Datasets, returns an xarray Dataset containing the calculated mole fractions for each variable. If inputs are numpy arrays, returns a numpy array of shape (N,) containing the mole fractions for each sample in the batch.
+        xr.Dataset or np.ndarray: If inputs are xarray DataArrays or Datasets,
+        returns an xarray Dataset containing the calculated mole fractions for each
+        variable. If inputs are numpy arrays, returns a numpy array of shape (N,)
+        containing the mole fractions for each sample in the batch.
+
+    Raises:
+        ValueError: If ``fp``/``fluxes`` shapes mismatch, or ``transform_factor`` is
+            "default" for non-xarray inputs or is otherwise not a number.
     """
     if isinstance(fp, (xr.DataArray, xr.Dataset)) and isinstance(fluxes, (xr.DataArray, xr.Dataset)):
         return calculate_mfs_xarray(fp, fluxes, transform_factor)
@@ -557,16 +583,30 @@ def calculate_mfs(fp, fluxes, transform_factor=None, spatial_shape=None):
     
 
 def calculate_mfs_xarray(fp, fluxes, transform_factor=None):
-    """
-    Calculate the mole fraction (mf) by multiplying the footprint (fp) with the fluxes and summing over the spatial dimensions (lat, lon).
+    """Calculate the mole fraction (mf) by multiplying the footprint (fp) with the fluxes and summing over the spatial dimensions (lat, lon).
 
-    Inputs:
-    - fp: xarray DataArray or Dataset containing the footprint values. Must have dimensions 'time', 'lat', and 'lon'. Variables should contain 'fp' in their name (e.g. 'fp', 'fp_pred') to be included in the calculation.
-    - fluxes: xarray DataArray containing the flux values. Must have dimensions 'time', 'lat', and 'lon' that match those of the footprint. Use cut_flux_data() to crop the fluxes to match the footprint dimensions.
-    - transform_factor: Optional factor to change the units of the resulting mole fraction. If "default", it will be attempted to extract the factor from the fluxes units. If None, no transformation is applied.
+    Args:
+        fp (xr.DataArray or xr.Dataset): Footprint values. Must have dimensions
+            'time', 'lat', and 'lon'. Variables should contain 'fp' in their name
+            (e.g. 'fp', 'fp_pred') to be included in the calculation.
+        fluxes (xr.DataArray or xr.Dataset): Flux values. Must have dimensions
+            'time', 'lat', and 'lon' that match those of the footprint (if a
+            Dataset, must contain a variable named 'flux'). Use ``cut_flux_data()``
+            to crop the fluxes to match the footprint dimensions.
+        transform_factor (float or "default", optional): Factor to change the units
+            of the resulting mole fraction. If "default", it will be attempted to
+            extract the factor from the fluxes units. If None, no transformation is
+            applied. Defaults to None.
 
     Returns:
-    - xarray Dataset containing the calculated mole fractions for each variable in the footprint dataset
+        xr.Dataset: Dataset containing the calculated mole fractions for each
+        variable in the footprint dataset.
+
+    Raises:
+        ValueError: If ``fp``/``fluxes`` are not xarray DataArrays/Datasets, if
+            ``fluxes`` is a Dataset without a "flux" variable, if the time or spatial
+            dimensions of ``fp`` and ``fluxes`` don't match, or if
+            ``transform_factor="default"`` but the flux units aren't recognised.
     """
     if not isinstance(fp, (xr.DataArray, xr.Dataset)) or not isinstance(fluxes, (xr.DataArray, xr.Dataset)):
         raise ValueError("fp must be an xarray DataArray or Dataset, and fluxes must be an xarray DataArray or Dataset.")
@@ -641,34 +681,42 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
     """Compute mole-fraction metrics using static, hand-designed flux patterns.
 
     For each flux pattern the footprints are multiplied by the flux and summed
-    over the spatial domain (via calculate_mfs), and the resulting mole-fraction
-    time series are compared with compute_mfs_metrics.
+    over the spatial domain (via ``calculate_mfs``), and the resulting mole-fraction
+    time series are compared with ``compute_mfs_metrics``.
 
-    Parameters
-    ----------
-    fp_true : xr.DataArray or np.ndarray
-        True footprints. Shape (H, W), (N, H, W) or flat variants — see spatial_shape.
-    fp_pred : xr.DataArray or np.ndarray
-        Predicted footprints. Must match fp_true in type and shape.
-    spatial_shape : tuple (H, W), optional
-        Required when fp_true / fp_pred are flat numpy arrays.
-    flux_patterns : dict[str, np.ndarray], optional
-        Mapping of label -> 2-D flux array of shape (H, W).
-        If None, the following defaults are used:
-        - "uniform"     : np.ones((H, W))
-        - "checkerboard": 0/1 checkerboard of shape (H, W)
-        - "checkerboard_10": 0/1 checkerboard of shape (H, W) with 10x10 blocks
-        - "checkerboard_25": 0/1 checkerboard of shape (H, W) with 25x25 blocks
-        - "checkerboard_50": 0/1 checkerboard of shape (H, W) with 50x50 blocks (only if H>100 and W>100)
-    transform_factor : float or "default", optional
-        Passed through to calculate_mfs, multiplied by the molefraction (e.g. to convert units).
+    Args:
+        fp_true (xr.DataArray or np.ndarray): True footprints. Shape (H, W),
+            (N, H, W) or flat variants — see ``spatial_shape``.
+        fp_pred (xr.DataArray or np.ndarray): Predicted footprints. Must match
+            ``fp_true`` in type and shape.
+        spatial_shape (tuple, optional): (H, W), required when ``fp_true``/
+            ``fp_pred`` are flat numpy arrays. Defaults to None.
+        flux_patterns (dict[str, np.ndarray], optional): Mapping of label -> 2-D flux
+            array of shape (H, W). If None, the following defaults are used:
 
-    Returns
-    -------
-    dict[str, dict]
-        {label: metrics_dict} where each metrics_dict is the output of
-        compute_mfs_metrics (keys: corrcoef, mean_absolute_error, mean_bias,
-        true_mean, predicted_mean).
+            - "uniform": ``np.ones((H, W))``.
+            - "checkerboard": 0/1 checkerboard of shape (H, W).
+            - "checkerboard_10": 0/1 checkerboard of shape (H, W) with 10x10 blocks.
+            - "checkerboard_25": 0/1 checkerboard of shape (H, W) with 25x25 blocks.
+            - "checkerboard_50": 0/1 checkerboard of shape (H, W) with 50x50 blocks
+              (only if H>100 and W>100).
+
+            Defaults to None.
+        transform_factor (float or "default", optional): Passed through to
+            ``calculate_mfs``, multiplied by the mole fraction (e.g. to convert
+            units). Defaults to None.
+        ignore_mask (optional): Areas to exclude, applied to each flux pattern before
+            computing mole fractions. Defaults to None.
+
+    Returns:
+        dict[str, dict]: ``{label: metrics_dict}`` where each metrics_dict is the
+        output of ``compute_mfs_metrics`` (keys: corrcoef, mae, mean_bias, true_mean,
+        predicted_mean, r2_score).
+
+    Raises:
+        ValueError: If ``fp_true``/``fp_pred`` are xarray Datasets (unsupported), are
+            an unsupported combination of types, or if a flux pattern's shape
+            doesn't match (H, W).
     """
     # ------------------------------------------------------------------ #
     # 1. Resolve inputs to a (true, pred) pair
@@ -726,11 +774,11 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
             raise ValueError(
                 f"Flux pattern '{label}' has shape {flux_2d.shape}, expected ({H}, {W})."
             )
-        N = fp_true.shape[0]
+        N = fp.shape[0]
         flux_tiled = np.tile(flux_2d, (N, 1, 1))  # (N, H, W)
         # multiply by ignoremask
         flux = np.where(ignore_np, 0, flux_tiled)
-        mf_true = calculate_mfs(fp_true, flux, transform_factor)
+        mf_true = calculate_mfs(fp, flux, transform_factor)
         mf_pred = calculate_mfs(fp_pred, flux, transform_factor)
 
         results[label] = compute_mfs_metrics(mf_true, mf_pred)
@@ -738,4 +786,63 @@ def compute_static_mf_metrics(fp_true, fp_pred, spatial_shape=None, flux_pattern
     return results
 
 
-   
+def compute_flux_metrics(fp_true, fp_pred, flux, spatial_shape=None, transform_factor=None, ignore_mask=None):
+    """Compute mole-fraction metrics for true vs. predicted footprints against a real flux field.
+
+    Like ``compute_static_mf_metrics``, but instead of synthetic flux patterns this
+    uses the supplied ``flux`` field: the true and predicted mole fractions are the
+    footprint-weighted flux summed over space (via ``calculate_mfs``), and the two
+    time series are compared with ``compute_mfs_metrics``.
+
+    Args:
+        fp_true (xr.DataArray or np.ndarray): Ground-truth footprints. xarray
+            Datasets are not supported.
+        fp_pred (xr.DataArray or np.ndarray): Predicted footprints, same type as
+            ``fp_true``.
+        flux (xr.DataArray or np.ndarray): Flux field, same type as ``fp_true``,
+            broadcast against the footprints.
+        spatial_shape (tuple[int, int], optional): (H, W) spatial shape, required for
+            numpy inputs; inferred from the coordinates for xarray inputs. Defaults to None.
+        transform_factor (float, optional): Optional factor forwarded to
+            ``calculate_mfs`` to convert units. Defaults to None.
+        ignore_mask (array-like, optional): Mask of cells to exclude; the flux is set
+            to zero where the mask is truthy before computing mole fractions.
+            Defaults to None.
+
+    Returns:
+        dict: The ``compute_mfs_metrics`` output — "corrcoef", "mae", "mean_bias",
+        "true_mean", "predicted_mean", and "r2_score".
+
+    Raises:
+        ValueError: If any input is an ``xr.Dataset``, or if ``fp_true``, ``fp_pred``
+            and ``flux`` are not all xarray DataArrays or all numpy arrays.
+    """
+    if isinstance(fp_true, xr.Dataset) or isinstance(fp_pred, xr.Dataset) or isinstance(flux, xr.Dataset):
+        raise ValueError("xarray Datasets are not supported for fp_true or fp_pred. Use xr.DataArrays instead.")
+    elif isinstance(fp_true, xr.DataArray) and isinstance(fp_pred, xr.DataArray) and isinstance(flux, xr.DataArray):
+        spatial_shape = _spatial_shape_from_xarray(fp_true)
+        fp = _to_batched_spatial(_to_numpy(fp_true), spatial_shape)
+        fp_pred = _to_batched_spatial(_to_numpy(fp_pred), spatial_shape)
+        flux = _to_batched_spatial(_to_numpy(flux), spatial_shape)
+        H, W = spatial_shape
+
+    elif isinstance(fp_true, np.ndarray) and isinstance(fp_pred, np.ndarray) and isinstance(flux, np.ndarray):
+        fp = _to_batched_spatial(_to_numpy(fp_true), spatial_shape)
+        fp_pred = _to_batched_spatial(_to_numpy(fp_pred), spatial_shape)
+        flux = _to_batched_spatial(_to_numpy(flux), spatial_shape)
+        H, W = fp.shape[1], fp.shape[2]
+
+    else:
+        raise ValueError("Unsupported combination of input types for fp_true and fp_pred. Both must be either xarray DataArrays or numpy arrays.")
+
+    results = {}
+
+    ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
+
+    flux = np.where(ignore_np, 0, flux)
+    mf_true = calculate_mfs(fp, flux, transform_factor)
+    mf_pred = calculate_mfs(fp_pred, flux, transform_factor)
+
+    results = compute_mfs_metrics(mf_true, mf_pred)
+
+    return results

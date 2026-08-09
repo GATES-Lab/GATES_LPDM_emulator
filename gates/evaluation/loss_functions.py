@@ -13,17 +13,42 @@ import torch.nn.functional as F
 # ---------------------------------------------------------------------------
 
 def scale(s, w=1.0):
-    """Multiply by a scalar weight w."""
+    """Multiply by a scalar weight w.
+
+    Args:
+        s (torch.Tensor): Tensor to transform.
+        w (float, optional): Scalar weight. Defaults to 1.0.
+
+    Returns:
+        torch.Tensor: ``w * s``.
+    """
     return w * s
 
 
 def scale_and_shift(s, w=1.0, a=0.0):
-    """Multiply by w and add constant a."""
+    """Multiply by w and add constant a.
+
+    Args:
+        s (torch.Tensor): Tensor to transform.
+        w (float, optional): Scalar weight. Defaults to 1.0.
+        a (float, optional): Constant to add. Defaults to 0.0.
+
+    Returns:
+        torch.Tensor: ``w * s + a``.
+    """
     return w * s + a
 
 
 def power(s, p=2.0):
-    """Raise to the power p.  Amplifies differences between large and small values."""
+    """Raise to the power p. Amplifies differences between large and small values.
+
+    Args:
+        s (torch.Tensor): Tensor to transform.
+        p (float, optional): Exponent. Defaults to 2.0.
+
+    Returns:
+        torch.Tensor: ``s ** p``.
+    """
     return s ** p
 
 
@@ -32,6 +57,12 @@ def normalize_batch(s):
 
     Weights become scale-independent but vary with batch composition: the same
     sample may receive a different weight depending on what else is in the batch.
+
+    Args:
+        s (torch.Tensor): Tensor to normalise.
+
+    Returns:
+        torch.Tensor: ``s / (s.mean() + 1e-8)``.
     """
     return s / (s.mean() + 1e-8)
 
@@ -48,6 +79,12 @@ def normalize_by_mean(mean):
                                     transform_fn=scale, w=1.0)
 
     Weights are scale-independent and batch-consistent.
+
+    Args:
+        mean (float or torch.Tensor): Dataset-level mean to normalise by.
+
+    Returns:
+        callable: Function ``s -> s / (mean + 1e-8)``.
     """
     def _normalize(s):
         return s / (mean + 1e-8)
@@ -59,7 +96,14 @@ def normalize_by_mean(mean):
 # ---------------------------------------------------------------------------
 
 def _spatial_dims(t):
-    """All dimension indices except the batch dimension (0)."""
+    """All dimension indices except the batch dimension (0).
+
+    Args:
+        t (torch.Tensor): Tensor whose spatial dims to compute.
+
+    Returns:
+        tuple[int]: Dimension indices ``1, ..., t.dim() - 1``.
+    """
     return tuple(range(1, t.dim()))
 
 
@@ -67,6 +111,13 @@ def _mask(t, nan_mask):
     """Return t with nan_mask positions set to NaN (no-op if nan_mask is None).
 
     nan_mask convention: 1 = invalid/NaN, 0 = valid.
+
+    Args:
+        t (torch.Tensor): Tensor to mask.
+        nan_mask (torch.Tensor or None): Positions to set to NaN, or None for no-op.
+
+    Returns:
+        torch.Tensor: ``t`` with ``nan_mask`` positions set to NaN.
     """
     if nan_mask is None:
         return t
@@ -76,10 +127,19 @@ def _mask(t, nan_mask):
 def _get_normalize_fn(normalize_fn):
     """Resolve normalize_fn to a callable (or None).
 
-    Pass:
-    - None           -> no normalisation
-    - "batch"        -> normalize_batch
-    - callable       -> used as-is (e.g. normalize_by_mean(mean))
+    Args:
+        normalize_fn (callable, str, or None): One of:
+
+            - None: no normalisation.
+            - "batch": resolves to ``normalize_batch``.
+            - callable: used as-is (e.g. ``normalize_by_mean(mean)``).
+            - other str: evaluated with ``eval()`` (e.g. ``"normalize_by_mean(mean)"``).
+
+    Returns:
+        callable or None: The resolved normalisation function, or None.
+
+    Raises:
+        ValueError: If ``normalize_fn`` is a string that cannot be resolved.
     """
     if normalize_fn is None or callable(normalize_fn):
         return normalize_fn
@@ -96,7 +156,14 @@ def _get_normalize_fn(normalize_fn):
     )
 
 def _resolve_dims(t, dims):
-    """Return dims resolved to a tuple of dimension indices.
+    """Expand ``t`` with a trailing broadcast dimension if it has fewer dims than ``dims``.
+
+    Args:
+        t (torch.Tensor): Tensor to (possibly) expand.
+        dims (tuple or torch.Size): Target shape to match the number of dimensions of.
+
+    Returns:
+        torch.Tensor: ``t``, expanded with a trailing dimension if needed.
     """
     if dims is not None and len(t.shape) < len(dims):
         t = t.unsqueeze(-1).expand(-1,-1,dims[-1])
@@ -108,6 +175,18 @@ def _resolve_nan_mask(nan_mask_idx, nan_mask, fp_batch, dims=None):
     Priority: explicit nan_mask argument > nan_mask_label from fp_batch > None.
 
     nan_mask convention: 1 = invalid/NaN, 0 = valid.
+
+    Args:
+        nan_mask_idx (int or None): Index of the nan-mask variable in ``fp_batch``'s
+            last dimension, or None if not using this source.
+        nan_mask (torch.Tensor or None): Explicit nan mask, takes priority if given.
+        fp_batch (torch.Tensor or None): Supporting data tensor to extract the nan
+            mask from when ``nan_mask`` is None and ``nan_mask_idx`` is set.
+        dims (tuple, optional): Target shape to resolve the mask's dimensions
+            against (see ``_resolve_dims``). Defaults to None.
+
+    Returns:
+        torch.Tensor or None: The resolved nan mask, or None if neither source is available.
     """
     # make sure that nan_mask has the same number of dimensions as pred,
     if nan_mask is not None:
@@ -121,7 +200,20 @@ def _resolve_nan_mask(nan_mask_idx, nan_mask, fp_batch, dims=None):
 
 
 def _label_index(fp_labels, label, arg_name='weight_label'):
-    """Return the index of label in fp_labels.  Raises ValueError if absent."""
+    """Return the index of label in fp_labels.
+
+    Args:
+        fp_labels (list[str]): Variable names to search.
+        label (str): Label to find the index of.
+        arg_name (str, optional): Name to use in the error message if not found.
+            Defaults to 'weight_label'.
+
+    Returns:
+        int: Index of ``label`` in ``fp_labels``.
+
+    Raises:
+        ValueError: If ``fp_labels`` is None or ``label`` is not found in it.
+    """
     if fp_labels is None or label not in fp_labels:
         raise ValueError(
             f"{arg_name} '{label}' not found in fp_labels {fp_labels}"
@@ -160,29 +252,44 @@ class MSELoss(nn.Module):
         # Extract nan_mask automatically from fp_batch:
         criterion = MSELoss(fp_labels, nan_mask_label='fp_nan_mask')
         loss = criterion(pred, target, fp_batch)
-
-    Args:
-        fp_labels      (list[str] | None): variable names along the last dim of
-                       fp_batch; only required when nan_mask_label is set
-        nan_mask_label (str | None): extract nan_mask from this fp_batch variable
-                       instead of passing it as a forward argument (default None)
-
-        pred     (Tensor): model output,           shape (B, H, W) or (B, H*W)
-        target   (Tensor): ground truth footprint,  same shape as pred
-        fp_batch (Tensor | None): supporting data,  shape (B, H, W, V) or (B, H*W, V)
-        nan_mask (Tensor | None): 1=invalid pixel,  shape matching pred (default None)
     """
 
     def __init__(self, fp_labels=None, nan_mask_label=None):
+        """Initialize the loss.
+
+        Args:
+            fp_labels (list[str], optional): Variable names along the last dim of
+                ``fp_batch``; only required when ``nan_mask_label`` is set.
+                Defaults to None.
+            nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
+                variable instead of passing it as a forward argument. Defaults to None.
+
+        Raises:
+            ValueError: If ``nan_mask_label`` is set but ``fp_labels`` is None.
+        """
         super().__init__()
         if nan_mask_label is not None:
             if fp_labels is None:
                 raise ValueError("fp_labels must be provided if nan_mask_label is set")
-            self.nan_mask_idx = _label_index(fp_labels, nan_mask_label, 'nan_mask_label') 
+            self.nan_mask_idx = _label_index(fp_labels, nan_mask_label, 'nan_mask_label')
         else:
             self.nan_mask_idx = None
 
     def forward(self, pred, target, fp_batch=None, nan_mask=None):
+        """Compute the MSE loss.
+
+        Args:
+            pred (torch.Tensor): Model output, shape (B, H, W) or (B, H*W).
+            target (torch.Tensor): Ground truth footprint, same shape as ``pred``.
+            fp_batch (torch.Tensor, optional): Supporting data, shape (B, H, W, V)
+                or (B, H*W, V); used to extract the nan mask if ``nan_mask_label``
+                was set. Defaults to None.
+            nan_mask (torch.Tensor, optional): 1=invalid pixel, shape matching
+                ``pred``. Defaults to None.
+
+        Returns:
+            torch.Tensor: Scalar MSE loss.
+        """
         nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
 
         se = _mask((pred - target) ** 2, nan_mask)
@@ -210,16 +317,34 @@ class ThresholdedMSELoss(nn.Module):
         Multiple thresholds and alphas:
         criterion = ThresholdedMSELoss(fp_labels, weight_label='fp', threshold=[0, 1e-3], alpha=[1.0, 2.0], nan_mask_label='fp_nan_mask')
         loss = criterion(pred, target, fp_batch)
-
-    Args:
-        fp_labels      (list[str]): variable names along the last dim of fp_batch
-        weight_label   (str): which fp_labels entry to use for thresholding
-        threshold      (float or list[float]): thresholds to define pixel subsets; can be a single number or a list for multiple thresholds (default 0)
-        alpha          (float or list[float]): relative weight(s) for the MSE in each pixel subset; can be a single number or a list of the same length as threshold + 1 (default 1.0). If a single number is provided, the first subset (pixels <= threshold) is weighted by one, and all the subsequent subsets (pixels > threshold) are weighted by alpha. If a list is provided, the first entry is the weight for the first subset (pixels <= threshold_0), the second entry is the weight for the second subset (threshold_0 < pixels <= threshold_1), and so on, with the last entry being the weight for the final subset (pixels > threshold_{n-1}).
-        nan_mask_label (str | None): extract nan_mask from this fp_batch variable instead of passing it as a forward argument (default None)
-
     """
     def __init__(self, fp_labels, weight_label, threshold=0, alpha=1.0, nan_mask_label=None):
+        """Initialize the loss.
+
+        Args:
+            fp_labels (list[str]): Variable names along the last dim of ``fp_batch``.
+            weight_label (str): Which ``fp_labels`` entry to use for thresholding.
+            threshold (float or list[float], optional): Thresholds to define pixel
+                subsets; can be a single number or a list for multiple thresholds.
+                Defaults to 0.
+            alpha (float or list[float], optional): Relative weight(s) for the MSE in
+                each pixel subset; can be a single number or a list of the same
+                length as ``threshold`` + 1. If a single number is provided, the
+                first subset (pixels <= threshold) is weighted by one, and all the
+                subsequent subsets (pixels > threshold) are weighted by ``alpha``. If
+                a list is provided, the first entry is the weight for the first
+                subset (pixels <= threshold_0), the second entry is the weight for
+                the second subset (threshold_0 < pixels <= threshold_1), and so on,
+                with the last entry being the weight for the final subset (pixels >
+                threshold_{n-1}). Defaults to 1.0.
+            nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
+                variable instead of passing it as a forward argument. Defaults to None.
+
+        Raises:
+            ValueError: If ``threshold`` is not a number or list, or if ``alpha`` is
+                not a list of length ``len(threshold) + 1`` (after normalising a
+                single-number ``alpha``).
+        """
         super().__init__()
         if isinstance(threshold, (int, float)):
             threshold = [threshold]
@@ -237,8 +362,22 @@ class ThresholdedMSELoss(nn.Module):
         self.bins = [-float('inf')] + self.threshold + [float('inf')]
         self.alpha = alpha
         self.nan_mask_idx = _label_index(fp_labels, nan_mask_label, 'nan_mask_label') if nan_mask_label else None
-    
+
     def forward(self, pred, target, fp_batch, nan_mask=None):
+        """Compute the thresholded, summed MSE loss.
+
+        Args:
+            pred (torch.Tensor): Model output, shape (B, H, W) or (B, H*W).
+            target (torch.Tensor): Ground truth footprint, same shape as ``pred``.
+            fp_batch (torch.Tensor): Supporting data, shape (B, H, W, V) or
+                (B, H*W, V); provides the thresholding field and, optionally, the
+                nan mask.
+            nan_mask (torch.Tensor, optional): 1=invalid pixel, shape matching
+                ``pred``. Defaults to None.
+
+        Returns:
+            torch.Tensor: Scalar loss, the alpha-weighted sum of per-bin MSEs.
+        """
         nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         weight_field = fp_batch[..., self.weight_idx]
 
@@ -277,25 +416,24 @@ class PixelWeightedMSELoss(nn.Module):
                                       transform_fn=scale, w=500)
         loss = criterion(pred, target, fp_batch)
         loss = criterion(pred, target, fp_batch, nan_mask=nan_mask)
-
-    Args:
-        fp_labels      (list[str]): variable names along the last dim of fp_batch
-        weight_label   (str): which fp_labels entry to use as the per-pixel weight
-        transform_fn   (callable | None): transform function applied to the weight tensor before
-                       multiplying; e.g. scale, scale_and_shift, power;
-                       extra kwargs are forwarded (default None = identity)
-        nan_mask_label (str | None): extract nan_mask from this fp_batch variable
-                       instead of passing it as a forward argument (default None)
-        **transform_kwargs: keyword arguments forwarded to transform_fn
-
-        pred     (Tensor): model output,           shape (B, H, W) or (B, H*W)
-        target   (Tensor): ground truth footprint,  same shape as pred
-        fp_batch (Tensor): supporting data,         shape (B, H, W, V) or (B, H*W, V)
-        nan_mask (Tensor | None): 1=invalid pixel,  shape matching pred (default None)
     """
 
     def __init__(self, fp_labels, weight_label='fp_original',
                  transform_fn=None, nan_mask_label=None, **transform_kwargs):
+        """Initialize the loss.
+
+        Args:
+            fp_labels (list[str]): Variable names along the last dim of ``fp_batch``.
+            weight_label (str, optional): Which ``fp_labels`` entry to use as the
+                per-pixel weight. Defaults to 'fp_original'.
+            transform_fn (callable or str, optional): Transform function applied to
+                the weight tensor before multiplying, e.g. ``scale``,
+                ``scale_and_shift``, ``power``; extra kwargs are forwarded. A string
+                is evaluated with ``eval()``. Defaults to None (identity).
+            nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
+                variable instead of passing it as a forward argument. Defaults to None.
+            **transform_kwargs: Keyword arguments forwarded to ``transform_fn``.
+        """
         super().__init__()
         self.fp_weight_idx = _label_index(fp_labels, weight_label)
         if type(transform_fn) == str:
@@ -306,6 +444,20 @@ class PixelWeightedMSELoss(nn.Module):
             if nan_mask_label else None
 
     def forward(self, pred, target, fp_batch, nan_mask=None):
+        """Compute the pixel-weighted MSE loss.
+
+        Args:
+            pred (torch.Tensor): Model output, shape (B, H, W) or (B, H*W).
+            target (torch.Tensor): Ground truth footprint, same shape as ``pred``.
+            fp_batch (torch.Tensor): Supporting data, shape (B, H, W, V) or
+                (B, H*W, V); provides the per-pixel weight field and, optionally,
+                the nan mask.
+            nan_mask (torch.Tensor, optional): 1=invalid pixel, shape matching
+                ``pred``. Defaults to None.
+
+        Returns:
+            torch.Tensor: Scalar, weighted MSE loss.
+        """
         nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         weights = fp_batch[..., self.fp_weight_idx]
 
@@ -344,26 +496,27 @@ class SumWeightedMSELoss(nn.Module):
 
         loss = criterion(pred, target, fp_batch)
         loss = criterion(pred, target, fp_batch, nan_mask=nan_mask)
-
-    Args:
-        fp_labels      (list[str]): variable names along the last dim of fp_batch
-        weight_label   (str): which variable's spatial sum to derive weights from
-        normalize_fn   (callable | "batch" | None): applied to fp_sum before
-                       transform_fn; "batch" selects normalize_batch (default None)
-        transform_fn   (callable): maps fp_sum (B,) to weights (B,); default scale
-        nan_mask_label (str | None): extract nan_mask from this fp_batch variable
-                       instead of passing it as a forward argument (default None)
-        **transform_kwargs: forwarded to transform_fn
-
-        pred     (Tensor): model output,           shape (B, H, W) or (B, H*W)
-        target   (Tensor): ground truth footprint,  same shape as pred
-        fp_batch (Tensor): supporting data,         shape (B, H, W, V) or (B, H*W, V)
-        nan_mask (Tensor | None): 1=invalid pixel,  shape matching pred (default None)
     """
 
     def __init__(self, fp_labels, weight_label='fp_original',
                  normalize_fn=None, transform_fn=None,
                  nan_mask_label=None, **transform_kwargs):
+        """Initialize the loss.
+
+        Args:
+            fp_labels (list[str]): Variable names along the last dim of ``fp_batch``.
+            weight_label (str, optional): Which variable's spatial sum to derive
+                weights from. Defaults to 'fp_original'.
+            normalize_fn (callable, "batch", or None, optional): Applied to fp_sum
+                before ``transform_fn``; "batch" selects ``normalize_batch``.
+                Defaults to None.
+            transform_fn (callable or str, optional): Maps fp_sum (B,) to weights
+                (B,). A string is evaluated with ``eval()``. Defaults to None
+                (identity — no transform).
+            nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
+                variable instead of passing it as a forward argument. Defaults to None.
+            **transform_kwargs: Forwarded to ``transform_fn``.
+        """
         super().__init__()
         self.weight_idx = _label_index(fp_labels, weight_label)
         self.normalize_fn = _get_normalize_fn(normalize_fn)
@@ -375,6 +528,20 @@ class SumWeightedMSELoss(nn.Module):
             if nan_mask_label else None
 
     def forward(self, pred, target, fp_batch, nan_mask=None):
+        """Compute the sum-weighted MSE loss.
+
+        Args:
+            pred (torch.Tensor): Model output, shape (B, H, W) or (B, H*W).
+            target (torch.Tensor): Ground truth footprint, same shape as ``pred``.
+            fp_batch (torch.Tensor): Supporting data, shape (B, H, W, V) or
+                (B, H*W, V); provides the field to spatially sum for weighting and,
+                optionally, the nan mask.
+            nan_mask (torch.Tensor, optional): 1=invalid pixel, shape matching
+                ``pred``. Defaults to None.
+
+        Returns:
+            torch.Tensor: Scalar, sum-weighted MSE loss.
+        """
         nan_mask_preds = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         spatial = _spatial_dims(pred)
         # take MSE per sample
@@ -431,30 +598,30 @@ class MSEPlusSumLoss(nn.Module):
         criterion = MSEPlusSumLoss(fp_labels, weight_label='flux',  normalize_fn=normalize_by_mean(integral_mean),
          alpha=1.0)
         loss = criterion(pred, target, fp_batch)
-
-    Args:
-        fp_labels      (list[str] | None): variable names along the last dim of
-                       fp_batch; not required when weight_label='ones'
-        weight_label   (str): fp_batch variable to use as weight field w, or 'ones'
-                       to weight by ones (default 'ones')
-        alpha    (float): scalar weight on the integral-error penalty (default 1.0)
-        normalize_fn   (callable | "batch" | None): applied to the per-sample integral
-                       scalars before squaring their error (default None)
-        transform_fn   (callable | None): applied to w before multiplying with
-                       pred / target (default None = identity)
-        nan_mask_label (str | None): extract nan_mask from this fp_batch variable
-                       instead of passing it as a forward argument (default None)
-        **transform_kwargs: forwarded to transform_fn
-
-        pred     (Tensor): model output,           shape (B, H, W) or (B, H*W)
-        target   (Tensor): ground truth footprint,  same shape as pred
-        fp_batch (Tensor | None): supporting data,  shape (B, H, W, V) or (B, H*W, V); not required when weight_label='ones' and nan_mask_label is None
-        nan_mask (Tensor | None): 1=invalid pixel,  shape matching pred (default None)
     """
 
     def __init__(self, fp_labels=None, weight_label='ones',
                  alpha=1.0, normalize_fn=None,
                  transform_fn=None, nan_mask_label=None, **transform_kwargs):
+        """Initialize the loss.
+
+        Args:
+            fp_labels (list[str], optional): Variable names along the last dim of
+                ``fp_batch``; not required when ``weight_label='ones'``.
+                Defaults to None.
+            weight_label (str, optional): ``fp_batch`` variable to use as weight
+                field w, or "ones" to weight by ones. Defaults to 'ones'.
+            alpha (float, optional): Scalar weight on the integral-error penalty.
+                Defaults to 1.0.
+            normalize_fn (callable, "batch", or None, optional): Applied to the
+                per-sample integral scalars before squaring their error.
+                Defaults to None.
+            transform_fn (callable, optional): Applied to w before multiplying with
+                pred / target. Defaults to None (identity).
+            nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
+                variable instead of passing it as a forward argument. Defaults to None.
+            **transform_kwargs: Forwarded to ``transform_fn``.
+        """
         super().__init__()
         self.weight_idx = "ones" if weight_label == 'ones' else _label_index(fp_labels, weight_label)
         self.alpha = alpha
@@ -465,6 +632,21 @@ class MSEPlusSumLoss(nn.Module):
             if nan_mask_label else None
 
     def forward(self, pred, target, fp_batch=None, nan_mask=None):
+        """Compute the two-term MSE-plus-integral-error loss.
+
+        Args:
+            pred (torch.Tensor): Model output, shape (B, H, W) or (B, H*W).
+            target (torch.Tensor): Ground truth footprint, same shape as ``pred``.
+            fp_batch (torch.Tensor, optional): Supporting data, shape (B, H, W, V)
+                or (B, H*W, V); provides the weight field w and, optionally, the nan
+                mask. Not required when ``weight_label='ones'`` and
+                ``nan_mask_label`` is None. Defaults to None.
+            nan_mask (torch.Tensor, optional): 1=invalid pixel, shape matching
+                ``pred``. Defaults to None.
+
+        Returns:
+            torch.Tensor: Scalar loss, ``mse + alpha * integral_mse``.
+        """
         nan_mask_preds = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         spatial = _spatial_dims(pred)
 

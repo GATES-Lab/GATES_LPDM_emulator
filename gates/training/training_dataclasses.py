@@ -5,31 +5,62 @@ import numpy as np
 
 @dataclass()
 class PathContext:
-    '''Keep track of necessary paths'''
-    model_save_dir: Path 
+    """Keep track of necessary paths.
+
+    Attributes:
+        model_save_dir (Path): <FILL IN>
+        model_name (str): <FILL IN>
+        model_path (Path): ``model_save_dir / model_name``.
+        training_imgs_path (Path): Directory for training images, set by ``make_dirs()``.
+        training_outputs_path (Path): Directory for training outputs (scalers,
+            training settings, training logs), set by ``make_dirs()``.
+        updates_path (Path): Text file for training update logs, set by ``make_dirs()``.
+    """
+    model_save_dir: Path
     model_name: str
     model_path: Path ## model_save_dir / model_name
 
     def make_dirs(self):
+        """Create the model directory tree and an empty training-updates log file.
+
+        Creates ``self.model_path`` (and any missing parents), plus
+        ``training_imgs`` and ``training_outputs`` subdirectories, and sets
+        ``self.training_imgs_path``, ``self.training_outputs_path``, and
+        ``self.updates_path`` (creating an empty file at that path).
+
+        Raises:
+            FileExistsError: If ``training_imgs`` or ``training_outputs`` already
+                exist under ``model_path``, or if ``updates_path`` already exists.
+        """
         # make the main model directory
         os.makedirs(self.model_path, exist_ok=True)
-        
+
         #store the training imgs
         self.training_imgs_path = self.model_path / "training_imgs"
         os.mkdir(self.training_imgs_path)
-        
+
         # store the training outputs, including scalers, training settings, and training logs
         self.   training_outputs_path = self.model_path / "training_outputs"
         os.mkdir(self.training_outputs_path)
-        
+
         # write the training updates to a text file in the training outputs directory
         self.updates_path = self.model_path / f"{self.model_name}_updates.txt"
 
         f = open(self.updates_path, "x")
         f.close()
-    
+
     def resolve_datapath_args(self, parameters):
-        '''Resolve the datapath arguments for loading the data passed from the parameter file, which will supercede the config paths'''
+        """Resolve the datapath arguments for loading the data passed from the parameter file, which will supersede the config paths.
+
+        Args:
+            parameters (dict): Parameter dict, optionally containing a "data_dirs"
+                key with any of "fp_datadir", "met_datadir", "topog_datadir",
+                "landcover_datadir".
+
+        Returns:
+            dict: ``{"fp_datadir": ..., "met_args": {"met_datadir": ...}, "topog_args": {"topog_datadir": ..., "landcover_datadir": ...}}``,
+            populated only with the keys present in ``parameters["data_dirs"]``.
+        """
         datapath_args = {"met_args":{}, "topog_args":{}}
         if "data_dirs" in parameters:
             if "fp_datadir" in parameters["data_dirs"]:
@@ -46,7 +77,21 @@ class PathContext:
 
 @dataclass()
 class TrainingContext:
-    '''Keep track of training parameters'''
+    """Keep track of training parameters.
+
+    Attributes:
+        parameters (dict): <FILL IN>
+        device (str): <FILL IN>
+        use_wandb (bool): <FILL IN>
+        image_dates (list): <FILL IN>
+        image_plots (bool): <FILL IN>
+        grid (np.array): <FILL IN>
+        fp_labels (list): <FILL IN>
+        scalers (dict): <FILL IN>
+        n_variables (int): <FILL IN>
+        size (int): <FILL IN>
+        dynamic_edges_params (dict): <FILL IN>
+    """
     parameters: dict
     device: str
     use_wandb: bool
@@ -58,6 +103,8 @@ class TrainingContext:
     n_variables: int
 
     size: int
+
+    dynamic_edges_params:dict
 
 
 @dataclass()
@@ -77,7 +124,22 @@ class BoundaryTrainingContext:
 
 @dataclass()
 class ModelContext:
-    '''Keep track of model parameters and objects'''
+    """Keep track of model parameters and objects.
+
+    Attributes:
+        model_name (str): <FILL IN>
+        use_wandb (bool): <FILL IN>
+        device (str): <FILL IN>
+        optimizer (object): <FILL IN>
+        criterion (object): <FILL IN>
+        criterion_test (object): <FILL IN>
+        lr (float): <FILL IN>
+        early_stopping (object): <FILL IN>
+        epochs_num (int): <FILL IN>
+        epochs_visualise (int): <FILL IN>
+        epochs_save (int): <FILL IN>
+        epochs_patience (int): <FILL IN>
+    """
     model_name: str
     use_wandb: bool
     device: str

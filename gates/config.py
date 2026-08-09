@@ -12,9 +12,13 @@ package_dir = root_dir / "gates"
 minimum_config_keys = ["data_paths", "domains", "bad_fp_files", "user_paths"]
 
 def get_config():
-    """
-    Get the global Config object, which holds the repository-wide configuration settings. 
-    This function uses a simple caching mechanism to ensure that the Config object is only created once, and subsequent calls to get_config() will return the same Config instance.
+    """Get the global Config object, which holds the repository-wide configuration settings.
+
+    Uses a simple caching mechanism to ensure that the Config object is only created
+    once, and subsequent calls to ``get_config()`` return the same Config instance.
+
+    Returns:
+        Config: The cached (or newly created) global Config instance.
     """
     global config_cache
     if config_cache is None:
@@ -22,7 +26,14 @@ def get_config():
     return config_cache
 
 def _load_default_config():
-    """Load the default configuration from a YAML file."""
+    """Load the default configuration from a YAML file.
+
+    Returns:
+        dict: Parsed contents of ``gates/utils/config_defaults.yml``.
+
+    Raises:
+        FileNotFoundError: If the default config file does not exist.
+    """
     config_path = package_dir / "utils" / "config_defaults.yml"
     if not config_path.exists():
         raise FileNotFoundError(f"Default config file not found at {config_path}.")
@@ -32,10 +43,20 @@ def _load_default_config():
 
 
 def setup(platform="local"):
-    """Create a config file with default paths, loaded from the YAML defaults. The user should then edit the config file to set correct paths for their system. 
+    """Create a config file with default paths, loaded from the YAML defaults.
 
-    Parameters:
-    - platform: str, one of the keys in the "data_paths" section of the default config YAML. This determines which set of default paths to populate in the new config file. Valid options are "local", "bp" (for University of Bristol's BluePebble cluster), "oracle" and "isambard-ai".
+    The user should then edit the config file to set correct paths for their system.
+
+    Args:
+        platform (str, optional): One of the keys in the "data_paths" section of the
+            default config YAML. Determines which set of default paths to populate
+            in the new config file. Valid options are "local", "bp" (for University
+            of Bristol's BluePebble cluster), "oracle" and "isambard-ai".
+            Defaults to "local".
+
+    Raises:
+        ValueError: If ``platform`` (after alias resolution) is not a recognised key
+            in the default config's "data_paths".
     """
 
     # Create empty config file
@@ -72,26 +93,61 @@ def setup(platform="local"):
         print(f"Config file created at {config_path} with default paths for platform '{platform}'. Please check the paths and update as needed.")
 
 class Config():
-    """Global class to hold the repository-wide configuration, including data paths and other settings. This class reads from the config file created by the setup() function, and makes the config values available as attributes of the Config object.
+    """Global class to hold the repository-wide configuration, including data paths and other settings.
+
+    Reads from the config file created by the ``setup()`` function, and makes the
+    config values available as attributes of the Config object. The instance is
+    read-only (locked) once ``__init__`` completes.
 
     Attributes:
-    - root_dir: Path to the root directory of the project.
-    - package_dir: Path to the gates package directory.
-    - fp_datadir: Path to the footprint data directory, constructed from the base_data_path and fp_datadir values in the config file.
-    - met_datadir: Path to the meteorological data directory, constructed from the base_data_path and met_datadir values in the config file.
-    - topog_datadir and landcover_datadir: Paths to the topography and landcover data files, constructed from the base_data_path and respective datadir values in the config file.
-    - domains: Dictionary of domain definitions, loaded from the config file.
-    - bad_files: List of known footprint files that have to be loaded using a workaround in load_fps, loaded from the config file.
-    - save_models_dir: Path to the directory where trained models should be saved, loaded from the config file.
-    - parameter_files_dir: Path to the directory where parameter files for training should be saved, loaded from the config file.
+        root_dir (Path): Path to the root directory of the project.
+        package_dir (Path): Path to the gates package directory.
+        fp_datadir (Path): Path to the footprint data directory, constructed from the
+            ``base_data_path`` and ``fp_datadir`` values in the config file.
+        met_datadir (Path): Path to the meteorological data directory, constructed
+            from the ``base_data_path`` and ``met_datadir`` values in the config file.
+        topog_datadir (Path): Path to the topography data file, constructed from the
+            ``base_data_path`` and ``topog_datadir`` values in the config file.
+        landcover_datadir (Path or None): Path to the landcover data file,
+            constructed from the ``base_data_path`` and ``landcover_datadir`` values
+            in the config file, or None if not specified (optional).
+        flux_datadir (Path): Path to the flux data directory, constructed from the
+            ``base_data_path`` and ``flux_datadir`` values in the config file.
+        domains (dict): Dictionary of domain definitions, loaded from the config file.
+        bad_fp_files (list): List of known footprint files that have to be loaded
+            using a workaround in ``load_fps``, loaded from the config file.
+        save_models_dir (Path): Path to the directory where trained models should be
+            saved, loaded from the config file.
+        parameter_files_dir (Path): Path to the directory where parameter files for
+            training should be saved, loaded from the config file.
     """
-    
+
     def __setattr__(self, name, value):
+        """Set an attribute, raising once the config has been locked (after ``__init__``).
+
+        Args:
+            name (str): Attribute name.
+            value: Attribute value.
+
+        Raises:
+            AttributeError: If the config is already locked (read-only).
+        """
         if getattr(self, "_locked", False):
             raise AttributeError("Config is read-only after initialization.")
         object.__setattr__(self, name, value)
-        
+
     def __init__(self, filename="config.yml"):
+        """Load and validate the config file, populating this instance's attributes.
+
+        Args:
+            filename (str, optional): Config filename, resolved relative to
+                ``root_dir``. Defaults to "config.yml".
+
+        Raises:
+            FileNotFoundError: If the config file does not exist.
+            ValueError: If the config file is empty/invalid YAML, or is missing any
+                of ``minimum_config_keys``.
+        """
         if not (root_dir / filename).exists():
             raise FileNotFoundError(f"Config file not found at {root_dir / filename}. Please run `python gates/config.py ` to create a new config file.")
 
