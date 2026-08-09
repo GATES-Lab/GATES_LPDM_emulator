@@ -1,0 +1,44 @@
+Bootstrap: localimage
+From: /projects/b5bn/data/env/gates_env_v2.sif
+
+# gates_env_v3: gates_env_v2 + an *editable* install of the gates package.
+#
+# How it works: %files copies just the packaging files (pyproject.toml,
+# README.md, LICENSE, gates/) into the image at the SAME absolute path the
+# repo has on Lustre, and %post pip-installs that copy in editable mode.
+# The install therefore records the real repo path in site-packages, so at
+# runtime — with the standard bind (see How_Tos/HOW_TO_CONTAINERS_AND_JOBS.md):
+#
+#   apptainer exec --nv --bind /lus,/lus/lfs1aip2/projects:/projects ...
+#
+# — the live repo overmounts the baked-in copy and code edits take effect
+# immediately, no rebuild needed. (Build-time --bind is NOT used: the bind
+# would fail because /lus does not exist inside the base image yet.)
+#
+# Build (login node OK, ~minutes; or sbatch gates_env_v3_build.sbatch):
+#
+#   apptainer build --fakeroot /projects/b5bn/data/env/gates_env_v3.sif gates_env_v3.def
+
+%files
+    /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/pyproject.toml /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/pyproject.toml
+    /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/README.md /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/README.md
+    /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/LICENSE /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/LICENSE
+    /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/gates /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/gates
+
+%post
+    # setuptools>=77 (in the base image) needs packaging>=24.2 to parse the
+    # SPDX license string in pyproject.toml; the base image ships an older one.
+    python3 -m pip install --no-cache-dir packaging==25.0
+    REPO=/lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator
+    python3 -m pip install --no-build-isolation --no-deps -e "$REPO"
+    # Verify the install resolves (against the baked-in copy at build time)
+    cd /
+    python3 -c "import gates; print('gates imported from:', gates.__file__)"
+
+%environment
+    export LC_ALL=C
+
+%labels
+    Base localimage /projects/b5bn/data/env/gates_env_v2.sif
+    Adds editable install of gates from /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator
+    Version v3
