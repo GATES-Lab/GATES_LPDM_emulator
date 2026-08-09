@@ -17,6 +17,8 @@ cd /user/work/yl18410/new_graphnet/graphnet_LPDM_emulator
 export PYTHONUNBUFFERED=1
 export PYTHONFAULTHANDLER=1
 export WANDB_MODE=disabled
+# gates is not pip-installed in this env; make the repo root importable
+export PYTHONPATH="/user/work/yl18410/new_graphnet/graphnet_LPDM_emulator:${PYTHONPATH}"
 
 echo "python: $(which python)"
 echo "branch: $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD)"
