@@ -13,7 +13,7 @@
                 "region": "SAHARA"
             },
             "test_load_data": {
-                "years": ["2016"], "months": ["01"],
+                "years": ["2017"], "months": ["01"],
                 "freq": 60
             }
         },
@@ -24,7 +24,7 @@
                 "region": "SAHARA"
             },
             "test_load_data": {
-                "years": ["2016"], "months": ["02"],
+                "years": ["2017"], "months": ["02"],
                 "freq": 60
             }
             }
