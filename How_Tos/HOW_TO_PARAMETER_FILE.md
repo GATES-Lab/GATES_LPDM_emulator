@@ -161,6 +161,28 @@ Configures transformation of the footprint (target) values.
 **TODO**: add info on scalers
 ---
 
+## `flux`
+
+Controls whether gridded flux/emissions data is loaded and cropped alongside the footprints. When enabled, the cropped flux is appended as a `"flux"` variable on the footprint dataset, making it available to flux-weighted loss functions (e.g. `weight_label: "flux"`) and to flux-based evaluation metrics. Omit this section (or set `get_flux: false`) to skip flux loading entirely.
+
+```json
+"flux": {
+    "get_flux": true,
+    "convert_units": true,
+    "convert_units_args": {"unit_multiplier": 1e9}
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `get_flux` | If `true`, loads the flux/emissions data for the domain and years, crops it to match each footprint, and appends it as a `"flux"` variable on the footprint dataset. Defaults to `true` when the `flux` section is present. |
+| `convert_units` | If `true`, rescales the flux field via `transform_flux` so its units match the footprint units. If `true` but no `convert_units_args` are passed, a warning is raised and no conversion occurs. Defaults to `false`. |
+| `convert_units_args.unit_multiplier` | Constant multiplier applied to the flux field when `convert_units` is `true` (e.g. `1e9`). Defaults to `1` (no change). |
+
+> **Note:** The same `flux` block is reused for both the train and test data loads. A `"flux"` variable on the test outputs is what triggers the extra flux-weighted evaluation metrics.
+
+---
+
 ## `dataloader`
 
 Configures the PyTorch `DataLoader` used during training and evaluation.
