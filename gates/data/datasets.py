@@ -4,6 +4,7 @@ author: Elena Fillola @elenafillo
 
 import numpy as np
 import xarray as xr
+import dask
 import datetime
 import pandas as pd
 import joblib
@@ -103,6 +104,12 @@ def _stack_and_label_variables(ds, var_names, var_type,  met_variables_dict=None
     else:
         raise ValueError(f"unknown var_type: {var_type}")
     
+    # to_stacked_array reshapes all variables into a single variable_name axis.
+    # NOTE: do not wrap this in split_large_chunks=True — in dask 2024.5.0 that can
+    # drive the reshape through a broken auto_chunks path (IndexError: tuple index
+    # out of range). When the input is chunked along fp_time (see the chunk_size
+    # handling in _cut_satellite_met_multi_delta) this reshape stays bounded; if not,
+    # it may emit a harmless "large chunk" warning.
     stacked = data.to_stacked_array(
         new_dim="variable_name",
         sample_dims=["fp_time", "lat", "lon"],
@@ -1381,6 +1388,7 @@ def _cut_satellite_met_multi_delta(
     verbose=False,
     load_into_memory=False,
     interp_to=None,
+    chunk_size=None,
 ):
     """Like cut_satellite_met but handles all time_deltas in one call.
 
@@ -1409,6 +1417,17 @@ def _cut_satellite_met_multi_delta(
             time from the two bracketing met timestamps. fp times whose rounded target
             falls outside the met record are treated as NaN and dropped, same as the
             nearest case. Defaults to None.
+        chunk_size (int or None, optional): If set (and ``load_into_memory`` is
+            False), the crop is done in blocks of this many samples: each block of met
+            is read into memory first (a plain parallel zarr read), then cropped in
+            numpy. This keeps the met source lazy (only a block's timestamps are read
+            at a time), bounds peak memory to one block's read, and avoids building the
+            dask vindex graph that otherwise causes large-chunk/large-graph warnings
+            and heavy GC. Larger values mean fewer, bigger reads. Ignored when
+            ``load_into_memory`` is True (the full met is already numpy, so the
+            per-block load is skipped). When None and ``load_into_memory`` is False the
+            crop is left lazy as a single chunk (improving that path is future work).
+            Defaults to None.
 
     Returns:
         tuple:
@@ -1548,12 +1567,33 @@ def _cut_satellite_met_multi_delta(
             for t in info["lookup_times"]
         ])
 
-        met_delta = met_for_crop.isel(time=pos)
-        met_delta = met_delta.assign_coords(time=fp_times)
-
-        # Spatial crop 
-
-        cropped = met_delta.sel(lat=lat_ds, lon=lon_ds, method="nearest")
+        # Spatial crop. sel(lat=lat_ds, lon=lon_ds) uses 2-D (time, lat)/(time, lon)
+        # indexers. On a dask array that becomes a vindex reshape whose graph embeds
+        # the per-sample index arrays — the source of the "large chunk"/"large graph"
+        # warnings (and, with split_large_chunks, a dask 2024.5.0 crash).
+        n = len(pos)
+        if bool(chunk_size) and not load_into_memory:
+            # Met is lazy and chunk_size is set: read the met in chunk_size-sample
+            # blocks and crop each block in numpy. Reading a block first is a plain,
+            # parallel zarr read (no vindex); cropping the numpy block then builds no
+            # dask graph at all. This bounds peak memory to one block's read and avoids
+            # the large-graph warnings entirely.
+            blocks = []
+            for start in range(0, n, chunk_size):
+                sl = slice(start, min(start + chunk_size, n))
+                md = met_for_crop.isel(time=pos[sl]).assign_coords(time=fp_times[sl]).compute()
+                blocks.append(
+                    md.sel(lat=lat_ds.isel(time=sl),
+                           lon=lon_ds.isel(time=sl), method="nearest")
+                )
+            cropped = xr.concat(blocks, dim="time") if len(blocks) > 1 else blocks[0]
+        else:
+            # Met is already in memory (load_into_memory) or intentionally left lazy
+            # (no chunk_size): a single crop, no per-block loading needed. When lazy
+            # this still builds the vindex graph and may warn — improving that path is
+            # future work.
+            md = met_for_crop.isel(time=pos).assign_coords(time=fp_times)
+            cropped = md.sel(lat=lat_ds, lon=lon_ds, method="nearest")
         # store the lat and lon values in cropped as coordinates before reassigning the lat and lon coordinates to be the index values (0 to metsize-1)
         cropped = cropped.assign_coords(lat_coords=(("time", "lat"), cropped.lat.values), lon_coords=(("time", "lon"), cropped.lon.values))
 
@@ -1588,6 +1628,7 @@ def get_square_satellite_inputs_v2(
     add_wind_direction=False,
     load_into_memory=False,
     interp_to=None,
+    chunk_size=None,
 ):
     """Optimised version of ``get_square_satellite_inputs``.
 
@@ -1623,6 +1664,14 @@ def get_square_satellite_inputs_v2(
             ``"1h"`` or ``"15min"``, each target time is rounded to that resolution
             and the met is linearly interpolated between the two bracketing met
             timestamps. Defaults to None.
+        chunk_size (int or None, optional): Only used when ``load_into_memory`` is
+            False. If set, the spatial crop is done in blocks of this many samples and
+            each block is computed into memory as it is produced (the met source stays
+            lazy and is read per block). This bounds peak memory and avoids the large
+            task graph that otherwise causes a "large chunk" warning and heavy GC.
+            Larger values mean fewer, bigger reads; it is independent of the training
+            ``batch_size`` (the dataloader rechunks separately). When None, the crop is
+            left lazy as a single chunk (future work). Defaults to None.
 
     Returns:
         tuple:
@@ -1691,6 +1740,7 @@ def get_square_satellite_inputs_v2(
         verbose=verbose,
         load_into_memory=load_into_memory,
         interp_to=interp_to,
+        chunk_size=chunk_size,
     )
 
 
@@ -1850,7 +1900,16 @@ def get_square_satellite_inputs_v2(
         data.fp_xr = data.fp_xr.sel(time=concatenated_inputs.fp_time.values)
         print(f"Filtered fp_xr to keep only {len(data.fp_xr.time)} unique time steps (from the original number of samples {len_fp_before})")
 
-
+    # Report the chunking of the final inputs so we can tell whether the lazy crop
+    # produced chunk_size-sized fp_time blocks or collapsed into one giant chunk.
+    if verbose:
+        chunks = getattr(concatenated_inputs.data, "chunks", None)
+        if chunks is None:
+            print(f"Inputs are numpy-backed (not chunked); shape={concatenated_inputs.shape}")
+        else:
+            fp_axis = concatenated_inputs.get_axis_num("fp_time")
+            print(f"Inputs chunking: dims={concatenated_inputs.dims}, chunks={chunks}")
+            print(f"  -> fp_time chunk blocks: {chunks[fp_axis]}")
 
 
 

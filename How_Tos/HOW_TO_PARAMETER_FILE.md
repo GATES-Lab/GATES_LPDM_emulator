@@ -104,7 +104,8 @@ Selects which variables are assembled into the model inputs.
     "static_variables": ["sin_lat_coords", ..., "topog", "landcover"],
     "time_deltas": [6, 12],
     "add_wind_direction": true,
-    "load_into_memory": true
+    "load_into_memory": false,
+    "chunk_size": 64
 }
 ```
 
@@ -115,8 +116,8 @@ Selects which variables are assembled into the model inputs.
 | `static_variables` | (required) Time-invariant input features appended to each node. Includes coordinate encodings, topography, and land cover. |
 | `time_deltas` | (optional) List of time offsets (in hours) for which lagged meteorological fields are included (e.g. `[6, 12]` adds met at t−6h and t−12h alongside t). |
 | `add_wind_direction` | (recommended) If `true`, computes `wind_speed` and `wind_angle` from `x_wind`/`y_wind` and adds them to the input array. |
-| `load_into_memory` | (required) Determines whether the monthly data is loaded into memory before concantenation. Confusing wrt top-level `load_into_memory`!! |
-
+| `load_into_memory` | Controls how the met is cropped (see note below). If `true`, the **full** meteorology (all needed timestamps, whole domain) is loaded into memory before cropping — fast, but high peak memory. Confusing wrt top-level `load_into_memory`!! |
+| `chunk_size` | (recommended when `load_into_memory: false`) Number of footprint samples to crop and load per block. When set (and `load_into_memory` is `false`), the met is read and cropped in blocks of this many samples instead of all at once, keeping peak memory low and avoiding a large-graph warning. Ignored when `load_into_memory` is `true`. Omit to leave the crop fully lazy (currently produces a "large chunk" warning — not recommended). |
 ---
 
 ## `input_scaler`
