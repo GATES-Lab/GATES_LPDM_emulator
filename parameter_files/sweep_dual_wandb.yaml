@@ -1,0 +1,72 @@
+# W&B sweep definition for the dual-head (footprint + boundary/background) model.
+#
+# Used by run_dual_sweep_wandb.py:
+#   create the sweep:  python run_dual_sweep_wandb.py parameter_template_dual.json --create sweep_dual_wandb.yaml
+#   run an agent:      sbatch launch_dual_wandb_sweep.sh <sweep_id> [count]
+#
+# Parameter names use dotted paths into the base parameter JSON
+# (parameter_template_dual.json); they are expanded and deep-merged onto it per trial.
+#
+# NOTE: data-loading keys (train_load_data, test_load_data, variables, background_setup,
+# data_dirs, load_into_memory) must NOT appear here - each agent loads the data once and
+# reuses it across trials, so those keys are rejected by run_dual_sweep_wandb.py.
+
+method: bayes
+
+# "best/objective" = best-so-far test fp loss + objective_bg_weight * best-so-far test bg
+# loss (see run_full_training in train_dual_model.py). It is logged every epoch and is
+# monotone non-increasing. The per-head bests may occur at different epochs, so this
+# objective assumes per-head checkpoint selection (the bg head typically peaks around
+# epoch 50-90 and then overfits, while the fp head keeps improving past epoch 200).
+# objective_bg_weight defaults to 1.0 and can be fixed under "sweep.objective_bg_weight"
+# in the base parameter file - keep it CONSTANT across the sweep so trials are comparable.
+metric:
+  name: best/objective
+  goal: minimize
+
+# Prune clearly-bad trials. min_iter is in logged epochs; the bg head needs ~50 epochs
+# to reach its best, so don't prune before that.
+early_terminate:
+  type: hyperband
+  min_iter: 50
+
+parameters:
+  learning_rate:
+    distribution: log_uniform_values
+    min: 1.0e-05
+    max: 3.0e-04
+
+  # From the manual sweep (Jul 2026): fp head is unharmed for weights <= 0.33, bg head is
+  # near-best around 0.1-0.15, so search in that neighbourhood.
+  loss_functions.bg_loss_weight:
+    values: [0.05, 0.1, 0.15, 0.25]
+
+  # The bg head overfits with dropout unset; give the sweep room to regularise it.
+  model_parameters.dropout:
+    values: [0.0, 0.1, 0.2]
+
+  model_parameters.num_blocks:
+    values: [4, 6]
+
+  model_parameters.node_dim:
+    values: [64, 128]
+
+  model_parameters.hidden_dim_decoder:
+    values: [64, 128]
+
+  # Trial-length constant: shorter than the 250-epoch manual runs to fit more trials.
+  # (best/* metrics are best-so-far, so shorter runs remain comparable.)
+  epochs.training:
+    value: 150
+
+  # --- Other knobs you may want to add later ---
+  # loss_functions.fp_criterion_params.w:   {values: [500, 1000, 2000]}
+  # loss_functions.fp_criterion_params.a:   {values: [0.25, 0.5, 1.0]}
+  # dataloader.batch_size:                  {values: [5, 10]}
+  #
+  # bg-head-specific controls (see the "bg_head" block in setup_dual_model): freeze the
+  # bg head after N stagnant epochs and/or regularise only the bg decoder. Per-head best
+  # checkpoints are saved either way, so freezing does not lose the bg head's best state.
+  # bg_head.freeze_patience:                {values: [15, 25, 40]}
+  # bg_head.weight_decay:                   {values: [0.01, 0.05, 0.1]}
+  # bg_head.lr_scale:                       {values: [0.5, 1.0]}
