@@ -5,7 +5,7 @@
     "load_into_memory": true,
     "_ignore_model_save_dir": "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/test_jobs/working_GPU_experiments",
     "train_load_data" : {
-        "year":"201[4-5]",
+        "year":"2014",
         "freq":3,
         "region":"SAHARA",
         "size":50,
@@ -15,7 +15,7 @@
     },
 
     "test_load_data" : {
-        "year":"2017",
+        "year":"2015",
         "freq":100
     },
 
