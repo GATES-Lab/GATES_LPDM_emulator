@@ -1,0 +1,20 @@
+Bootstrap: localimage
+From: /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/gates_env.sif
+
+# Overlay build: takes the existing gates_env.sif and adds h5netcdf (+ its h5py
+# backend), which the background/CAMS loader needs — it opens boundary-condition
+# files with xr.open_mfdataset(..., engine="h5netcdf"). Building from the local
+# image (rather than from scratch via gates_env.def) avoids re-pulling the base
+# image and recompiling torch-scatter/cartopy, and leaves gates_env.sif intact.
+#
+# PIP_CONSTRAINT is deliberately left in place so numpy stays pinned at 1.26.4
+# (ABI compatibility with the bundled PyTorch build).
+
+%post
+    # h5netcdf needs the h5py backend at runtime, but declares it optional, so it
+    # must be installed explicitly (the base image has neither).
+    python3 -m pip install --no-cache-dir h5netcdf h5py
+
+%labels
+    Base gates_env.sif (overlay)
+    Added h5netcdf and h5py for engine="h5netcdf" CAMS/background loading

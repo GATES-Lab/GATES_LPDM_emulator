@@ -1,0 +1,19 @@
+Bootstrap: localimage
+From: /lus/lfs1aip2/projects/public/b5bn/Nawid/GATES_LPDM_emulator/gates_env_h5_wandb.sif
+
+# Overlay build on the h5netcdf+h5py+wandb image, fixing the dask/distributed
+# mismatch. The NVIDIA base image ships a rapids-dask-dependency shim that forces
+# distributed 2025.2.0, which is incompatible with the pinned dask 2024.5.0
+# (distributed 2025.2.0 imports dask._task_spec, absent in 2024.5.0). The gates
+# loader does `from dask.distributed import Client, LocalCluster`, which crashed.
+# Remove the shim and install a matching dask+distributed pair.
+#
+# Leaves gates_env.sif, gates_env_h5.sif and gates_env_h5_wandb.sif untouched.
+
+%post
+    python3 -m pip uninstall -y rapids-dask-dependency
+    python3 -m pip install --no-cache-dir "dask==2024.5.0" "distributed==2024.5.0"
+
+%labels
+    Base gates_env_h5_wandb.sif (overlay)
+    Fixed dask/distributed (removed rapids shim, pinned matching 2024.5.0 pair)
