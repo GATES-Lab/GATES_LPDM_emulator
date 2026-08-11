@@ -594,6 +594,10 @@ class LoadBaseSatelliteData:
             concat_dim="time",
             combine="nested",
             consolidated=True,
+            # dim_0 is a conversion artifact; in some stores (e.g. SOUTHAMERICA
+            # 2017) its length disagrees with the time axis, which makes xarray
+            # refuse to construct the dataset.
+            drop_variables=["dim_0"],
         )
 
         # Slice to a single month when one was requested (whole-year loads leave
