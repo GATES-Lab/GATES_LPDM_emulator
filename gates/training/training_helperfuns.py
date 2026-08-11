@@ -380,6 +380,7 @@ def save_bg_timeseries_plots(epoch, bg_true, bg_pred, path, model_name,
     Returns:
         Path: The path the figure was saved to.
     """
+    import matplotlib.pyplot as plt  # local import, matching save_training_plots
     bg_true = np.asarray(bg_true).reshape(-1)
     bg_pred = np.asarray(bg_pred).reshape(-1)
     n = len(bg_true)
