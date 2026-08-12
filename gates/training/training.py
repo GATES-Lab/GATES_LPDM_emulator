@@ -62,7 +62,10 @@ def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbos
             - data (LoadSquareSatelliteData): The loaded data object.
             - inputs (xr.DataArray): Met inputs of shape (fp_time, lat, lon, variable_name).
     """
-    ## if the met args dict is in both data_parameters and datapath_args, merge
+    ## if the met args dict is in both data_parameters and datapath_args, merge.
+    ## Copy first: popping from the caller's dict would drop the met overrides for
+    ## any subsequent load reusing the same datapath_args (e.g. the test set).
+    datapath_args = dict(datapath_args)
     if "met_args" in data_parameters and "met_args" in datapath_args:
         merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
         data_parameters["met_args"] = merged_met_args

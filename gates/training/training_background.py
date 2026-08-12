@@ -104,6 +104,10 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
         bgs (xr.Dataset): Concatenated background corrections, shape (time,).
         aux_data (xr.Dataset or None): Auxiliary CAMS boundary data, or None if use_aux_bc is False.
     """
+    # Copy before the merge/pop below: callers reuse the same datapath_args for the
+    # train and test loads, and popping "met_args" from the shared dict would drop
+    # any met_datadir override for the second call.
+    datapath_args = dict(datapath_args)
     if "met_args" in data_parameters and "met_args" in datapath_args:
         merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
         data_parameters["met_args"] = merged_met_args
