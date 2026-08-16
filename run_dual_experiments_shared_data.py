@@ -83,6 +83,11 @@ def main():
     parser.add_argument("--index", type=int, default=None,
                         help="Run only the experiment at this index (still loads the shared data once).")
     parser.add_argument("--list", action="store_true", help="List the experiments and exit (no loading/training).")
+    parser.add_argument("--trainer", default="train_dual_model",
+                        help="Training module to drive (must provide train_and_save_model, "
+                             "load_dual_data and log_data_loading_summary_run). Default: "
+                             "train_dual_model; use train_dual_refit_model for the bg "
+                             "freeze/refit schedule experiments.")
     args = parser.parse_args()
 
     cfg = gates.config.get_config()
@@ -127,8 +132,14 @@ def main():
         wandb.login()
 
     # Imported here (not at module top) so --list / arg validation work without the heavy GNN
-    # dependencies. train_and_save_model's CLI is guarded by __main__, so this is safe.
-    from train_dual_model import train_and_save_model, load_dual_data, log_data_loading_summary_run
+    # dependencies. The trainer module is selectable (--trainer) so the same driver can run
+    # train_dual_refit_model.py; both expose the same three entry points.
+    import importlib
+    trainer_module = importlib.import_module(args.trainer)
+    train_and_save_model = trainer_module.train_and_save_model
+    load_dual_data = trainer_module.load_dual_data
+    log_data_loading_summary_run = trainer_module.log_data_loading_summary_run
+    print(f"Using trainer module: {args.trainer}")
 
     # --- Load the data ONCE, from the base parameters, and reuse it for every experiment. ---
     print("=" * 70)
