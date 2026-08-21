@@ -39,11 +39,26 @@ echo "=== Job ${SLURM_JOB_ID} started at $(date) on $(hostname) ==="
 nvidia-smi -L || true
 
 # --- Weights & Biases -------------------------------------------------------
-# No W&B credentials are configured on Isambard, so default to offline logging
-# (an unattended batch job would otherwise hang on wandb.login()). To log
-# online, run `wandb login` (or export WANDB_API_KEY=...) once on the login
-# node, then submit with:  WANDB_MODE=online sbatch launch_dual_zarr_isambard.sh
-export WANDB_MODE="${WANDB_MODE:-offline}"
+# Default to ONLINE logging when W&B credentials exist (~/.netrc, written once by
+# `wandb login`) and this node can reach api.wandb.ai; otherwise fall back to
+# offline (an unattended job would hang on wandb.login() without credentials)
+# and FLAG it loudly in this log so unsynced runs are never a surprise.
+# Force a mode with e.g.:  WANDB_MODE=offline sbatch launch_dual_zarr_isambard.sh
+if [[ -z "${WANDB_MODE}" ]]; then
+  if grep -qs "api.wandb.ai" "${HOME}/.netrc" \
+      && curl -s -o /dev/null --max-time 15 https://api.wandb.ai/; then
+    WANDB_MODE=online
+  else
+    WANDB_MODE=offline
+    echo "**********************************************************************"
+    echo "*** FLAG: W&B is OFFLINE for this job (missing ~/.netrc credentials"
+    echo "*** or no route to api.wandb.ai from $(hostname))."
+    echo "*** Runs are recorded locally only; upload them later with:"
+    echo "***   wandb sync ${REPO}/wandb/wandb/offline-run-*"
+    echo "**********************************************************************"
+  fi
+fi
+export WANDB_MODE
 export WANDB_DIR="${REPO}/wandb"
 
 export PYTHONUNBUFFERED=1
@@ -64,6 +79,11 @@ apptainer exec --nv \
   python -u train_dual_model.py "${PARAM_FILE}"
 EXIT_CODE=$?
 echo "TRAIN_EXIT_CODE=${EXIT_CODE}"
+
+if [[ "${WANDB_MODE}" != "online" ]]; then
+  echo "FLAG: W&B was OFFLINE for job ${SLURM_JOB_ID} — runs were NOT uploaded to wandb.ai."
+  echo "FLAG: upload them with:  wandb sync ${REPO}/wandb/wandb/offline-run-*"
+fi
 
 echo "=== Job finished at $(date) ==="
 exit ${EXIT_CODE}

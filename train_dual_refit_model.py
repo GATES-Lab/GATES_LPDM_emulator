@@ -46,6 +46,11 @@ The refit always starts the bg decoder's optimizer from scratch (fresh AdamW sta
 "joint" mode the trunk/fp parameters keep their original optimizer and its state, so the
 trunk's dynamics stay comparable to a no-refit run.
 
+Setting ``"freeze_epoch": 0`` turns the schedule into FP-FIRST pretraining: the bg head
+never trains (it stays at its random initialisation) until ``refit_start_epoch``, so with
+``refit_mode: "joint"`` the run is "train fp alone, then bring the bg head online and
+train both jointly" (see ``experiments_dual_fp_first.json``).
+
 Extra checkpoints/metrics on top of the usual ones: ``*_best_bg_refit.pt`` (best bg test
 loss WITHIN the refit phase, even if it never beats the pre-freeze best) and, under
 ``refit/`` in W&B: the refit-phase bg best, the fp drift since the refit started, and the
@@ -619,6 +624,9 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
         wandb_entity = parameters.get("wandb", {}).get("entity", None)
         wandb_tags = parameters.get("wandb", {}).get("tags", [])
         wandb_group = parameters.get("wandb", {}).get("group", None)
+        # Free-text description of what this run is for, shown in the W&B run's Notes
+        # field; set per experiment via a "wandb": {"notes": ...} override.
+        wandb_notes = parameters.get("wandb", {}).get("notes", None)
         if wandb_project is None or wandb_entity is None:
             print("Warning: use_wandb is True but no wandb.project/entity specified. W&B disabled.")
             use_wandb = False
@@ -632,7 +640,7 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
                 bg_loss_weight = parameters.get("loss_functions", {}).get("bg_loss_weight")
                 suffix = f"bg{bg_loss_weight}"
             run_name = f"{job_id}_{job_name}_{suffix}"
-            wandb.init(entity=wandb_entity, project=wandb_project, config=parameters, tags=wandb_tags, name=run_name, group=wandb_group)
+            wandb.init(entity=wandb_entity, project=wandb_project, config=parameters, tags=wandb_tags, name=run_name, group=wandb_group, notes=wandb_notes)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(f"using device {device}, starting at " + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)
