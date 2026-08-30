@@ -2,6 +2,7 @@ import faulthandler
 faulthandler.enable()
 
 import sys
+import os
 
 
 import matplotlib.pyplot as plt
@@ -320,7 +321,9 @@ def train_and_save_model(parameters, model_save_dir):
 
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_name = f"{parameters['model_name']}_{timestamp}"
+    job_id = os.environ.get("SLURM_JOB_ID")
+    job_suffix = f"job{job_id}_" if job_id else ""
+    model_name = f"{job_suffix}{parameters['model_name']}_{timestamp}"
     model_path = Path(model_save_dir) / model_name
     parameters["start_time"] = timestamp
     print(f"Initialising model run for model_name: {model_name}")
