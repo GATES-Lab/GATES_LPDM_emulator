@@ -15,4 +15,5 @@ __pycache__/
 
 # Built docs are published by CI, not committed.
 docs/build/
+trained_models/
 
