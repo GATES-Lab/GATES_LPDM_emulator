@@ -1,0 +1,159 @@
+{
+    "model_name": "Is_SA_loss_a1_BRAZIL_with_landcover",
+    "verbose": true,
+    "parallel_loading": true,
+    "load_into_memory": true,
+    "_ignore_model_save_dir": "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/test_jobs/working_GPU_experiments",
+    "train_load_data": {
+        "years": [
+            "2012",
+            "2013"
+        ],
+        "freq": 3,
+        "region": "BRAZIL",
+        "size": 50,
+        "met_args": {
+            "met_levels": [
+                3,
+                9,
+                15,
+                21,
+                30,
+                42,
+                51
+            ],
+            "met_variables": [
+                "x_wind",
+                "y_wind",
+                "upward_air_velocity",
+                "atmosphere_boundary_layer_thickness",
+                "surface_air_pressure",
+                "air_temperature",
+                "air_pressure"
+            ]
+        },
+        "crop_met": false
+    },
+    "test_load_data": {
+        "years": [
+            "2015"
+        ],
+        "months": [
+            "02",
+            "03",
+            "04",
+            "05",
+            "06",
+            "07",
+            "08"
+        ],
+        "freq": 50
+    },
+    "variables": {
+        "met_variables": [
+            "x_wind",
+            "y_wind",
+            "upward_air_velocity",
+            "atmosphere_boundary_layer_thickness",
+            "surface_air_pressure",
+            "air_temperature",
+            "air_pressure",
+            "wind_speed",
+            "wind_angle"
+        ],
+        "met_levels": [
+            3,
+            9,
+            15,
+            21,
+            30,
+            42,
+            51
+        ],
+        "static_variables": [
+            "sin_lat_coords",
+            "sin_lon_coords",
+            "cos_lat_coords",
+            "cos_lon_coords",
+            "lat_coords",
+            "lon_coords",
+            "x_coords",
+            "y_coords",
+            "xy_distance_centre",
+            "topog",
+            "landcover"
+        ],
+        "time_deltas": [
+            6,
+            12
+        ],
+        "add_wind_direction": true,
+        "load_into_memory": true
+    },
+    "input_scaler": {
+        "scaler": "DefaultInputsScaler",
+        "fit_on_subsample": 0.7,
+        "scaler_params": {}
+    },
+    "fp_scaler": {
+        "scaler": "LogAndShiftFpScaler",
+        "scaler_params": {}
+    },
+    "dataloader": {
+        "batch_size": 5,
+        "test_batch_size": 5,
+        "nans_to_zeros": true,
+        "dataloader_params": {
+            "prefetch_factor": 3,
+            "num_workers": 2,
+            "pin_memory": true,
+            "persistent_workers": true,
+            "multiprocessing_context": "forkserver",
+            "shuffle": true
+        }
+    },
+    "model_parameters": {
+        "num_blocks": 4,
+        "node_dim": 64,
+        "edge_dim": 64,
+        "hidden_layers_processor_node": 2,
+        "hidden_layers_processor_edge": 2,
+        "hidden_layers_decoder": 1,
+        "hidden_dim_processor_node": 16,
+        "hidden_dim_processor_edge": 16,
+        "hidden_dim_decoder": 16,
+        "resolution": 4,
+        "output_dim": 1,
+        "residuals": false,
+        "attention": false
+    },
+    "learning_rate": 5e-5,
+    "use_wandb": true,
+    "wandb": {
+        "project": "gates-tests",
+        "entity": "gates-lab",
+        "tags": [
+            "gpu",
+            "PixelWeightedMSELoss",
+            "loss_a1",
+            "zarr"
+        ]
+    },
+    "epochs": {
+        "training": 250,
+        "visualize": 10,
+        "patience": 1000,
+        "model_save": 50
+    },
+    "loss_functions": {
+        "criterion": "gates_losses.PixelWeightedMSELoss",
+        "criterion_params": {
+            "weight_label": "fp_original",
+            "transform_fn": "scale_and_shift",
+            "w": 1000,
+            "a": 1
+        },
+        "criterion_test": "gates_losses.MSELoss",
+        "criterion_test_params": {}
+    }
+}
