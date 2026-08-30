@@ -34,7 +34,21 @@ This will prompt you to paste an **API key**, which you can find at:
 [https://wandb.ai/authorize](https://wandb.ai/authorize)
 
 On an HPC cluster you may need to run this once in an interactive session before submitting jobs.
+Do so on Isambard with:
+```bash
+srun --gpus=1 --reservation=interactive --pty bash -i 
+```
 
+Then on the interative node, activate the Apptainer shell:
+
+```bash
+cd /home/b5bn/{user_name}/GATES_LPDM_emulator
+
+apptainer shell --nv \
+  --bind /lus,/lus/lfs1aip2/projects:/projects \
+  --bind "$PWD:$PWD" \
+  /projects/b5bn/data/env/gates_env_v2.sif
+```
 ---
 
 ## 4. How W&B is Used in This Project
