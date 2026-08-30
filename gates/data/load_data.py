@@ -65,6 +65,13 @@ def _wrap_longitudes(ds):
     return ds.sortby(lon_name)
 
 
+def _round_time_to_seconds(ds):
+    """Preprocess function: round time coordinate to nearest second to avoid sub-millisecond floating-point jitter."""
+    if "time" in ds.coords:
+        ds = ds.assign_coords(time=ds.time.dt.round("s"))
+    return ds
+
+
 def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop_variables_except=None, bad_files_list=None):
     """Load footprints from datadir, using workaround if problematic files are encountered.
 
@@ -115,7 +122,7 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
             if len(glob.glob(str(fp_datadir)))==0:
                 raise ValueError(f"No matching files found in the specified directory:\n {fp_datadir} \nCheck that the path is correct and that there are files matching the pattern.")
             # attempt to load dataset of multiple files thfe standard way
-            fp_data_full = xr.open_mfdataset(sorted(glob.glob(str(fp_datadir))), combine='by_coords', **chunk_args)
+            fp_data_full = xr.open_mfdataset(sorted(glob.glob(str(fp_datadir))), combine='by_coords', preprocess=_round_time_to_seconds, **chunk_args)
 
     except Exception as e:
         # some files have small errors in format that prevent xr from concatenating and opening together. This is a workaround to open those separately. This list only contains known files and could be more! can add manually whenever you encounter one 
@@ -152,14 +159,13 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
             # Add clauses here to catch other known exceptions
             with dask.config.set(**{'array.slicing.split_large_chunks': True}):
                 # load non-problematic arrays all together
-                most = xr.open_mfdataset(sorted(without_bad_files), **chunk_args)
+                most = xr.open_mfdataset(sorted(without_bad_files), preprocess=_round_time_to_seconds, **chunk_args)
                 bad_arrays = []
                 for badfile in bad_files_list:
                     if badfile in fp_files:
                         print("loading bad file with workaround:", badfile)
                         # load each bad file separately
-                        f_bad = xr.open_mfdataset(badfile, **chunk_args)
-                        #f_bad = xr.open_mfdataset(badfile)
+                        f_bad = xr.open_mfdataset(badfile, preprocess=_round_time_to_seconds, **chunk_args)
                         if "NORTHAFRICA_2015" in badfile:
                             try:
                                 f_bad = f_bad.drop(["mean_age_particles_n", "mean_age_particles_e", "mean_age_particles_w", "mean_age_particles_s"])        
