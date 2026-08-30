@@ -166,6 +166,9 @@ class Config():
                  f"Config file at {root_dir / 'config.yml'} is empty or invalid YAML; expected a mapping at the top level."
              )
 
+        if "bad_fp_files" not in config_user and "bad_files" in config_user:
+            config_user["bad_fp_files"] = config_user["bad_files"]
+
         # set all the config values as attributes of the Config object
         for key, value in config_user.items():
             setattr(self, key, value)
