@@ -53,10 +53,13 @@ domains:
 
   CHINA:
     domain_name: "CHINA"
+    fp_domain: "EASTASIA"
     footprint: "GOSAT-CHINA-column_EASTASIA_201605.nc"
 
   INDIA:
     domain_name: "INDIA"
+    fp_domain: "SOUTHASIA"
+    met_domain: "SOUTHASIA"
     footprint: "GOSAT-INDIA-SAM-column_SOUTHASIA_201503.nc"
 
 bad_fp_files:

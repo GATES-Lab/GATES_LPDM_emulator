@@ -423,7 +423,8 @@ class LoadBaseSatelliteData:
                 "landcover_path" to override the config values. Defaults to {}.
         """
         if fp_datadir is None:
-            self.fp_datadir = Path(cfg.fp_datadir) / self.domain / f"*{self.region}*{self.domain}_{str(self.date)}*.nc"
+            fp_domain = cfg.domains.get(self.region, {}).get("fp_domain", self.domain)
+            self.fp_datadir = Path(cfg.fp_datadir) / self.domain / f"*{self.region}*{fp_domain}_{str(self.date)}*.nc"
         else:
             self.fp_datadir=Path(str(fp_datadir)+ f"*{str(self.date)}*.nc")
 
@@ -433,7 +434,8 @@ class LoadBaseSatelliteData:
         # in _get_meteorology_file. A glob pattern is kept so a year pattern like
         # "201[4-5]" resolves to multiple stores opened together.
         if met_args.get("met_datadir", None) is None:
-            self.met_datadir = Path(cfg.met_datadir) / self.domain / (self.domain + "_Met_" + str(self.year) + "*.zarr")
+            met_domain = cfg.domains.get(self.region, {}).get("met_domain", self.domain)
+            self.met_datadir = Path(cfg.met_datadir) / self.domain / (met_domain + "_Met_" + str(self.year) + "*.zarr")
         else:
             self.met_datadir = Path(str(met_args["met_datadir"])+ f"*{str(self.year)}*.zarr")
 
@@ -1619,7 +1621,7 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, s
                 raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f'{species}_{resolved_domain_name}_{year}_*.nc'))}")
         else:
         
-            raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_{year}_*.nc"))}")
+            raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f'{species}_{resolved_domain_name}_{year}_*.nc'))}")
     else:
         print(f"Loading flux data from {path}")
     return xr.open_dataset(path).flux
