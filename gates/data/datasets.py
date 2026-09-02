@@ -375,7 +375,7 @@ class InputsDataset:
         subsampled_inputs (xr.DataArray): Subset of ``inputs`` used for fitting, set
             only when ``fit_on_subsample`` < 1 after calling ``fit``.
     """
-    def __init__(self, inputs: xr.DataArray, scaler=None, fit_on_subsample=1, scaler_params={}, verbose=False, compute=True):
+    def __init__(self, inputs: xr.DataArray, scaler=None, fit_on_subsample=1, scaler_params={}, verbose=False, compute=True, seed=34):
         """Initialize the dataset wrapper.
 
         Args:
@@ -400,11 +400,16 @@ class InputsDataset:
                 computes them on demand during transformation. Defaults to True, which is
                 recommended for most use cases to avoid issues with dask arrays during
                 transformation.
+            seed (int, optional): Seed for the local RNG that picks the random subset
+                of samples used to fit the scaler when ``fit_on_subsample`` < 1. Makes
+                the chosen subset reproducible independently of the global NumPy RNG
+                state. Defaults to 34 (matching ``set_reproducibility``).
         """
         self.inputs = inputs
         self.scaler = scaler
         self.verbose = verbose
         self.compute = compute
+        self.seed = seed
 
         self.fit_on_subsample = fit_on_subsample
 
@@ -425,9 +430,12 @@ class InputsDataset:
         elif self.fit_on_subsample<1:
             times = pd.DatetimeIndex(self.inputs.fp_time.values)
             n_samples = int(len(times)*self.fit_on_subsample)
-            if self.verbose: print(f"fit_on_subsample is {self.fit_on_subsample}, so only using {n_samples} samples to fit the scaler. samples chosen randomly")
+            if self.verbose: print(f"fit_on_subsample is {self.fit_on_subsample}, so only using {n_samples} samples to fit the scaler. samples chosen randomly (seed={self.seed})")
 
-            selected_times = np.sort(np.random.choice(times, n_samples, replace=False))
+            # Local RNG so the fitting subset is deterministic given self.seed,
+            # independent of how much the global NumPy RNG has been advanced earlier.
+            rng = np.random.default_rng(self.seed)
+            selected_times = np.sort(rng.choice(times, n_samples, replace=False))
 
             self.subsampled_inputs = self.inputs.sel(fp_time=selected_times)
 

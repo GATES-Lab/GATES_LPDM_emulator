@@ -1,19 +1,17 @@
 {
     "model_name" : "SAHARA_new_test_run_gpu_year20_parallel_load",
     "verbose": true,
-    "parallel_loading": true,
-    "load_into_memory": true,
+    "load_before_training": true,
+    "notes":"some manual notes about the job here",
     "train_load_data" : {
-        "year":"2015",
+        "years":["2015"],
         "freq":3,
         "region":"SAHARA",
-        "size":20,
-        "met_args":{"met_levels":[3, 15,21], 
-    "met_variables":["x_wind", "y_wind", "upward_air_velocity", "atmosphere_boundary_layer_thickness", "surface_air_pressure"]}
+        "size":20
     },
 
     "test_load_data" : {
-        "year":"2016",
+        "years":["2016"],
         "freq":100
     },
 
@@ -21,7 +19,9 @@
         "met_variables":["x_wind", "y_wind", "upward_air_velocity", "atmosphere_boundary_layer_thickness", "surface_air_pressure"],
         "met_levels":[3,15],
         "static_variables":["lat_coords", "lon_coords", "topog"],
-        "time_deltas":[6]
+        "time_deltas":[6],
+        "load_into_memory":false,
+        "chunk_size":64
     },
 
     "input_scaler" : {
@@ -31,7 +31,7 @@
     },
 
     "fp_scaler": {
-        "scaler":"LogAndShiftMeanFpScaler",
+        "scaler":"LogAndShiftFpScaler",
         "scaler_params":{}
     },
 
@@ -44,12 +44,7 @@
                 "prefetch_factor": 3,
                 "num_workers": 2,
                 "persistent_workers": true,
-                "multiprocessing_context": "forkserver"},
-
-
-        "_ignore_dataloader_params": {
-            "prefetch_factor": 0,
-            "num_workers": 1}
+                "multiprocessing_context": "forkserver", "shuffle": true}
     },
 
     "model_parameters":{
@@ -76,15 +71,20 @@
     },
 
     "epochs" : {
-        "training": 60,
-        "visualize": 5,
-        "patience": 3,
+        "training": 100,
+        "visualize": 30,
+        "patience": 50,
         "model_save": 50
     },    
 
-    "loss_functions" : {
-        "criterion": "gates_losses.MSELoss",
-        "criterion_params": {},
+  "loss_functions": {
+    "criterion": "gates_losses.PixelWeightedMSELoss",
+    "criterion_params": {
+      "weight_label": "fp_original",
+      "transform_fn": "scale_and_shift",
+      "w": 1000,
+      "a": 1.0
+    },
         "criterion_test": "gates_losses.MSELoss",
         "criterion_test_params": {}
     }    

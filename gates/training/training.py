@@ -5,6 +5,7 @@
 
 import torch.optim as optim
 import time
+import traceback
 # from datetime import datetime
 # import json
 # import argparse
@@ -38,7 +39,7 @@ from gates.data.datasets import get_square_satellite_inputs_v2
 import gates.evaluation.metrics as gates_metrics
 import gates.evaluation.loss_functions as gates_losses
 
-from .training_helperfuns import EarlyStopping #save_wandb_artifact, 
+from .training_helperfuns import EarlyStopping, write_to_file #save_wandb_artifact, 
 
 from .training_dataclasses import ModelContext
 
@@ -353,6 +354,12 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
             if requested_months is not None:
                 inputs = inputs.sel(fp_time=np.isin(inputs.fp_time.dt.month, requested_months))
                 data.fp_xr = data.fp_xr.sel(time=np.isin(data.fp_xr.time.dt.month, requested_months))
+                selected_months = sorted(np.unique(inputs.fp_time.dt.month.values).tolist())
+                print(
+                    f"Filtered {year} to requested months {requested_months}; "
+                    f"months present after filtering: {selected_months} "
+                    f"({inputs.sizes['fp_time']} timesteps)"
+                )
 
             if load_into_memory:
                 print(f"Loading data into memory for {year} before concatenation...")
@@ -374,6 +381,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
 
         except Exception as e:
             print(f"Error loading data for {year}: {e}")
+            traceback.print_exc()
             loaded_samples = 0
 
         elapsed_mins = (time.perf_counter() - year_start) / 60
@@ -454,7 +462,7 @@ def setup_input_dataset(parameters, train_inputs):
         else:
             inputs_scaler = None
 
-    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params, verbose=parameters.get("verbose", False))
+    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params, verbose=parameters.get("verbose", False), seed=parameters.get("seed", 34))
     input_dataset.fit()
 
     return input_dataset
