@@ -21,9 +21,9 @@ data_paths:
     landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
     flux_datadir: "/fluxes_archive"
   isambard_ai:
-    base_data_path: "/projects/b5s/data"
+    base_data_path: "/projects/b5bn/data"
     fp_datadir: "/fp_archive"
-    met_datadir: "/met_archive"
+    met_datadir: "/met_archive_zarr"
     topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
     landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
     flux_datadir: "/fluxes_archive"
