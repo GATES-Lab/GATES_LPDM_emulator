@@ -20,7 +20,7 @@ A copy of the resolved parameters is saved to the folder `save_models_dir` in `c
     "model_name": "gatesimports2_SAHARA_dynamic_wind_test",
     "verbose": true,
     "parallel_loading": true,
-    "load_into_memory": true,
+    "load_before_training": true,
     "notes": "...",
     "load_data_monthly": true,
 }
@@ -32,7 +32,7 @@ A copy of the resolved parameters is saved to the folder `save_models_dir` in `c
 | `verbose` | If `true`, enables verbose logging output during data loading and training. |
 | `parallel_loading` | If `true`, loads data files in parallel. 
 (Recommended for cluster jobs, not recommended for terminal jobs) |
-| `load_into_memory` | If `true`, loads the dataset into memory. Currently training *will* crash if `false`. |
+| `load_before_training` | If `true` (default), materialises the inputs/footprints into memory before the dataloader is built (crop happens once; each epoch reads RAM). If `false`, data stays lazy and is re-cropped every epoch. The former name `load_into_memory` is still accepted at the top level and treated as `load_before_training`. Not to be confused with `variables.load_into_memory`. |
 | `notes` | Free-text field for experiment notes. Saved alongside model artefacts. |
 | `load_data_monthly` | Load data for each month separately into memory and concatenate, rather than loading the full dataset at once. Significantly more gentle on memory. Soon, `load_data_monthly:false` will be deprecated. |
 
@@ -116,7 +116,7 @@ Selects which variables are assembled into the model inputs.
 | `static_variables` | (required) Time-invariant input features appended to each node. Includes coordinate encodings, topography, and land cover. |
 | `time_deltas` | (optional) List of time offsets (in hours) for which lagged meteorological fields are included (e.g. `[6, 12]` adds met at t−6h and t−12h alongside t). |
 | `add_wind_direction` | (recommended) If `true`, computes `wind_speed` and `wind_angle` from `x_wind`/`y_wind` and adds them to the input array. |
-| `load_into_memory` | Controls how the met is cropped (see note below). If `true`, the **full** meteorology (all needed timestamps, whole domain) is loaded into memory before cropping — fast, but high peak memory. Confusing wrt top-level `load_into_memory`!! |
+| `load_into_memory` | Controls how the met is cropped (see note below). If `true`, the **full** meteorology (all needed timestamps, whole domain) is loaded into memory before cropping — fast, but high peak memory. If `false`, the met is kept lazy (dask) during cropping: set `chunk_size` (below) to crop in memory-bounded blocks — otherwise the crop is left as a single lazy chunk, which builds a large dask graph and triggers a "large chunk" warning (not recommended). Confusing wrt top-level `load_before_training`!! (this one is nested under `variables` and controls cropping, not the pre-training materialisation). |
 | `chunk_size` | (recommended when `load_into_memory: false`) Number of footprint samples to crop and load per block. When set (and `load_into_memory` is `false`), the met is read and cropped in blocks of this many samples instead of all at once, keeping peak memory low and avoiding a large-graph warning. Ignored when `load_into_memory` is `true`. Omit to leave the crop fully lazy (currently produces a "large chunk" warning — not recommended). |
 ---
 

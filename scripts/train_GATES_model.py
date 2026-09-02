@@ -259,7 +259,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
         if epoch % model_ctx.epochs_visualise == 0:
             img_save_path = save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
-        if epoch % (3*model_ctx.epochs_visualise) == 0:
+        if epoch % model_ctx.epochs_visualise == 0:
             if model_ctx.use_wandb:
                 wandb.log({"epoch": epoch, "training_plots": wandb.Image(img_save_path)})
 
@@ -317,6 +317,12 @@ def train_and_save_model(parameters, model_save_dir):
     #cfg = get_config()
 
     verbose = parameters.get("verbose", True)
+
+    # `load_before_training` (formerly the top-level `load_into_memory`) controls whether
+    # the inputs/footprints are materialised into RAM before the dataloader is built.
+    # Defaults to True. The old `load_into_memory` key is still honoured for back-compat.
+    load_before_training = parameters.get("load_before_training", parameters.get("load_into_memory", True))
+    parameters["load_before_training"] = load_before_training
 
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -379,14 +385,14 @@ def train_and_save_model(parameters, model_save_dir):
     # the train and test loads instead of the counter restarting at 1 for each.
     wandb_loading_state = gates_training.initialise_wandb_loading() if use_wandb else None
 
-    data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, flux_args=flux_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb, wandb_state=wandb_loading_state)
+    data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, flux_args=flux_args, verbose=verbose, load_into_memory=load_before_training, use_wandb=use_wandb, wandb_state=wandb_loading_state)
     train_fp_data = data
 
     write_to_file(f"Successfully loaded training met and fp data with {len(train_fp_data.time)} time samples. Loading test data", paths_ctx.updates_path)
     print("Successfully loaded training met and fp data with", len(train_fp_data.time), "time samples")
     print("Loading test data")
 
-    test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, flux_args=flux_args, verbose=verbose, load_into_memory=parameters.get("load_into_memory", False), use_wandb=use_wandb, wandb_state=wandb_loading_state)  # if load_into_memory is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
+    test_data, test_inputs = gates_training.load_GATES_data_v2(test_load_data_params, input_variables=input_variables, datapath_args=datapath_args, flux_args=flux_args, verbose=verbose, load_into_memory=load_before_training, use_wandb=use_wandb, wandb_state=wandb_loading_state)  # if load_before_training is True, this will load the test data into memory immediately; if False, it will remain as dask arrays until needed
     test_fp_data = test_data
 
 
@@ -408,7 +414,7 @@ def train_and_save_model(parameters, model_save_dir):
 
 
 
-    if parameters.get("load_into_memory", False):
+    if load_before_training:
         write_to_file("Loading data into memory as specified in parameters - FIXED", paths_ctx.updates_path)
         print("Loading data into memory as specified in parameters. - FIXED")
         print(f"    computing train inputs, with size {train_inputs.nbytes / 1e9:.2f} GB")
