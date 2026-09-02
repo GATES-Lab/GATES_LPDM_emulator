@@ -53,7 +53,8 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         wind_indices=None,
         latlon_mesh_edges=False,
         latlon_indices=None,
-        dynamic_earthdistance=False
+        dynamic_earthdistance=False,
+        use_dynamic_encoder=True
     ):
         """Initialize GATES.
 
@@ -152,25 +153,50 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             output_dim = self.feature_dim
         #print("set up encoder")
 
-        self.encoder = SatelliteDynamicEncoder(
-            lat_lons=lat_lons,
-            whole_world=whole_world,
-            resolution=resolution,
-            input_dim=feature_dim,
-            output_dim=node_dim,
-            output_edge_dim=edge_dim,
-            hidden_dim_processor_edge=hidden_dim_processor_edge,
-            hidden_layers_processor_node=hidden_layers_processor_node,
-            hidden_dim_processor_node=hidden_dim_processor_node,
-            hidden_layers_processor_edge=hidden_layers_processor_edge,
-            mlp_norm_type=norm_type,
-            use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours,initial_enc=initial_enc, initial_enc_dim=initial_enc_dim,
-            wind_mesh_edges=wind_mesh_edges,
-            wind_indices=wind_indices,
-            latlon_mesh_edges=latlon_mesh_edges,
-            latlon_indices=latlon_indices,
-            dynamic_earthdistance=dynamic_earthdistance
-        )
+        if use_dynamic_encoder:
+            self.encoder = SatelliteDynamicEncoder(
+                lat_lons=lat_lons,
+                whole_world=whole_world,
+                resolution=resolution,
+                input_dim=feature_dim,
+                output_dim=node_dim,
+                output_edge_dim=edge_dim,
+                hidden_dim_processor_edge=hidden_dim_processor_edge,
+                hidden_layers_processor_node=hidden_layers_processor_node,
+                hidden_dim_processor_node=hidden_dim_processor_node,
+                hidden_layers_processor_edge=hidden_layers_processor_edge,
+                mlp_norm_type=norm_type,
+                use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours,initial_enc=initial_enc, initial_enc_dim=initial_enc_dim,
+                wind_mesh_edges=wind_mesh_edges,
+                wind_indices=wind_indices,
+                latlon_mesh_edges=latlon_mesh_edges,
+                latlon_indices=latlon_indices,
+                dynamic_earthdistance=dynamic_earthdistance
+            )
+        else:
+            # Static-encoder A/B test path. Drops the dynamic-edge kwargs and forces
+            # better_meshnodes=False so this reduces to the exact default path the
+            # dynamic encoder runs (no +2 node features, no idx_latlon requirement).
+            if wind_mesh_edges or latlon_mesh_edges or dynamic_earthdistance:
+                raise ValueError(
+                    "use_dynamic_encoder=False cannot be combined with wind_mesh_edges/"
+                    "latlon_mesh_edges/dynamic_earthdistance (SatelliteEncoder has no dynamic edges)."
+                )
+            self.encoder = SatelliteEncoder(
+                lat_lons=lat_lons,
+                whole_world=whole_world,
+                resolution=resolution,
+                input_dim=feature_dim,
+                output_dim=node_dim,
+                output_edge_dim=edge_dim,
+                hidden_dim_processor_edge=hidden_dim_processor_edge,
+                hidden_layers_processor_node=hidden_layers_processor_node,
+                hidden_dim_processor_node=hidden_dim_processor_node,
+                hidden_layers_processor_edge=hidden_layers_processor_edge,
+                mlp_norm_type=norm_type,
+                use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours,initial_enc=initial_enc, initial_enc_dim=initial_enc_dim,
+                better_meshnodes=False
+            )
         if not encode_edges:
             edge_dim=2
         if not encode_nodes:
