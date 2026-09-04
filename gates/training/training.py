@@ -289,7 +289,8 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
     # we load whole years without filtering.
     requested_months = (
         [int(m) for m in months]
-        if ("months" in data_parameters or data_parameters.get("month") is not None)
+        if ("months" in data_parameters and data_parameters["months"])
+        or data_parameters.get("month") is not None
         else None
     )
 
