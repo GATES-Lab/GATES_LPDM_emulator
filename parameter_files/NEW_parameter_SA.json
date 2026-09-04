@@ -50,6 +50,7 @@
         "freq": 50
     },
     "variables": {
+        "interp_to": "3h",
         "met_variables": [
             "x_wind",
             "y_wind",

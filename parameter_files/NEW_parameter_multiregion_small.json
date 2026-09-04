@@ -1,16 +1,117 @@
 {
-    "model_name": "Is_INDIA_loss_a1_10cpus_to_match_oracle",
+    "model_name": "is_test_multiregion_match_oracle_fewer_val_samples",
     "verbose": true,
+    "seed": 34,
     "parallel_loading": true,
     "load_into_memory": true,
-    "_ignore_model_save_dir": "/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/test_jobs/working_GPU_experiments",
-    "train_load_data": {
-        "years": [
-            "2012",
-            "2013"
-        ],
-        "freq": 2,
-        "region": "INDIA",
+    "load_data_monthly": true,
+    "regions": {
+        "0": {
+            "train_load_data": {
+                "years": [
+                    "2012",
+                    "2013"
+                ],
+                "months": [],
+                "freq": 11,
+                "region": "SAHARA"
+            },
+            "test_load_data": {
+                "years": [
+                    "2015"
+                ],
+                "months": [
+                    "02",
+                    "03",
+                    "04",
+                    "05",
+                    "06",
+                    "07",
+                    "08"
+                ],
+                "freq": 185
+            }
+        },
+        "1": {
+            "train_load_data": {
+                "years": [
+                    "2012",
+                    "2013"
+                ],
+                "months": [],
+                "freq": 7,
+                "region": "INDIA"
+            },
+            "test_load_data": {
+                "years": [
+                    "2015"
+                ],
+                "months": [
+                    "02",
+                    "03",
+                    "04",
+                    "05",
+                    "06",
+                    "07",
+                    "08"
+                ],
+                "freq": 93
+            }
+        },
+        "2": {
+            "train_load_data": {
+                "years": [
+                    "2012",
+                    "2013"
+                ],
+                "months": [],
+                "freq": 11,
+                "region": "CHINA"
+            },
+            "test_load_data": {
+                "years": [
+                    "2015"
+                ],
+                "months": [
+                    "02",
+                    "03",
+                    "04",
+                    "05",
+                    "06",
+                    "07",
+                    "08"
+                ],
+                "freq": 185
+            }
+        },
+        "3": {
+            "train_load_data": {
+                "years": [
+                    "2012",
+                    "2013"
+                ],
+                "months": [],
+                "freq": 11,
+                "region": "BRAZIL"
+            },
+            "test_load_data": {
+                "years": [
+                    "2015"
+                ],
+                "months": [
+                    "02",
+                    "03",
+                    "04",
+                    "05",
+                    "06",
+                    "07",
+                    "08"
+                ],
+                "freq": 185
+            }
+        }
+    },
+    "shared_load_parameters": {
         "size": 50,
         "met_args": {
             "met_levels": [
@@ -31,26 +132,9 @@
                 "air_temperature",
                 "air_pressure"
             ]
-        },
-        "crop_met": false
-    },
-    "test_load_data": {
-        "years": [
-            "2015"
-        ],
-        "months": [
-            "02",
-            "03",
-            "04",
-            "05",
-            "06",
-            "07",
-            "08"
-        ],
-        "freq": 25
+        }
     },
     "variables": {
-        "interp_to": "3h",
         "met_variables": [
             "x_wind",
             "y_wind",
@@ -89,7 +173,8 @@
             12
         ],
         "add_wind_direction": true,
-        "load_into_memory": true
+        "load_into_memory": true,
+        "interp_to": "3h"
     },
     "input_scaler": {
         "scaler": "DefaultInputsScaler",
@@ -131,7 +216,7 @@
     "learning_rate": 5e-5,
     "use_wandb": true,
     "wandb": {
-        "project": "gates-tests",
+        "project": "gates-tests-multiregion",
         "entity": "gates-lab",
         "tags": [
             "gpu",
