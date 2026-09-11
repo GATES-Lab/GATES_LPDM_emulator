@@ -1,0 +1,4 @@
+Copied on 2026-09-08 from:
+  graph_weather/boundary_condition/num_classes-1_baselines-True_auxililary-multiple_size-50_format-corrected_decoder-conv_normalization-all_trainyear-2014-6_trainfreq-3_epochs-200_lr-5e-06_seed-31_date-Nov-28-2025
+Original model name: num_classes-1_baselines-True_auxililary-multiple_size-50_format-corrected_decoder-conv_normalization-all_trainyear-2014-6_trainfreq-3_epochs-200_lr-5e-06_seed-31_date-Nov-28-2025
+Renamed to satellite_Brazil_50x50_boundary to match trained_models naming; file contents unchanged.
