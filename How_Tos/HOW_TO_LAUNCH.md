@@ -14,23 +14,80 @@ python scripts/train_GATES_model.py parameter_file.json --file_path /path/to/fol
 
 ## Launching on a SLURM Cluster
 
-`launch_train.sh` shows a working example of a SLURM batch script that activates the environment and launches a run:
+`launch_train.sh` shows a working example of a SLURM batch script that requests a GPU, activates the environment, and launches a run:
 
 ```bash
 #!/bin/bash
 #SBATCH --partition=gpu
+#SBATCH --mem=180GB
 #SBATCH --gres=gpu:1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=5
+#SBATCH --job-name=my_run
 #SBATCH --time=18:00:00
+#SBATCH --account=<your_account>
+#SBATCH --export=NONE
+#SBATCH --output=launch/logs/%x_%j.out
 
-conda activate <your_env_name>
+# Activate the environment inside the job (--export=NONE gives a clean shell)
+export PYTHONNOUSERSITE=1
+eval "$(conda shell.bash hook)"
+conda activate gates_env
 
 python scripts/train_GATES_model.py parameter_file.json
 ```
 
-Adjust the `#SBATCH` resource directives (`--mem`, `--cpus-per-task`, `--account`, etc.) for your cluster.
+Submit it **from the repo root** with:
 
->Note:
-A fuller walkthrough of run outputs, monitoring, and what to expect during training is still to be written.
+```bash
+sbatch launch/launch_train.sh
+```
+
+SLURM logs are written to `launch/logs/` as `<job-name>_<job-id>.out` (`%x` = job name, `%j` = job ID). The `--output` path is relative to the directory you run `sbatch` from, so submit from the repo root and make sure `launch/logs/` exists first (`mkdir -p launch/logs`) — SLURM will not create it.
+
+Adjust the `#SBATCH` resource directives for your cluster:
+
+| Directive | What it controls |
+|-----------|------------------|
+| `--partition` / `--gres=gpu:1` | The GPU partition and one GPU per job. |
+| `--mem` | Total node memory. Also sizes the Dask cluster (see below). |
+| `--cpus-per-task` | CPU cores for the job. Drives the number of Dask workers. |
+| `--time` | Wall-clock limit; training checkpoints periodically so it can be resumed. |
+| `--account` | The billing account to charge. |
+| `--export=NONE` | Starts from a clean environment (hence the explicit `conda activate`). |
+
+The script exports a few W&B variables (`WANDB_NAME`, `WANDB_NOTES`) derived from the SLURM job so runs are easy to trace back to their launch settings — see the [W&B guide](HOW_TO_WandB.md).
+
+### Dask cluster and per-worker memory
+
+Data loading (`load_GATES_data_v2`) runs on a local Dask cluster that `train_and_save_model` spins up automatically via `make_cluster()` (in `gates/training/training.py`). The cluster is **sized from the SLURM allocation** using two environment variables SLURM sets for the job:
+
+- `SLURM_CPUS_PER_TASK` — from `--cpus-per-task`
+- `SLURM_MEM_PER_NODE` — from `--mem` (in MB)
+
+The sizing logic is:
+
+```python
+n_cpus = SLURM_CPUS_PER_TASK
+mem_gb = SLURM_MEM_PER_NODE / 1024          # MB → GB
+
+if n_cpus < 4:
+    # too few cores — skip Dask, use the synchronous scheduler
+    ...
+
+n_workers      = max(1, n_cpus - 2)         # reserve 2 CPUs for python processes
+mem_per_worker = 0.8 * mem_gb / n_workers   # 80% of node RAM, split evenly
+```
+
+So each worker runs a single thread (`threads_per_worker=1`) with a hard `memory_limit` of `mem_per_worker`. The key points when tuning your job:
+
+- **Two CPUs are held back** for the main process / scheduler, so `n_workers = cpus_per_task − 2`. With `--cpus-per-task=5` you get **3 workers**.
+- **Only 80% of `--mem` is handed to Dask**; the remaining 20% is left as headroom for the driver process, PyTorch, and CUDA. That 80% is divided **evenly** across workers, so per-worker memory is `0.8 × mem / n_workers`.
+- With `--mem=180GB` and `--cpus-per-task=5`: `0.8 × 180 / 3 ≈ 48GB` per worker.
+- If a worker exceeds its `memory_limit`, Dask starts spilling to disk (`local_directory="/tmp"`) and, past a higher threshold, kills and restarts the worker. If you hit worker restarts or spilling during loading, **raise `--mem` or lower `--cpus-per-task`** (fewer workers → more memory each).
+- Requesting **fewer than 4 CPUs** disables the cluster entirely and loading falls back to Dask's synchronous scheduler — fine for small runs, slow for large ones.
+
+A dashboard link is printed at startup for monitoring worker memory and task progress.
 
 ## Launching a Sweep
 

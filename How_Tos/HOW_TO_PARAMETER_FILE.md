@@ -19,10 +19,8 @@ A copy of the resolved parameters is saved to the folder `save_models_dir` in `c
 {
     "model_name": "gatesimports2_SAHARA_dynamic_wind_test",
     "verbose": true,
-    "parallel_loading": true,
-    "load_into_memory": true,
+    "load_before_training": true,
     "notes": "...",
-    "load_data_monthly": true,
 }
 ```
 
@@ -30,11 +28,8 @@ A copy of the resolved parameters is saved to the folder `save_models_dir` in `c
 |-------|-------------|
 | `model_name` | Unique identifier for this experiment. |
 | `verbose` | If `true`, enables verbose logging output during data loading and training. |
-| `parallel_loading` | If `true`, loads data files in parallel. 
-(Recommended for cluster jobs, not recommended for terminal jobs) |
-| `load_into_memory` | If `true`, loads the dataset into memory. Currently training *will* crash if `false`. |
+| `load_before_training` | If `true` (default), materialises the inputs/footprints into memory before the dataloader is built (crop happens once; each epoch reads RAM). If `false`, data stays lazy and is re-cropped every epoch. The former name `load_into_memory` is still accepted at the top level and treated as `load_before_training`. Not to be confused with `variables.load_into_memory`. |
 | `notes` | Free-text field for experiment notes. Saved alongside model artefacts. |
-| `load_data_monthly` | Load data for each month separately into memory and concatenate, rather than loading the full dataset at once. Significantly more gentle on memory. Soon, `load_data_monthly:false` will be deprecated. |
 
 
 > **Note:** Fields prefixed with `_ignore_` (e.g. `_ignore_model_save_dir`) are read but not used by the training script. They can be used to store alternative values without activating them.
@@ -51,10 +46,6 @@ Controls which data is loaded for training.
     "freq": 3,
     "region": "SAHARA",
     "size": 50,
-    "met_args": {
-        "met_levels": [3, 9, 15, 21, 30, 42, 51],
-        "met_variables": ["x_wind", "y_wind", ...]
-    },
     "crop_met": false
 }
 ```
@@ -66,9 +57,11 @@ Controls which data is loaded for training.
 | `freq` | (recommended) Controls sampling frequency by loading every nth sample. Must be a positive int. If not present, `freq` defaults to 1, which might lead to very large data. Increase the frequency to run a smaller subset of the data.|
 | `region` | (required) Geographic domain name. Must match a known domain in `config.yml`. |
 | `size` | (required) Side length (in grid cells) of the square patch cut around each satellite release point. Must be a positive, *even* int.|
-| `met_args.met_levels` | (recommended) Vertical model levels to load from the meteorological data files. |
-| `met_args.met_variables` | (recommended) Meteorological variables to load at the data loading stage (before the `variables` section further selects from these). Selecting met levels and variables during data loading reduces computational load. |
-| `crop_met` | (do not change) Controls whether to `crop_met` during data loading, which is redundant when running the training pipeline (but is useful when only loading data to examine it) |
+| `met_args.met_path` | (recommended) Vertical model levels to load from the meteorological data files. |
+| `crop_met` | Controls whether to `crop_met` during data loading, which is redundant when running the training pipeline (ie leave as false during training). If you want to crop the data when interacting with it manually, pass as true. |
+
+> **Note:  Adding custom paths**: Add your own paths with `"met_args" :{"met_datadir": "/path/to/filename_"}`, `"fp_datadi":"/path/to/filename_"` and `"topog_args":{"topog_path": /path/to/file.nc, "landcover_path": /path/to/file.nc}`
+
 
 ---
 
@@ -102,7 +95,8 @@ Selects which variables are assembled into the model inputs.
     "static_variables": ["sin_lat_coords", ..., "topog", "landcover"],
     "time_deltas": [6, 12],
     "add_wind_direction": true,
-    "load_into_memory": true
+    "load_into_memory": false,
+    "chunk_size": 64
 }
 ```
 
@@ -113,8 +107,8 @@ Selects which variables are assembled into the model inputs.
 | `static_variables` | (required) Time-invariant input features appended to each node. Includes coordinate encodings, topography, and land cover. |
 | `time_deltas` | (optional) List of time offsets (in hours) for which lagged meteorological fields are included (e.g. `[6, 12]` adds met at t−6h and t−12h alongside t). |
 | `add_wind_direction` | (recommended) If `true`, computes `wind_speed` and `wind_angle` from `x_wind`/`y_wind` and adds them to the input array. |
-| `load_into_memory` | (required) Determines whether the monthly data is loaded into memory before concantenation. Confusing wrt top-level `load_into_memory`!! |
-
+| `load_into_memory` | Controls how the met is cropped (see note below). If `true`, the **full** meteorology for the **needed timestamps** (whole domain) is loaded into memory before cropping — fast, but high peak memory. If `false`, the met is kept lazy (dask) during cropping: set `chunk_size` (below) to crop in memory-bounded blocks — otherwise the crop is left as a single lazy chunk, which builds a large dask graph and triggers a "large chunk" warning (not recommended)!! |
+| `chunk_size` | (recommended when `load_into_memory: false`) Number of footprint samples to crop and load per block. When set (and `load_into_memory` is `false`), the met is read and cropped in blocks of this many samples instead of all at once, keeping peak memory low and avoiding a large-graph warning. Ignored when `load_into_memory` is `true`. Omit to leave the crop fully lazy (currently produces a "large chunk" warning — not recommended). |
 ---
 
 ## `input_scaler`
@@ -124,7 +118,7 @@ Configures normalisation of meteorological and static input features.
 ```json
 "input_scaler": {
     "scaler": "DefaultInputsScaler",
-    "fit_on_subsample": 0.7,
+    "fit_on_subsample": 1,
     "scaler_params": {}
 }
 ```
@@ -132,7 +126,7 @@ Configures normalisation of meteorological and static input features.
 | Field | Description |
 |-------|-------------|
 | `scaler` | (optional) Class name of the input scaler to use. The default scaler `DefaultInputsScaler` applies `StandardScaler` to met variables and `MinMaxScaler` to static fields. |
-| `fit_on_subsample` | (recommended) Fraction of the training data used to fit the scaler. Fraction is selected at random. Speeds up scaler fitting on large datasets. |
+| `fit_on_subsample` | Fraction of the training data used to fit the scaler. Fraction is selected at random. Speeds up scaler fitting on large datasets. Defaults to 1 (use the whole dataset) |
 | `scaler_params` | Additional keyword arguments passed to the scaler constructor. |
 
 Within `DefaultInputsScaler`, the variables that are standardised vs min-max vs no transform can be specified by passing `scaler_params:{"ignore_variables": ["lat_coords", "lon_coords"], "minmax_variables":["land_cover", "topog", "xy_distance_centre, ..."]}`. Currently, the default is that static variables are transformed through minmax, and met variables standardised.
@@ -157,6 +151,28 @@ Configures transformation of the footprint (target) values.
 | `scaler_params` | Additional keyword arguments passed to the footprint scaler constructor. |
 
 **TODO**: add info on scalers
+---
+
+## `flux`
+
+Controls whether gridded flux/emissions data is loaded and cropped alongside the footprints. When enabled, the cropped flux is appended as a `"flux"` variable on the footprint dataset, making it available to flux-weighted loss functions (e.g. `weight_label: "flux"`) and to flux-based evaluation metrics. Omit this section (or set `get_flux: false`) to skip flux loading entirely.
+
+```json
+"flux": {
+    "get_flux": true,
+    "convert_units": true,
+    "convert_units_args": {"unit_multiplier": 1e9}
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `get_flux` | If `true`, loads the flux/emissions data for the domain and years, crops it to match each footprint, and appends it as a `"flux"` variable on the footprint dataset. Defaults to `true` when the `flux` section is present. |
+| `convert_units` | If `true`, rescales the flux field via `transform_flux` so its units match the footprint units. If `true` but no `convert_units_args` are passed, a warning is raised and no conversion occurs. Defaults to `false`. |
+| `convert_units_args.unit_multiplier` | Constant multiplier applied to the flux field when `convert_units` is `true` (e.g. `1e9`). Defaults to `1` (no change). |
+
+> **Note:** The same `flux` block is reused for both the train and test data loads. A `"flux"` variable on the test outputs is what triggers the extra flux-weighted evaluation metrics.
+
 ---
 
 ## `dataloader`
@@ -303,7 +319,7 @@ Controls the training schedule and checkpointing.
 ```json
 "epochs": {
     "training": 250,
-    "visualize": 10,
+    "visualize": 30,
     "patience": 100,
     "model_save": 50
 }

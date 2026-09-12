@@ -553,14 +553,18 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
     input_variables = parameters["variables"]
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
     flux_args = parameters.get("flux", None)
-    load_into_memory = parameters.get("load_into_memory", True)
+    # `load_before_training` (formerly the top-level `load_into_memory`) — materialise
+    # each region's inputs into RAM before dataloader setup. Defaults to True; the old
+    # `load_into_memory` key is still honoured for back-compat.
+    load_before_training = parameters.get("load_before_training", parameters.get("load_into_memory", True))
+    parameters["load_before_training"] = load_before_training
 
     client, cluster = gates_training.make_cluster()
     write_to_file(f"loading data for {len(region_configs)} region(s)", paths_ctx.updates_path)
 
     all_train_inputs, all_train_fps, test_regions = load_multiregion_data(
         region_configs, input_variables, datapath_args, flux_args=flux_args,
-        verbose=verbose, load_into_memory=load_into_memory, use_wandb=use_wandb)
+        verbose=verbose, load_into_memory=load_before_training, use_wandb=use_wandb)
 
     num_train_samples = len(all_train_fps.time)
     num_test_samples_per_region = {r["name"]: r["inputs"].sizes["fp_time"] for r in test_regions}
