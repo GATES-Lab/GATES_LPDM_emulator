@@ -11,11 +11,9 @@ background after continued footprint training:
                     ``bg_head.freeze_patience`` behaviour, but at a FIXED epoch so parallel
                     experiment arms share the same trajectory up to the refit).
   Phase 3 "refit"   epochs [refit_start_epoch, end):  the bg head is unfrozen and re-fitted
-                    with a fresh AdamW optimizer, in one of three modes:
-                      - "bg_only": encoder + processor + fp decoder are frozen; only the bg
-                        decoder trains, against the bg criterion alone. The fp head cannot
-                        move, so any bg recovery is attributable to head re-alignment on
-                        fixed trunk features.
+                    (with a fresh AdamW optimizer for the bg decoder). The refit ALWAYS
+                    trains the trunk (encoder + processor) together with the bg decoder —
+                    a head-only refit cannot recover a drifted trunk — in one of two modes:
                       - "bg_trunk": the fp decoder alone is frozen; the trunk AND the bg
                         decoder train against the bg criterion alone (the fp loss is
                         dropped, mirroring how the bg freeze drops the bg loss). The fp
@@ -25,10 +23,6 @@ background after continued footprint training:
                         receives bg gradients again, so the fp test loss shows whether
                         re-fitting the bg head makes the fp head drift.
 
-At the refit transition an optional linear probe first fits a scalar gain/offset a*y+b on
-the frozen head's TRAIN-set predictions and reports the calibrated TEST bg loss — the
-cheap "does amplitude calibration alone recover the gap?" check.
-
 The ``bg_schedule`` block (all keys optional; with no block this script reduces to
 ``train_dual_model.py`` behaviour)::
 
@@ -37,9 +31,8 @@ The ``bg_schedule`` block (all keys optional; with no block this script reduces 
                                      # (null = fall back to bg_head.freeze_patience)
         "refit_start_epoch": 120,    # unfreeze + refit from the start of this epoch
                                      # (null = never refit)
-        "refit_mode": "bg_only",     # "bg_only", "bg_trunk" or "joint" (see above)
-        "refit_lr_scale": 1.0,       # bg-decoder LR during refit = learning_rate * this
-        "linear_probe": true         # fit a*y+b (train) and log calibrated test loss
+        "refit_mode": "bg_trunk",    # "bg_trunk" or "joint" (see above)
+        "refit_lr_scale": 1.0        # bg-decoder LR during refit = learning_rate * this
     }
 
 The refit always starts the bg decoder's optimizer from scratch (fresh AdamW state); in
@@ -53,8 +46,7 @@ train both jointly" (see ``experiments_dual_fp_first.json``).
 
 Extra checkpoints/metrics on top of the usual ones: ``*_best_bg_refit.pt`` (best bg test
 loss WITHIN the refit phase, even if it never beats the pre-freeze best) and, under
-``refit/`` in W&B: the refit-phase bg best, the fp drift since the refit started, and the
-linear-probe results.
+``refit/`` in W&B: the refit-phase bg best and the fp drift since the refit started.
 
 Data loading, validation and the footprint metric pipeline are imported unchanged from
 ``train_dual_model``; the shared-data driver runs this script's ``train_and_save_model``
@@ -76,7 +68,6 @@ import wandb
 import gates
 import gates.training.training as gates_training
 import gates.training.training_dual as gates_training_dual
-import gates.training.dual_analysis as dual_analysis
 from gates.data.load_data import get_grid
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
@@ -98,8 +89,7 @@ from train_dual_model import (
 # Background-head schedule (freeze -> refit)
 # ---------------------------------------------------------------
 
-PHASE_CODES = {"joint": 0, "frozen": 1, "refit_bg_only": 2, "refit_joint": 3,
-               "refit_bg_trunk": 4}
+PHASE_CODES = {"joint": 0, "frozen": 1, "refit_joint": 3, "refit_bg_trunk": 4}
 
 
 class BgSchedule:
@@ -114,13 +104,12 @@ class BgSchedule:
         cfg = parameters.get("bg_schedule", {})
         self.freeze_epoch = cfg.get("freeze_epoch", None)
         self.refit_start_epoch = cfg.get("refit_start_epoch", None)
-        self.refit_mode = cfg.get("refit_mode", "bg_only")
+        self.refit_mode = cfg.get("refit_mode", "bg_trunk")
         self.refit_lr_scale = cfg.get("refit_lr_scale", 1.0)
-        self.linear_probe = cfg.get("linear_probe", True)
 
-        if self.refit_mode not in ("bg_only", "bg_trunk", "joint"):
-            raise ValueError("bg_schedule.refit_mode must be 'bg_only', 'bg_trunk' or "
-                             f"'joint', got {self.refit_mode!r}")
+        if self.refit_mode not in ("bg_trunk", "joint"):
+            raise ValueError("bg_schedule.refit_mode must be 'bg_trunk' or 'joint', "
+                             f"got {self.refit_mode!r}")
         if (self.freeze_epoch is not None and self.refit_start_epoch is not None
                 and self.refit_start_epoch <= self.freeze_epoch):
             raise ValueError("bg_schedule.refit_start_epoch must be > freeze_epoch "
@@ -134,12 +123,11 @@ class BgSchedule:
         self.refit_ckpt = None            # HeadCheckpoint for the best bg loss WITHIN the refit
         self.pre_refit_bg_best = None     # bg test-loss best at the moment the refit starts
         self.fp_test_at_refit_start = None
-        self.probe_metrics = {}
 
     @property
     def bg_head_active(self):
         """Whether the bg head is currently being trained (its loss reaches its params)."""
-        return self.phase in ("joint", "refit_bg_only", "refit_joint")
+        return self.phase in ("joint", "refit_bg_trunk", "refit_joint")
 
     def freeze(self, model, model_ctx, epoch, paths_ctx, reason):
         gates_training_dual.freeze_bg_head(model)
@@ -155,8 +143,7 @@ class BgSchedule:
         if self.phase == "joint" and self.freeze_epoch is not None and epoch >= self.freeze_epoch:
             self.freeze(model, model_ctx, epoch, paths_ctx, f"fixed bg_schedule.freeze_epoch={self.freeze_epoch}")
 
-    def maybe_start_refit(self, model, model_ctx, epoch, paths_ctx, bg_ckpt, losses,
-                          train_loader, test_loader):
+    def maybe_start_refit(self, model, model_ctx, epoch, paths_ctx, bg_ckpt, losses):
         if self.refit_start_epoch is None or epoch < self.refit_start_epoch:
             return
         if self.phase not in ("joint", "frozen"):
@@ -166,18 +153,6 @@ class BgSchedule:
                    "(no freeze_epoch hit and no patience freeze) — refitting from a live head.")
             print(msg)
             write_to_file(msg, paths_ctx.updates_path)
-
-        # Cheap calibration check BEFORE any refit training: fit a*y+b on the train set and
-        # report the calibrated test bg loss of the otherwise-unchanged head.
-        if self.linear_probe:
-            self.probe_metrics = run_linear_probe(model, model_ctx, train_loader, test_loader)
-            probe_msg = ("Linear probe (a*y+b fitted on train): "
-                         f"a={self.probe_metrics['refit/linear_probe_a']:.4f}, "
-                         f"b={self.probe_metrics['refit/linear_probe_b']:.4f}, "
-                         f"calibrated test bg loss {self.probe_metrics['refit/linear_probe_test_bg_loss']:.6f} "
-                         f"(uncalibrated {self.probe_metrics['refit/linear_probe_test_bg_loss_uncalibrated']:.6f})")
-            print(probe_msg)
-            write_to_file(probe_msg, paths_ctx.updates_path)
 
         # Unfreeze the bg decoder and give it a FRESH optimizer (a refit starts from clean
         # AdamW state; the stale pre-freeze moments are ~45 epochs old).
@@ -194,14 +169,7 @@ class BgSchedule:
         self.bg_optimizer = optim.AdamW(model.bg_decoder.parameters(),
                                         lr=model_ctx.lr * self.refit_lr_scale)
 
-        if self.refit_mode == "bg_only":
-            # Freeze the whole trunk + fp head: the fp predictions are constant from here
-            # on, so any bg improvement is head re-alignment on fixed features.
-            for module in (model.encoder, model.processor, model.fp_decoder):
-                for p in module.parameters():
-                    p.requires_grad_(False)
-            self.phase = "refit_bg_only"
-        elif self.refit_mode == "bg_trunk":
+        if self.refit_mode == "bg_trunk":
             # Freeze only the fp head: the trunk re-adapts to the bg objective and the
             # fixed fp head measures what that movement costs the footprint.
             for p in model.fp_decoder.parameters():
@@ -226,52 +194,11 @@ class BgSchedule:
         write_to_file(msg, paths_ctx.updates_path)
 
 
-@torch.no_grad()
-def run_linear_probe(model, model_ctx, train_loader, test_loader):
-    """Fit a scalar gain/offset a*y+b on the bg head's TRAIN predictions, evaluate on TEST.
-
-    The fit uses only training data (no test leakage); the reported metric is the test-set
-    bg criterion applied to the calibrated predictions ``a*y_hat + b``, alongside the
-    uncalibrated test loss for reference. All in normalised bg space, num_classes pooled.
-    """
-    model.eval()
-
-    def collect(loader):
-        preds, trues = [], []
-        for batch in loader:
-            features = batch[0].to(model_ctx.device)
-            bg_batch = batch[2].to(model_ctx.device)
-            bg_pred = model(features)["background"]
-            preds.append(bg_pred.reshape(-1).cpu())
-            trues.append(bg_batch.reshape(-1).cpu())
-        return torch.cat(preds), torch.cat(trues)
-
-    train_pred, train_true = collect(train_loader)
-    var = torch.var(train_pred, unbiased=False)
-    if var.item() == 0.0:
-        a, b = 1.0, 0.0  # degenerate constant predictor; calibration undefined
-    else:
-        cov = torch.mean((train_pred - train_pred.mean()) * (train_true - train_true.mean()))
-        a = (cov / var).item()
-        b = (train_true.mean() - a * train_pred.mean()).item()
-
-    test_pred, test_true = collect(test_loader)
-    calibrated_loss = model_ctx.bg_criterion_test(a * test_pred + b, test_true).item()
-    uncalibrated_loss = model_ctx.bg_criterion_test(test_pred, test_true).item()
-
-    return {
-        "refit/linear_probe_a": a,
-        "refit/linear_probe_b": b,
-        "refit/linear_probe_test_bg_loss": calibrated_loss,
-        "refit/linear_probe_test_bg_loss_uncalibrated": uncalibrated_loss,
-    }
-
-
 # ---------------------------------------------------------------
 # Training loop (phase-aware variant of train_dual_model.train_one_epoch)
 # ---------------------------------------------------------------
 
-def train_one_epoch(model, loader, model_ctx, sched, epoch, paths_ctx=None, analyser=None):
+def train_one_epoch(model, loader, model_ctx, sched, epoch, paths_ctx=None):
     """One training epoch; the loss composition and which optimizers step depend on
     ``sched.phase`` (see module docstring). Both per-head losses are always logged.
     """
@@ -280,11 +207,6 @@ def train_one_epoch(model, loader, model_ctx, sched, epoch, paths_ctx=None, anal
     if phase == "frozen":
         # keep the frozen head's dropout / norm statistics fixed
         model.bg_decoder.eval()
-    elif phase == "refit_bg_only":
-        # trunk + fp head are frozen: keep their dropout / norm statistics fixed too
-        model.encoder.eval()
-        model.processor.eval()
-        model.fp_decoder.eval()
     elif phase == "refit_bg_trunk":
         # only the fp head is frozen; the trunk keeps training (on the bg objective)
         model.fp_decoder.eval()
@@ -318,28 +240,19 @@ def train_one_epoch(model, loader, model_ctx, sched, epoch, paths_ctx=None, anal
             fp_loss = model_ctx.fp_criterion(fp_pred, true_values, fp_batch)
             bg_loss = model_ctx.bg_criterion(bg_pred.detach(), bg_batch)
             loss = (1 - model_ctx.bg_loss_weight) * fp_loss
-        elif phase in ("refit_bg_only", "refit_bg_trunk"):
-            # The fp head is frozen and its loss dropped (mirroring the bg freeze); only
-            # the bg criterion trains, unweighted — the weight only rescales the single
-            # term. In "refit_bg_trunk" the bg gradients also reach the (live) trunk;
-            # fp_loss on detached predictions is logging only in both modes.
+        elif phase == "refit_bg_trunk":
+            # The fp head is frozen and its loss dropped (mirroring the bg freeze); the
+            # bg criterion alone trains the trunk + bg decoder, unweighted — the weight
+            # only rescales the single term. fp_loss on detached predictions is logging only.
             fp_loss = model_ctx.fp_criterion(fp_pred.detach(), true_values, fp_batch)
             bg_loss = model_ctx.bg_criterion(bg_pred, bg_batch)
             loss = bg_loss
         else:
             raise RuntimeError(f"unknown schedule phase {phase!r}")
 
-        # ANALYSIS ONLY (gates/training/dual_analysis.py), as in train_dual_model.
-        if analyser is not None and analyser.should_measure(i):
-            analyser.measure(fp_loss, bg_loss, model_ctx.bg_loss_weight,
-                             bg_frozen=(phase == "frozen"))
-
         loss.backward()
-        if phase != "refit_bg_only":
-            # in refit_bg_only every main-optimizer param is frozen; skip the no-op step
-            # (in refit_bg_trunk this step updates the trunk from the bg gradients)
-            model_ctx.optimizer.step()
-        if sched.bg_optimizer is not None and phase in ("refit_bg_only", "refit_bg_trunk", "refit_joint"):
+        model_ctx.optimizer.step()  # trunk (+ fp head unless frozen); bg params only before the refit
+        if sched.bg_optimizer is not None and phase in ("refit_bg_trunk", "refit_joint"):
             sched.bg_optimizer.step()
 
         with torch.no_grad():
@@ -388,34 +301,20 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
     bg_ckpt = HeadCheckpoint("bg", paths_ctx.model_path / f"{paths_ctx.model_name}_best_bg.pt",
                              delta=model_ctx.bg_freeze_min_delta, verbose=verbose)
 
-    analysis_cfg = training_ctx.parameters.get("dual_analysis", {})
-    analyser = None
-    if analysis_cfg.get("enabled", False):
-        analyser = dual_analysis.TrunkGradAnalyser(model, every=analysis_cfg.get("grad_norm_every", 50))
-        print("dual_analysis enabled: logging loss ratios and trunk grad norms under 'analysis/'")
-
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx + epoch_so_far
         print(f"\n--- Start Epoch: {epoch} (phase: {sched.phase}) ---")
 
         # --- Schedule transitions, applied BEFORE the epoch trains ---
         sched.maybe_freeze(model, model_ctx, epoch, paths_ctx)
-        sched.maybe_start_refit(model, model_ctx, epoch, paths_ctx, bg_ckpt, losses,
-                                train_loader, test_loader)
+        sched.maybe_start_refit(model, model_ctx, epoch, paths_ctx, bg_ckpt, losses)
 
         avg_train_total, avg_train_fp, avg_train_bg = train_one_epoch(
-            model, train_loader, model_ctx, sched, epoch, paths_ctx=paths_ctx, analyser=analyser
+            model, train_loader, model_ctx, sched, epoch, paths_ctx=paths_ctx
         )
         avg_test_total, avg_test_fp, avg_test_bg, bg_mae_denorm, fp_test_out, bg_test_out, bg_test_true = validate_and_predict(
             model, test_loader, model_ctx, output_norm=output_norm
         )
-
-        analysis_metrics = {}
-        if analyser is not None:
-            analysis_metrics = dual_analysis.loss_ratio_metrics(
-                avg_train_fp, avg_train_bg, avg_test_fp, avg_test_bg, model_ctx.bg_loss_weight)
-            analysis_metrics.update(analyser.epoch_means())
-            analyser.reset()
 
         losses["train"].append(avg_train_total)
         losses["test"].append(avg_test_total)
@@ -462,7 +361,6 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "best/epoch_bg": bg_ckpt.best_epoch,
                 "bg/frozen": int(sched.phase == "frozen"),
                 "bg/phase": PHASE_CODES[sched.phase],
-                **analysis_metrics,
                 **list_of_metrics,
             }
             if bg_mae_denorm is not None:
@@ -473,7 +371,6 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                     sched.refit_ckpt.best_loss - sched.pre_refit_bg_best)
                 if sched.fp_test_at_refit_start is not None:
                     logging_dict["refit/fp_drift"] = avg_test_fp - sched.fp_test_at_refit_start
-                logging_dict.update(sched.probe_metrics)
             wandb.log(logging_dict, step=epoch)
 
         model_ctx.early_stopping(avg_test_total, model)
@@ -549,9 +446,6 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         if sched.fp_test_at_refit_start is not None and losses["test_fp"]:
             summary_msg += (f"; fp test loss {sched.fp_test_at_refit_start:.6f} (refit start) -> "
                             f"{losses['test_fp'][-1]:.6f} (final)")
-        if sched.probe_metrics:
-            summary_msg += (f"; linear probe calibrated test bg loss "
-                            f"{sched.probe_metrics['refit/linear_probe_test_bg_loss']:.6f}")
     print(summary_msg)
     write_to_file(summary_msg, paths_ctx.updates_path)
 
@@ -581,7 +475,6 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "refit/pre_refit_best_test_loss_bg": sched.pre_refit_bg_best,
                 "refit/fp_test_loss_at_start": sched.fp_test_at_refit_start,
                 "refit/fp_test_loss_final": losses["test_fp"][-1] if losses["test_fp"] else None,
-                **sched.probe_metrics,
             })
         wandb.run.summary.update(summary_update)
 
@@ -616,6 +509,13 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     paths_ctx.make_dirs()
 
     set_reproducibility(parameters.get("seed", 34))
+    if parameters.get("deterministic", False):
+        # Bit-exact reproducibility on GPU (verified: tests/gpu_determinism_test.py). Seeds +
+        # cuDNN alone leave the GNN's scatter atomics nondeterministic; this forces
+        # deterministic kernels (cuBLAS needs the workspace env set before its first call).
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.use_deterministic_algorithms(True)
+        print("deterministic=True: torch.use_deterministic_algorithms enabled")
 
     if use_wandb and wandb.run is not None:
         wandb.config.update(parameters, allow_val_change=True)

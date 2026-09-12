@@ -32,6 +32,7 @@ Please check the following HowTos for info on different aspects!
 - [HOW_TO_evaluation.md](How_Tos/HOW_TO_evaluation.md) for info on the metrics and loss functions
 - [HOW_TO_WandB.md](How_Tos/HOW_TO_WandB.md) for info on how to set up tracking and logging of your models with the Weights and Biases package
 - [HOW_TO_BOUNDARIES.md](How_Tos/HOW_TO_BOUNDARIES.md)
+- [HOW_TO_DUAL_REFIT_TRAINING.md](How_Tos/HOW_TO_DUAL_REFIT_TRAINING.md) for the dual-head (footprint + background) trainer, its joint loss and the bg-head freeze/refit schedule
 
 ## Setting up
 
