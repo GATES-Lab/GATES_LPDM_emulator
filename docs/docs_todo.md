@@ -57,7 +57,7 @@ The output lands in `docs/build/html/index.html`.
 
 - [ ] Add `docs/build/` and `docs/source/_autosummary/` to `.gitignore`.
 - [ ] Write real landing-page content for `index.rst` (currently placeholder).
-- [ ] Wire the `How_Tos/` guides into the docs nav (via `myst_parser`, keeping `How_Tos/` as the source of truth).
+- [x] Wire the `How_Tos/` guides into the docs nav (via `myst_parser`, keeping `How_Tos/` as the source of truth).
 - [ ] Double-check the one-line module summaries in `source/api/` against what each file actually does — some were written from sparse docstrings and may need correcting.
 - [ ] Add navbar polish: GitHub repo link/icon, logo (`html_theme_options` in `conf.py`).
 - [ ] Set up a GitHub Actions workflow to build and publish to `gh-pages` once ready to deploy.

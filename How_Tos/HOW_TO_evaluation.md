@@ -3,7 +3,6 @@
 This guide covers evaluation metrics and loss functions for the GATES footprint emulator, using `metrics.py` and `loss_functions.py`.
 
 ---
-
 ## Footprint Metrics
 
 >Access all the metrics with
