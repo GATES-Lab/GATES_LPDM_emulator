@@ -656,7 +656,8 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
                 use_wandb=use_wandb)
 
     # Grid from first test region (all regions share the same spatial structure)
-    grid, _ = get_grid(first_region["fp_xr"], parameters.get("grid_reference_fp"))
+    grid, _ = get_grid(first_region["fp_xr"], parameters.get("grid_reference_fp"),
+                       fix_transpose=parameters.get("review_fixes", {}).get("fix_grid_transpose", False))
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
                 description="Grid object used during training", use_wandb=use_wandb)
 

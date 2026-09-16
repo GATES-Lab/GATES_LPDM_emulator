@@ -2277,7 +2277,7 @@ def cut_topog_data(topog_file, landcover_file, fp, size, pad_mode="zeros"):
     return result
 
 
-def get_grid(fp_xr, reference_fp=0):
+def get_grid(fp_xr, reference_fp=0, fix_transpose=False):
     """Produce a reference grid and node indices.
 
     The grid is made from the lat/lon coordinates of the reference footprint, and the
@@ -2289,6 +2289,13 @@ def get_grid(fp_xr, reference_fp=0):
             and coordinates time, lat, lon.
         reference_fp (int, optional): Index of the reference footprint to use for
             grid generation. Defaults to 0 (the first footprint).
+        fix_transpose (bool, optional): If True, build the node list in the same
+            order the data is flattened (``stack(["lat", "lon"])``): lat is the outer
+            (slow) axis and lon the inner (fast) axis, so node ``k`` is
+            ``(lat[k // n_lon], lon[k % n_lon])``. If False (default), reproduce the
+            legacy ``np.meshgrid(..., indexing="xy")`` ordering, which is the
+            transpose of the data order (finding C1) — kept as the default so
+            existing checkpoints and saved grids are reproduced exactly.
 
     Returns:
         tuple:
@@ -2297,13 +2304,26 @@ def get_grid(fp_xr, reference_fp=0):
     """
     if reference_fp is None:
         reference_fp = 0
-        
-    single_meshgrid = np.meshgrid(fp_xr.lat_coords.isel(time=reference_fp), fp_xr.lon_coords.isel(time=reference_fp))  
 
-    latlons = [(single_meshgrid[0][i,j], single_meshgrid[1][i,j]) for i in range(fp_xr.lon.size) for j in range(fp_xr.lat.size)]
+    lat_c = fp_xr.lat_coords.isel(time=reference_fp).values
+    lon_c = fp_xr.lon_coords.isel(time=reference_fp).values
+    lat_idx = fp_xr.lat.values
+    lon_idx = fp_xr.lon.values
 
-    idx_meshgrid = np.meshgrid(fp_xr.lat.values, fp_xr.lon.values)
-    idx_latlons = [(idx_meshgrid[0][i,j], idx_meshgrid[1][i,j]) for i in range(fp_xr.lon.size) for j in range(fp_xr.lat.size)]
+    if fix_transpose:
+        # Data order: lat outer, lon inner — matches stack(["lat", "lon"]) so grid
+        # node k lines up with flattened data node k (finding C1).
+        latlons = [(la, lo) for la in lat_c for lo in lon_c]
+        idx_latlons = [(i, j) for i in lat_idx for j in lon_idx]
+    else:
+        # Legacy: np.meshgrid default indexing="xy" returns arrays shaped
+        # (n_lon, n_lat), and iterating i over lon then j over lat yields node
+        # k = (lat[k % n_lat], lon[k // n_lat]) — the transpose of the data order.
+        single_meshgrid = np.meshgrid(lat_c, lon_c)
+        latlons = [(single_meshgrid[0][i, j], single_meshgrid[1][i, j]) for i in range(fp_xr.lon.size) for j in range(fp_xr.lat.size)]
+
+        idx_meshgrid = np.meshgrid(lat_idx, lon_idx)
+        idx_latlons = [(idx_meshgrid[0][i, j], idx_meshgrid[1][i, j]) for i in range(fp_xr.lon.size) for j in range(fp_xr.lat.size)]
 
     return latlons, idx_latlons
 

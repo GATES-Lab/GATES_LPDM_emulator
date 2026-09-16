@@ -454,7 +454,8 @@ def train_and_save_model(parameters, model_save_dir):
     save_object(parameters, "training_settings", paths_ctx.training_outputs_path, model_name,  file_type="json", description=f"Training settings and hyperparameters for model {model_name}", use_wandb=use_wandb)
 
     # create the grid object to make the mesh with and save
-    grid, _ = get_grid(train_fp_data, parameters.get("grid_reference_fp"))
+    grid, _ = get_grid(train_fp_data, parameters.get("grid_reference_fp"),
+                       fix_transpose=parameters.get("review_fixes", {}).get("fix_grid_transpose", False))
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
                            description="Grid object used during training", use_wandb=use_wandb)
     print("dyanmic edges parameters:", parameters.get("dynamic_edges", None))
