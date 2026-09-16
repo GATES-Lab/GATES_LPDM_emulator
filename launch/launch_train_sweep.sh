@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --partition=gpu
-#SBATCH --mem=180GB
+#SBATCH --mem=220GB
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=5
@@ -43,5 +43,5 @@ export WANDB_NAME="${SLURM_JOB_ID}_${SLURM_JOB_NAME}"
 export WANDB_NOTES="Sweep job - cpus-per-task: $SLURM_CPUS_PER_TASK, memory: $SLURM_MEM_PER_NODE, params: $SWEEP_PARAM_FILE"
 
 echo "train: $PARAM_FILE from $PARAM_DIR"
-python train_GATES_model.py "$PARAM_FILE" --file_path "$PARAM_DIR"
+python scripts/train_GATES_model.py "$PARAM_FILE" --file_path "$PARAM_DIR"
 echo "done: $SLURM_JOB_NAME"
