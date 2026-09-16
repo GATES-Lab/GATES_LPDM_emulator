@@ -319,6 +319,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
     all_inputs = []
     all_fp_xr = []
     loading_times = {}
+    failed_years = []
 
     # W&B loading metrics accumulate across calls (train then test, or across
     # regions) via the shared wandb_state from initialise_wandb_loading(). If the
@@ -380,9 +381,14 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
             loaded_samples = len(data.fp_xr.fp.time)
 
         except Exception as e:
+            # Record the failure and keep going so every year's error surfaces in
+            # one run, then raise after the loop (finding C5). Silently continuing
+            # with loaded_samples=0 would either train on fewer years than asked
+            # for, or blow up later in an opaque `xr.concat([])`.
             print(f"Error loading data for {year}: {e}")
             traceback.print_exc()
             loaded_samples = 0
+            failed_years.append((year_key, repr(e)))
 
         elapsed_mins = (time.perf_counter() - year_start) / 60
         loading_times[year_key] = f"{elapsed_mins:.2f}mins"
@@ -409,7 +415,13 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
     print("\n".join(f"{k} : {v}" for k, v in loading_times.items()))
     print("")
 
-    
+    if failed_years:
+        summary = "; ".join(f"{yr}: {err}" for yr, err in failed_years)
+        raise RuntimeError(
+            f"Data loading failed for {len(failed_years)} year(s) and was not "
+            f"silently skipped: {summary}"
+        )
+
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
     inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
 
@@ -573,20 +585,28 @@ def initialise_losses():
         variable is present), each initialised to empty lists/dicts ready to be
         appended to.
     """
-    metrics_dict = {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
-    flux_metrics_dict = {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
+    # Build a fresh dict with brand-new lists on every call. A shallow
+    # ``metrics_dict.copy()`` would share the same list objects across keys
+    # (e.g. metrics_transformed["mse"] is metrics_original["mse"]), so appends
+    # through one key would corrupt the other series (finding C4).
+    def new_metrics():
+        return {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
+
+    def new_flux_metrics():
+        return {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
+
     losses = {
         "train": [],
         "test": [],
         "test_criterion": {"train": [], "test": []},
-        "metrics_transformed": metrics_dict.copy(),
-        "metrics_original": metrics_dict.copy(),
+        "metrics_transformed": new_metrics(),
+        "metrics_original": new_metrics(),
         "metrics_fluxes_static": {
-            "uniform": flux_metrics_dict.copy(),
-            "checkerboard": flux_metrics_dict.copy(),
-            "checkerboard_10": flux_metrics_dict.copy(),
+            "uniform": new_flux_metrics(),
+            "checkerboard": new_flux_metrics(),
+            "checkerboard_10": new_flux_metrics(),
         },
-        "metrics_fluxes": flux_metrics_dict.copy(),
+        "metrics_fluxes": new_flux_metrics(),
     }
     return losses
 

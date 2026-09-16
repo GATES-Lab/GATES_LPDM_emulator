@@ -268,3 +268,13 @@ We accept the review's phasing. Concretely:
 - Legacy directories (H1) — tag-and-delete, or keep for reproducibility of v0.1.0 outputs?
 - Do we commit to P1/P2 (preprocess-to-store + tensor dataset) this cycle, or fix C3/C9/C24 minimally
   and defer the loader rewrite?
+
+## 6. Implementation log
+
+Fixes are implemented on branch `code-review-fixes` (worktree), one commit per finding.
+
+| Finding | Status | Changes outputs? | Commit | Verification |
+| --- | --- | --- | --- | --- |
+| C4 | Committed | No | C4+C5+C6 (one commit) | `new_metrics()`/`new_flux_metrics()` factories return fresh lists per key; isolated test confirms `metrics_original["mse"]` stays `[]` after appending to `metrics_transformed["mse"]`. Terminal smoke test (SAHARA size-10, 1 epoch) ran clean. |
+| C5 | Committed | No | C4+C5+C6 (one commit) | Per-year load errors collected in `failed_years` and raised after the loop with a summary, instead of silently continuing with `loaded_samples=0`. Happy path verified by terminal smoke test. |
+| C6 | Committed | No | C4+C5+C6 (one commit) | `load_fps` except-branch now re-raises the original error when no file matches the bad-files list, instead of falling through to a `NameError`. Workaround branch (unchanged) exercised by the smoke test, which loads a known bad SAHARA file. |

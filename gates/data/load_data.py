@@ -140,10 +140,6 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
         without_bad_files = [path+f for f in without_bad_files]
         bad_files_list = [path+f for f in bad_files_list]
 
-        if len(without_bad_files) == len(fp_files):
-            print("There was a problem opening files!! compared against the list of known bad files and couldnt find a match")
-            print("check if there has been a problem, or maybe a new bad file needs to be added to the list!")
-
         if len(without_bad_files) < len(fp_files):
             if verbose: print("at least one of the files was in the bad files list, opening with workaround")
             # error arises because fp file for Brazil Nov 2015 has non-monotonic timestamps, use workaround
@@ -171,7 +167,12 @@ def load_fps(fp_datadir, verbose=False, chunk=True, parallel_loading=False, drop
                 # concatenate all the good files with the bad ones along the time dimension
                 fp_data_full = xr.concat([most]+bad_arrays, dim="time")
         else:
-            print("there was a problem", e)
+            # No file matched the known-bad list, so the workaround cannot help and
+            # fp_data_full was never assigned. Re-raise the original error rather
+            # than falling through to a NameError that hides it (finding C6).
+            print("There was a problem opening files, and none matched the list of known bad files.")
+            print("Check the path, or add a newly-encountered bad file to the bad files list.")
+            raise
 
     fp_data_full = _rename_latlon(fp_data_full)
     fp_data_full = fp_data_full.sortby('time')
