@@ -1560,6 +1560,16 @@ def _cut_satellite_met_multi_delta(
     else:
         met_for_crop = met_loaded
 
+    # Coalesce the selected subset's many native {time:1} chunks into
+    # chunk_size-sized time blocks before cropping. The scattered `.sel` above
+    # already read only the timestamps we need, so this is a cheap contiguous
+    # concat — no shuffle, no extra reads. Fewer, larger chunks mean far fewer
+    # dask tasks/objects per block read, which cuts the object churn behind the
+    # "full garbage collections took N% CPU time" worker warnings.
+    if bool(chunk_size) and not load_into_memory:
+        print(f"chunked data to size {chunk_size}")
+        met_for_crop = met_for_crop.chunk({"time": chunk_size})
+
     # Lookup: timestamp → integer position in met_for_crop
     time_to_pos = {t: i for i, t in enumerate(met_for_crop.time.values)}
 
@@ -1582,10 +1592,13 @@ def _cut_satellite_met_multi_delta(
         n = len(pos)
         if bool(chunk_size) and not load_into_memory:
             # Met is lazy and chunk_size is set: read the met in chunk_size-sample
-            # blocks and crop each block in numpy. Reading a block first is a plain,
-            # parallel zarr read (no vindex); cropping the numpy block then builds no
-            # dask graph at all. This bounds peak memory to one block's read and avoids
-            # the large-graph warnings entirely.
+            # blocks and crop each block in numpy. met_for_crop was rechunked to
+            # {time: chunk_size} above, so each block read pulls whole coalesced
+            # time chunks (a plain, parallel zarr read, no vindex) instead of many
+            # {time:1} chunks. Cropping the numpy block then builds no dask graph at
+            # all. This bounds peak memory to one block's read and avoids the
+            # large-graph warnings entirely.
+            print(f"Loading the met in chunks of size {chunk_size} along the time dimension")
             blocks = []
             for start in range(0, n, chunk_size):
                 sl = slice(start, min(start + chunk_size, n))

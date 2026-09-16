@@ -1886,7 +1886,7 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
         met_unique = met.sel(time=unique_met_times)
         print(f"Graph build: {time.perf_counter()-t0:.2f}s")
         # print weight and chunks of unique
-        print(f"met_unique has chunks {met_unique.chunks} and size {met_unique.nbytes / 1e6:.2f} MB")
+         
         
         print("Tasks in graph:", len(met_unique.__dask_graph__()))
         #met_unique = met_unique.chunk({"time": -1})  # merge into one chunk before compute
