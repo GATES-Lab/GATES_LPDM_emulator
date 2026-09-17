@@ -32,7 +32,9 @@ Please check the following HowTos for info on different aspects!
 - [HOW_TO_evaluation.md](How_Tos/HOW_TO_evaluation.md) for info on the metrics and loss functions
 - [HOW_TO_WandB.md](How_Tos/HOW_TO_WandB.md) for info on how to set up tracking and logging of your models with the Weights and Biases package
 - [HOW_TO_BOUNDARIES.md](How_Tos/HOW_TO_BOUNDARIES.md)
-- [HOW_TO_DUAL_REFIT_TRAINING.md](How_Tos/HOW_TO_DUAL_REFIT_TRAINING.md) for the dual-head (footprint + background) trainer, its joint loss and the bg-head freeze/refit schedule
+- [HOW_TO_DUAL_REFIT_TRAINING.md](How_Tos/HOW_TO_DUAL_REFIT_TRAINING.md) for the dual-head (footprint + background) trainer, its joint loss and the bg-head freeze/refit schedule (section 4b: `train_dual_headlr_model.py`, the copy with per-head learning rates)
+- [HOW_TO_MULTI_GPU.md](How_Tos/HOW_TO_MULTI_GPU.md) for training the dual-head model on several GPUs of one node (`"distributed": {"num_gpus": N}`) — read its note on the effective batch size first
+- [experiment_summaries/dual_head_experiments_summary.md](experiment_summaries/dual_head_experiments_summary.md) for the results of every dual-head experiment (schedules, weight sweeps, per-head learning rates) with their W&B run ids
 
 ## Setting up
 

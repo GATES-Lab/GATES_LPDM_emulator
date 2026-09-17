@@ -9,9 +9,12 @@ import pandas as pd
 import torch
 import pickle
 import random
+import os
 import xarray as xr
 from pathlib import Path
 import wandb
+
+from .distributed import is_main_process
 
 
 
@@ -26,6 +29,8 @@ def write_to_file(message, file_path):
     Returns:
         None
     """
+    if not is_main_process():
+        return  # multi-GPU: rank 0 owns the log file
     file_path = Path(file_path)
     if not file_path.is_file():
         raise FileNotFoundError(f"Log file not found at path: {file_path}")
@@ -157,6 +162,21 @@ def set_reproducibility(seed=None):
     return seed
 
 
+def enable_deterministic_algorithms(parameters):
+    """Turn on strict deterministic kernels when ``parameters["deterministic"]`` is true.
+
+    Bit-exact reproducibility on GPU within one process (verified:
+    tests/gpu_determinism_test.py). Seeds + cuDNN alone leave the GNN's scatter atomics
+    nondeterministic; this forces deterministic kernels (cuBLAS needs the workspace env set
+    before its first call). Returns whether it was enabled.
+    """
+    if not parameters.get("deterministic", False):
+        return False
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True)
+    print("deterministic=True: torch.use_deterministic_algorithms enabled")
+    return True
+
 
 class EarlyStopping:
     """
@@ -226,8 +246,10 @@ class EarlyStopping:
         """
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}). Saving model...')
-        torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
+        if not is_main_process():
+            return  # multi-GPU: every rank tracks the state, only rank 0 writes the file
+        torch.save(model.state_dict(), self.path)
 
         if self.use_wandb:
             _ = save_wandb_artifact(self.model_name, f"checkpoint_epoch_{self.counter}", "model", f"Best model checkpoint at epoch {self.counter} with val_loss: {val_loss:.6f}", self.path)
@@ -280,7 +302,8 @@ class HeadCheckpoint:
             self.best_loss = val_loss
             self.best_epoch = epoch
             self.counter = 0
-            torch.save(model.state_dict(), self.path)
+            if is_main_process():  # multi-GPU: only rank 0 writes the file
+                torch.save(model.state_dict(), self.path)
             return True
         self.counter += 1
         return False

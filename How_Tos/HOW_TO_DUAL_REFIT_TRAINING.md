@@ -134,6 +134,59 @@ Optional block read by `setup_dual_model` (independent of, and older than, `bg_s
   patience the head is frozen. In `train_dual_refit_model.py` this fallback is only consulted
   when `bg_schedule.freeze_epoch` is `null` and the schedule is still in the `joint` phase.
 
+## 4b. Per-head learning rates: `train_dual_headlr_model.py`
+
+`train_dual_headlr_model.py` is a **copy** of `train_dual_refit_model.py` (same data pipeline,
+schedule, checkpoints and logging) whose only addition is that the trunk, the footprint head and
+the background head can train at **different learning rates**. Configure it with an optional
+`head_learning_rates` block; every missing key falls back to the top-level `learning_rate`, so
+without the block the script behaves exactly like the refit trainer:
+
+```json
+"learning_rate": 5e-5,
+"head_learning_rates": {
+  "trunk": 5e-5,   // encoder + processor (every parameter that is not in a decoder head)
+  "fp": 5e-5,      // fp_decoder (footprint head)
+  "bg": 5e-4       // bg_decoder (background / boundary-condition head)
+}
+```
+
+How it works:
+
+- `setup_dual_model` still builds the model, criteria and early stopping, but its optimizer is
+  replaced (before any step) by **one AdamW with three parameter groups** — `trunk`, `fp`, `bg` —
+  each at its own LR. Every parameter lands in exactly one group (asserted at start-up).
+- `bg_head.weight_decay` is still applied to the `bg` group. `bg_head.lr_scale` is **rejected**
+  when `head_learning_rates` is present (the two would multiply silently); use
+  `head_learning_rates.bg` instead.
+- During a refit (section 5) the fresh bg optimizer uses `head_learning_rates.bg * refit_lr_scale`
+  rather than `learning_rate * refit_lr_scale`.
+- The resolved rates are saved in `training_settings_*.json` (`head_learning_rates_resolved`),
+  in every epoch checkpoint (`head_learning_rates`), in `*_updates.txt`, and logged once to W&B as
+  `lr/trunk`, `lr/fp`, `lr/bg`.
+
+**Background warm-up (`bg_warmup`, same trainer).** Lets the bg head reach full speed only once
+the trunk features have settled, so its minimum lands later and closer to the fp head's:
+
+```json
+"bg_warmup": {
+  "epochs": 40,          // ramp over the first 40 epochs; full speed from epoch 40 on (0/null = off)
+  "mode": "lr",          // "lr": bg-group LR = head_learning_rates.bg * scale
+                         // "weight": bg loss term = w * scale * bg_loss (fp coefficient stays 1 - w)
+  "start_scale": 0.0,    // scale at epoch 0 (0 = bg head does not move at all)
+  "shape": "linear"      // or "cosine" (half-cosine from start_scale to 1)
+}
+```
+
+The scale is applied at the start of each epoch and logged as `bg/warmup_scale` (plus
+`lr/bg_current`). It only applies to the joint phase; a `bg_schedule.freeze_epoch` inside the
+warm-up window is rejected. Example sweep: `experiments_dual_bgwarmup_2014-15_test2016.json`.
+
+Run it directly (`python train_dual_headlr_model.py <params.json>`) or through the shared-data
+driver / launcher with `TRAINER=train_dual_headlr_model sbatch launch_dual_refit_isambard.sh`
+(see section 11). `experiments_dual_head_lr.json` is an example sweep over the bg-head rate.
+Unit test: `python tests/head_lr_test.py` (CPU, seconds; see section 12).
+
 ## 5. The freeze / refit schedule: `bg_schedule`
 
 ```json
@@ -302,6 +355,10 @@ is uploaded per improvement by `EarlyStopping` as before).
 
 ## 11. Running it
 
+> The per-head learning-rate copy (`train_dual_headlr_model.py`, section 4b) runs the same
+> way: pass `--trainer train_dual_headlr_model` to the driver, or `TRAINER=train_dual_headlr_model`
+> to `launch_dual_refit_isambard.sh`.
+
 **Directly** (one run, its own data load):
 
 ```bash
@@ -348,6 +405,9 @@ Arms run **sequentially** in one job. For multi-arm jobs with large test sets pr
 for hours between arms.
 
 ## 12. Testing
+
+> `tests/head_lr_test.py` covers the per-head learning rates of `train_dual_headlr_model.py`
+> (group construction, rates taking effect, refit LR); run it the same way as the schedule test.
 
 [`tests/bg_refit_schedule_test.py`](../tests/bg_refit_schedule_test.py) runs `BgSchedule` and
 `train_one_epoch` on a tiny dummy dual model (CPU, seconds, no data) and asserts, phase by phase,

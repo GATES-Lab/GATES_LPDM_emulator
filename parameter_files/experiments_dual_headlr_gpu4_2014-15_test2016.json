@@ -1,0 +1,16 @@
+{
+  "experiments": [
+    {
+      "name": "joint150_bg0p1_trunkfp5e-5_bg5e-6_gpu4",
+      "overrides": {
+        "loss_functions.bg_loss_weight": 0.1,
+        "head_learning_rates": { "trunk": 5e-5, "fp": 5e-5, "bg": 5e-6 },
+        "distributed": { "num_gpus": 4 },
+        "wandb": {
+          "group": "isambard_multigpu",
+          "notes": "First full-length MULTI-GPU run (4x GH200, gates/training/distributed.py). Identical parameters to the single-GPU arm joint150_bg0p1_trunkfp5e-5_bg5e-6 of the head-LR sweep (W&B run kyqkwfbu, job 6500993: train 2014+2015 / test 2016, continuous joint 150 epochs, bg_loss_weight 0.1, trunk/fp 5e-5, bg 5e-6, deterministic) EXCEPT distributed.num_gpus=4: batch_size 5 is per GPU, so the effective batch is 20 and each epoch has 4x fewer optimizer steps. Learning rates deliberately NOT rescaled. Purpose: measure wall-time speed-up and the effect of the larger effective batch on fp/bg test losses vs kyqkwfbu (fp 0.429@146, bg 0.099@144)."
+        }
+      }
+    }
+  ]
+}

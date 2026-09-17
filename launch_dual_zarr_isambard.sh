@@ -20,6 +20,13 @@
 # Submit with:  sbatch launch_dual_zarr_isambard.sh
 # Override the parameter file with:
 #   PARAM_FILE=my_params.json sbatch launch_dual_zarr_isambard.sh
+#
+# Multi-GPU (single node, up to 4 GH200s): request the GPUs on the command line AND enable
+# them in the parameter file ("distributed": {"num_gpus": 4} or "auto"), e.g.
+#   sbatch --gres=gpu:4 launch_dual_zarr_isambard.sh
+# (keep the CPU request as is: 288 CPUs made the data load ~5x slower)
+# batch_size is PER GPU, so the effective batch is batch_size x num_gpus — see
+# How_Tos/HOW_TO_MULTI_GPU.md before comparing against single-GPU runs.
 
 REPO=/projects/b5bn/public/Nawid/GATES_LPDM_emulator
 # v3 = v2 + editable install of the gates package (see gates_env_v3.def /

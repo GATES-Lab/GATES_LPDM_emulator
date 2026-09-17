@@ -748,6 +748,11 @@ def make_cluster():
     reserving 2 CPUs and using 80% of memory split across workers. Skips creating a
     cluster (falling back to the synchronous scheduler) if fewer than 4 CPUs are available.
 
+    The worker count is capped (default 64, override with the ``GATES_DASK_MAX_WORKERS``
+    environment variable): whole-node jobs for multi-GPU training see 288 CPUs, and a
+    286-worker LocalCluster times out while starting (job 6628781). Jobs with up to 66 CPUs
+    are unaffected by the default cap.
+
     Returns:
         tuple: ``(client, cluster)`` — a ``dask.distributed.Client`` and
         ``LocalCluster``, or ``(None, None)`` if fewer than 4 CPUs are available.
@@ -760,10 +765,12 @@ def make_cluster():
         return None, None
 
     
-    n_workers = max(1, n_cpus - 2)
+    max_workers = int(os.environ.get("GATES_DASK_MAX_WORKERS", 64))
+    n_workers = max(1, min(n_cpus - 2, max_workers))
     mem_per_worker = f"{0.8 * mem_gb / n_workers:.1f}GB"
 
-    print(f"{n_cpus} CPUs detected — setting up Dask cluster with {n_workers} workers")
+    print(f"{n_cpus} CPUs detected — setting up Dask cluster with {n_workers} workers"
+          + (f" (capped at GATES_DASK_MAX_WORKERS={max_workers})" if n_workers == max_workers else ""))
     print(f"Memory: {mem_gb:.0f}GB total, allocating 80% → {mem_per_worker} per worker")
 
     cluster = LocalCluster(

@@ -20,14 +20,25 @@
 #
 # Submit with:            sbatch launch_dual_refit_isambard.sh
 # Run a single arm with:  EXP_INDEX=1 sbatch launch_dual_refit_isambard.sh
+# Per-head learning rates: TRAINER=train_dual_headlr_model sbatch launch_dual_refit_isambard.sh
 # List the arms with:
 #   python run_dual_experiments_shared_data.py parameter_dual_refit_isambard.json \
 #       experiments_dual_bg_refit.json --list
+#
+# Multi-GPU (single node, up to 4 GH200s): request the GPUs on the command line AND enable
+# them in the parameter file ("distributed": {"num_gpus": 4} or "auto"), e.g.
+#   sbatch --gres=gpu:4 launch_dual_refit_isambard.sh
+# (keep the CPU request as is: 288 CPUs made the data load ~5x slower)
+# batch_size is PER GPU, so the effective batch is batch_size x num_gpus — see
+# How_Tos/HOW_TO_MULTI_GPU.md before comparing against single-GPU runs.
 
 REPO=/projects/b5bn/public/Nawid/GATES_LPDM_emulator
 SIF="${SIF:-/projects/b5bn/data/env/gates_env_v3.sif}"
 PARAM_FILE="${PARAM_FILE:-parameter_dual_refit_isambard.json}"
 EXPERIMENTS_FILE="${EXPERIMENTS_FILE:-experiments_dual_bg_refit.json}"
+# Trainer module for the driver: train_dual_refit_model (default) or
+# train_dual_headlr_model (per-head learning rates). Override with TRAINER=...
+TRAINER="${TRAINER:-train_dual_refit_model}"
 
 cd "${REPO}"
 
@@ -69,14 +80,14 @@ if [[ -n "${EXP_INDEX}" ]]; then
   INDEX_ARGS=(--index "${EXP_INDEX}")
 fi
 
-echo "=== Refit experiments (container: ${SIF}, params: ${PARAM_FILE}, experiments: ${EXPERIMENTS_FILE}, index: ${EXP_INDEX:-all}) ==="
+echo "=== Refit experiments (container: ${SIF}, trainer: ${TRAINER}, params: ${PARAM_FILE}, experiments: ${EXPERIMENTS_FILE}, index: ${EXP_INDEX:-all}) ==="
 echo "WANDB_MODE=${WANDB_MODE}"
 apptainer exec --nv \
   --bind "${BINDS}" \
   --env WANDB_MODE="${WANDB_MODE}",WANDB_DIR="${WANDB_DIR}",PYTHONUNBUFFERED=1,PYTHONFAULTHANDLER=1,PYTHONPATH="${REPO}" \
   "${SIF}" \
   python -u run_dual_experiments_shared_data.py "${PARAM_FILE}" "${EXPERIMENTS_FILE}" \
-    --trainer train_dual_refit_model "${INDEX_ARGS[@]}"
+    --trainer "${TRAINER}" "${INDEX_ARGS[@]}"
 EXIT_CODE=$?
 echo "TRAIN_EXIT_CODE=${EXIT_CODE}"
 

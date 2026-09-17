@@ -68,12 +68,14 @@ import wandb
 import gates
 import gates.training.training as gates_training
 import gates.training.training_dual as gates_training_dual
+import gates.training.distributed as gates_distributed  # multi-GPU (no-ops on one GPU)
 from gates.data.load_data import get_grid
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
 from gates.training.training_helperfuns import (
     load_parameter_file, save_object, write_to_file, save_training_plots,
     save_bg_timeseries_plots, export_results_to_netcdf, set_reproducibility,
+    enable_deterministic_algorithms,
     HeadCheckpoint, save_wandb_artifact,
 )
 
@@ -251,6 +253,7 @@ def train_one_epoch(model, loader, model_ctx, sched, epoch, paths_ctx=None):
             raise RuntimeError(f"unknown schedule phase {phase!r}")
 
         loss.backward()
+        gates_distributed.average_gradients(model)  # multi-GPU: mean gradient over all ranks
         model_ctx.optimizer.step()  # trunk (+ fp head unless frozen); bg params only before the refit
         if sched.bg_optimizer is not None and phase in ("refit_bg_trunk", "refit_joint"):
             sched.bg_optimizer.step()
@@ -269,7 +272,9 @@ def train_one_epoch(model, loader, model_ctx, sched, epoch, paths_ctx=None):
                               f"fp {running_fp/(i+1):.4f} bg {running_bg/(i+1):.4f}", paths_ctx.updates_path)
 
     denom = max(n_batches, 1)
-    return running_total / denom, running_fp / denom, running_bg / denom
+    # multi-GPU: epoch means over all ranks' shards (the progress lines above are rank 0 only)
+    return gates_distributed.all_reduce_mean(
+        (running_total / denom, running_fp / denom, running_bg / denom), model_ctx.device)
 
 
 def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, test_loader,
@@ -286,6 +291,11 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             and sched.refit_start_epoch >= epoch_so_far + model_ctx.epochs_num):
         print(f"Warning: bg_schedule.refit_start_epoch={sched.refit_start_epoch} is beyond the "
               f"last training epoch ({epoch_so_far + model_ctx.epochs_num - 1}) — no refit will run.")
+
+    # Multi-GPU: every rank runs this loop in lockstep (identical losses -> identical
+    # decisions), but only rank 0 evaluates metrics, logs, plots and writes files; the other
+    # ranks get test_fp_dataset=None. Always True on a single GPU.
+    is_main = gates_distributed.is_main_process()
 
     bg_true_ppb = bg_pred_ppb = None
     bg_plot_params = training_ctx.parameters.get("bg_timeseries_plot", {})
@@ -331,19 +341,21 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
         if bg_mae_denorm is not None:
             losses["test_bg_mae_denorm"].append(bg_mae_denorm)
 
-        # --- Footprint-head evaluation (standard GATES metric pipeline) ---
-        outputs_original_space = training_ctx.scalers["fp_scaler"].inverse_transform(fp_test_out)
-        test_fp_dataset["fp_transformed_pred"] = (
-            ("time", "lat", "lon"), fp_test_out.reshape(*test_fp_dataset.fp_original.shape))
-        test_fp_dataset["fp_pred"] = (
-            ("time", "lat", "lon"), outputs_original_space.reshape(*test_fp_dataset.fp_original.shape))
+        list_of_metrics = {}
+        if is_main:
+            # --- Footprint-head evaluation (standard GATES metric pipeline) ---
+            outputs_original_space = training_ctx.scalers["fp_scaler"].inverse_transform(fp_test_out)
+            test_fp_dataset["fp_transformed_pred"] = (
+                ("time", "lat", "lon"), fp_test_out.reshape(*test_fp_dataset.fp_original.shape))
+            test_fp_dataset["fp_pred"] = (
+                ("time", "lat", "lon"), outputs_original_space.reshape(*test_fp_dataset.fp_original.shape))
 
-        losses, computed_metrics = gates_training.calculate_losses(losses, test_fp_dataset)
+            losses, computed_metrics = gates_training.calculate_losses(losses, test_fp_dataset)
 
-        list_of_metrics = {f"metrics_transformed-{k}": v for k, v in computed_metrics["transformed_eval_metrics"].items()}
-        list_of_metrics.update({f"metrics_original-{k}": v for k, v in computed_metrics["eval_metrics"].items()})
-        for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items():
-            list_of_metrics.update({f"metrics_fluxes_static/{flux_mode}/{k}": v for k, v in metrics.items()})
+            list_of_metrics = {f"metrics_transformed-{k}": v for k, v in computed_metrics["transformed_eval_metrics"].items()}
+            list_of_metrics.update({f"metrics_original-{k}": v for k, v in computed_metrics["eval_metrics"].items()})
+            for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items():
+                list_of_metrics.update({f"metrics_fluxes_static/{flux_mode}/{k}": v for k, v in metrics.items()})
 
         if model_ctx.use_wandb:
             logging_dict = {
@@ -398,7 +410,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             bg_true_ppb = denormalize(bg_test_true[:, 0], mean, std) * 1e9
             bg_pred_ppb = denormalize(bg_test_out[:, 0], mean, std) * 1e9
 
-        if epoch % model_ctx.epochs_visualise == 0:
+        if is_main and epoch % model_ctx.epochs_visualise == 0:
             img_save_path = save_training_plots(epoch, test_fp_dataset, training_ctx, paths_ctx.model_path, paths_ctx.model_name)
             if model_ctx.use_wandb:
                 wandb.log({f"fps_epoch_{epoch}": wandb.Image(img_save_path)}, step=epoch)
@@ -412,7 +424,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 if model_ctx.use_wandb:
                     wandb.log({f"bg_timeseries_epoch_{epoch}": wandb.Image(str(bg_img_path))}, step=epoch)
 
-        if epoch % model_ctx.epochs_save == 0:
+        if is_main and epoch % model_ctx.epochs_save == 0:
             checkpoint_path = paths_ctx.model_path / f"{paths_ctx.model_name}_{epoch}.pt"
             torch.save({
                 'epoch': epoch,
@@ -422,7 +434,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 'learning_rate': model_ctx.lr,
             }, checkpoint_path)
 
-    if bg_true_ppb is not None:
+    if is_main and bg_true_ppb is not None:
         test_fp_dataset["bg_true_ppb"] = (("time",), bg_true_ppb)
         test_fp_dataset["bg_pred_ppb"] = (("time",), bg_pred_ppb)
         test_fp_dataset["bg_true_ppb"].attrs["units"] = "ppb"
@@ -478,8 +490,17 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             })
         wandb.run.summary.update(summary_update)
 
-    export_results_to_netcdf(test_fp_dataset, paths_ctx.model_path, model_ctx.model_name, use_wandb=model_ctx.use_wandb)
+    if is_main:
+        export_results_to_netcdf(test_fp_dataset, paths_ctx.model_path, model_ctx.model_name, use_wandb=model_ctx.use_wandb)
     print("Finished Training.")
+
+
+def build_model_and_context(parameters, training_ctx, paths_ctx):
+    """Model + context exactly as this trainer trains them. Also called by the multi-GPU
+    worker processes (``gates/training/distributed.py``), which must build an identical
+    model/optimizer.
+    """
+    return gates_training_dual.setup_dual_model(parameters, training_ctx, paths_ctx)
 
 
 # ---------------------------------------------------------------
@@ -500,6 +521,10 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     # Validate the schedule up-front so a bad config fails before the expensive load.
     BgSchedule(parameters)
 
+    # Validate the multi-GPU config up-front too, and record the resolved per-GPU / effective
+    # batch sizes with the training settings.
+    num_gpus = gates_distributed.resolve_num_gpus(parameters)
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_name = f"{parameters['model_name']}_{timestamp}"
     model_path = Path(model_save_dir) / model_name
@@ -509,13 +534,7 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     paths_ctx.make_dirs()
 
     set_reproducibility(parameters.get("seed", 34))
-    if parameters.get("deterministic", False):
-        # Bit-exact reproducibility on GPU (verified: tests/gpu_determinism_test.py). Seeds +
-        # cuDNN alone leave the GNN's scatter atomics nondeterministic; this forces
-        # deterministic kernels (cuBLAS needs the workspace env set before its first call).
-        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
-        torch.use_deterministic_algorithms(True)
-        print("deterministic=True: torch.use_deterministic_algorithms enabled")
+    enable_deterministic_algorithms(parameters)
 
     if use_wandb and wandb.run is not None:
         wandb.config.update(parameters, allow_val_change=True)
@@ -619,21 +638,35 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     )
 
     print("Successfully set up dual dataloaders!")
-    model, model_ctx = gates_training_dual.setup_dual_model(parameters, training_ctx, paths_ctx)
 
-    if use_wandb:
-        wandb.watch(model, log="all", log_freq=100)
+    # Multi-GPU (parameters["distributed"], see gates/training/distributed.py): hand the
+    # batches to one worker process per extra GPU; this process carries on as rank 0. On a
+    # single GPU this returns the loaders untouched (dist_run is None).
+    run_kwargs = dict(output_norm=norm_vals["outputs"], epoch_so_far=0,
+                      bg_detrended=background_params["detrend"])
+    dist_run, train_loader, test_loader = gates_distributed.setup_training_loaders(
+        Path(__file__).stem, num_gpus, parameters, training_ctx, paths_ctx,
+        train_loader, test_loader, run_kwargs)
 
-    losses = gates_training_dual.initialise_dual_losses()
+    try:
+        model, model_ctx = build_model_and_context(parameters, training_ctx, paths_ctx)
+        gates_distributed.sync_model_from_main(model)
 
-    if torch.cuda.is_available():
-        model.cuda()
+        if use_wandb:
+            wandb.watch(model, log="all", log_freq=100)
 
-    run_full_training(
-        model, model_ctx, training_ctx, paths_ctx, train_loader, test_loader,
-        test_scaled_fp, losses, output_norm=norm_vals["outputs"], epoch_so_far=0,
-        bg_detrended=background_params["detrend"],
-    )
+        losses = gates_training_dual.initialise_dual_losses()
+
+        run_full_training(
+            model, model_ctx, training_ctx, paths_ctx, train_loader, test_loader,
+            test_scaled_fp, losses, **run_kwargs,
+        )
+    except BaseException:
+        if dist_run is not None:
+            dist_run.abort()
+        raise
+    if dist_run is not None:
+        dist_run.finish()
 
     if use_wandb:
         wandb.finish()
