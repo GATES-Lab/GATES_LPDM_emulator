@@ -551,7 +551,27 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
     train_scaled_inputs, train_scaled_fp = gates_datasets.trim_to_batch_size(train_scaled_inputs, train_scaled_fp, batch_size)
     test_scaled_inputs, test_scaled_fp = gates_datasets.trim_to_batch_size(test_scaled_inputs, test_scaled_fp, test_batch_size)
 
-    train_loader, fp_labels = gates_datasets.make_dataloader(train_scaled_inputs, train_scaled_fp, batch_size, randomize=True, dataloader_params=dataloader_params, flatten=True)   
+    # C3 / review P2 (behind review_fixes.use_tensor_loader, default False): swap the
+    # xbatcher train loader for an in-memory torch TensorDataset whose DataLoader shuffles
+    # batch *composition* every epoch. Test loader stays on xbatcher for now.
+    use_tensor_loader = parameters.get("review_fixes", {}).get("use_tensor_loader", False)
+    if use_tensor_loader:
+        # Resolve the requested dataloader_params into the set the tensor loader will
+        # actually use, print requested-vs-used, and write it back into parameters so the
+        # saved training_settings (and any re-run) reflect the real config directly.
+        seed = parameters.get("seed", 42)
+        requested_dl_params = dict(dataloader_params)
+        used_dl_params = gates_datasets.resolve_tensor_loader_params(requested_dl_params)
+        print(f"[review_fixes] tensor-loader dataloader_params REQUESTED: {requested_dl_params}")
+        print(f"[review_fixes] tensor-loader dataloader_params USED:      {used_dl_params}")
+        print(f"[review_fixes] (batch_size={batch_size}, shuffle=True, drop_last=True, "
+              f"generator_seed={seed} are set by the tensor loader itself, not via dataloader_params)")
+        parameters.setdefault("dataloader", {})["dataloader_params"] = used_dl_params
+        train_loader, fp_labels = gates_datasets.make_tensor_dataloader(
+            train_scaled_inputs, train_scaled_fp, batch_size, shuffle=True,
+            random_seed=seed, dataloader_params=used_dl_params, flatten=True)
+    else:
+        train_loader, fp_labels = gates_datasets.make_dataloader(train_scaled_inputs, train_scaled_fp, batch_size, randomize=True, dataloader_params=dataloader_params, flatten=True)
 
     #print("WAAAAAAAAAAAARNING")
     #print("Loading inputs and footprints for test set into memory!!!")

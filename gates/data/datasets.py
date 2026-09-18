@@ -1381,6 +1381,109 @@ def make_dataloader(inputs, fps, batch_size=10, randomize=False, random_seed=42,
     return dataloader, fps_labels
 
 
+def resolve_tensor_loader_params(dataloader_params):
+    """Clean an (xbatcher-style) ``dataloader_params`` dict for the in-memory tensor loader.
+
+    The parameter files reuse one ``dataloader_params`` block for both the xbatcher and
+    the tensor loader, but several keys either don't apply to an in-memory
+    ``TensorDataset`` or are set explicitly by ``make_tensor_dataloader`` (which would
+    otherwise raise "got multiple values for keyword argument ..."). This returns the
+    subset of *extra* DataLoader kwargs the tensor loader will actually forward, with:
+
+    - ``multiprocessing_context`` / ``persistent_workers`` / ``prefetch_factor`` removed
+      (xbatcher/worker-oriented, irrelevant with ``num_workers=0``),
+    - ``shuffle`` / ``batch_size`` / ``drop_last`` / ``sampler`` / ``batch_sampler`` /
+      ``generator`` removed (the tensor loader sets these explicitly),
+    - ``num_workers`` forced to 0 (workers would fork the potentially multi-GB tensors).
+
+    Anything else (e.g. ``pin_memory``) is passed through unchanged. The result is JSON-
+    serialisable and idempotent, so it is safe to write back into
+    ``parameters["dataloader"]["dataloader_params"]`` and re-resolve on a later run.
+    """
+    requested = dict(dataloader_params) if dataloader_params else {}
+    drop = {
+        "multiprocessing_context", "persistent_workers", "prefetch_factor",
+        "shuffle", "batch_size", "drop_last", "sampler", "batch_sampler", "generator",
+    }
+    used = {k: v for k, v in requested.items() if k not in drop}
+    used["num_workers"] = 0
+    return used
+
+
+def make_tensor_dataloader(inputs, fps, batch_size=10, shuffle=False, random_seed=42, dataloader_params=None, flatten=True):
+    """In-memory torch DataLoader alternative to ``make_dataloader`` (finding C3 / review P2).
+
+    Materialises the (already-scaled) inputs and footprints into torch tensors once and
+    wraps them in a ``TensorDataset``. Per-epoch shuffling is then handled natively by the
+    DataLoader: ``shuffle=True`` reshuffles the batch *composition* every epoch (a
+    ``RandomSampler`` over samples), unlike the xbatcher path which permutes ``fp_time``
+    once and forms fixed contiguous windows. Only sensible when the data fits in memory
+    (``load_before_training``); use ``make_dataloader`` for out-of-core zarr streaming.
+
+    The batch format matches ``make_dataloader`` so it is a drop-in for the training loop:
+    features ``(B, H*W, F)`` and fps ``(B, H*W, V)`` with the fps variables in
+    ``fps_labels`` order (``fp_transformed`` first). Returns ``(dataloader, fps_labels)``.
+
+    Args mirror ``make_dataloader`` (``randomize`` is replaced by ``shuffle``).
+    """
+    # ---- inputs: (fp_time, lat, lon, variable_name) -> (N, H*W, F) ----
+    if not isinstance(inputs, xr.DataArray):
+        raise ValueError("inputs must be an xarray DataArray with dims (fp_time, lat, lon, variable_name)")
+    inputs = inputs.astype("float32", copy=False)
+    inputs = inputs.transpose("fp_time", "lat", "lon", "variable_name")
+    if flatten:
+        inputs = inputs.stack(flat_lat_lon=["lat", "lon"]).transpose("fp_time", "flat_lat_lon", "variable_name")
+    X = torch.from_numpy(np.ascontiguousarray(inputs.values))
+
+    # ---- fps: mirror make_fps_batcher exactly so labels + variable order match ----
+    if isinstance(fps, xr.Dataset):
+        fps_labels = list(fps.data_vars)
+        for var in fps:
+            if fps[var].dtype != "float32" and fps[var].dtype != "int32":
+                fps[var] = fps[var].astype("float32", copy=False)
+        fps = fps.to_stacked_array(new_dim="variable_name", sample_dims=["time", "lat", "lon"], name="stacked_fps")
+        fps = fps.transpose("time", "lat", "lon", "variable_name")
+        if flatten:
+            fps = fps.stack(flat_lat_lon=["lat", "lon"]).transpose("time", "flat_lat_lon", "variable_name")
+    elif isinstance(fps, xr.DataArray):
+        fps_labels = [fps.name if fps.name is not None else "fp"]
+        if fps.dtype != "float32":
+            fps = fps.astype("float32", copy=False)
+        if flatten:
+            fps = fps.stack(flat_lat_lon=["lat", "lon"])
+    else:
+        raise ValueError(f"Unsupported fps type: expected xr.Dataset or xr.DataArray, got {type(fps).__name__}")
+    y = torch.from_numpy(np.ascontiguousarray(fps.values))
+
+    if X.shape[0] != y.shape[0]:
+        raise ValueError(f"inputs and fps have mismatched sample counts: {X.shape[0]} vs {y.shape[0]}")
+
+    print(f"[review_fixes] Using in-memory TENSOR train loader (not xbatcher): "
+          f"X={tuple(X.shape)}, y={tuple(y.shape)}, batch_size={batch_size}, shuffle={shuffle}")
+
+    dataset = torch.utils.data.TensorDataset(X, y)
+
+    # Reproducible shuffle via a local torch Generator, so we don't touch the global
+    # RNG (also sidesteps C24). None -> DataLoader's default sequential order.
+    generator = torch.Generator().manual_seed(random_seed) if shuffle else None
+
+    # dataloader_params should already be the resolved set (see
+    # resolve_tensor_loader_params, called by setup_GATES_dataloaders). Re-resolve here
+    # too so a direct call is still safe/idempotent: this guarantees batch_size/shuffle/
+    # drop_last/generator (set explicitly below) are not also present in **params.
+    params = resolve_tensor_loader_params(dataloader_params)
+
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=True,   # matches trim_to_batch_size; avoids a ragged final batch
+        generator=generator,
+        **params,
+    )
+    return dataloader, fps_labels
+
+
 ####
 ####  v2: single-interpolation-pass functions
 ####
@@ -1560,15 +1663,6 @@ def _cut_satellite_met_multi_delta(
     else:
         met_for_crop = met_loaded
 
-    # Coalesce the selected subset's many native {time:1} chunks into
-    # chunk_size-sized time blocks before cropping. The scattered `.sel` above
-    # already read only the timestamps we need, so this is a cheap contiguous
-    # concat — no shuffle, no extra reads. Fewer, larger chunks mean far fewer
-    # dask tasks/objects per block read, which cuts the object churn behind the
-    # "full garbage collections took N% CPU time" worker warnings.
-    if bool(chunk_size) and not load_into_memory:
-        print(f"chunked data to size {chunk_size}")
-        met_for_crop = met_for_crop.chunk({"time": chunk_size})
 
     # Lookup: timestamp → integer position in met_for_crop
     time_to_pos = {t: i for i, t in enumerate(met_for_crop.time.values)}

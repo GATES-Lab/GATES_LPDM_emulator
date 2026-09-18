@@ -278,5 +278,31 @@ Fixes are implemented on branch `code-review-fixes` (worktree), one commit per f
 | C4 | Committed | No | `4b0a9fc` (C4+C5+C6, one commit) | `new_metrics()`/`new_flux_metrics()` factories return fresh lists per key; isolated test confirms `metrics_original["mse"]` stays `[]` after appending to `metrics_transformed["mse"]`. Terminal smoke test (SAHARA size-10, 1 epoch) ran clean. |
 | C5 | Committed | No | `4b0a9fc` (C4+C5+C6, one commit) | Per-year load errors collected in `failed_years` and raised after the loop with a summary, instead of silently continuing with `loaded_samples=0`. Happy path verified by terminal smoke test. |
 | C6 | Committed | No | `4b0a9fc` (C4+C5+C6, one commit) | `load_fps` except-branch now re-raises the original error when no file matches the bad-files list, instead of falling through to a `NameError`. Workaround branch (unchanged) exercised by the smoke test, which loads a known bad SAHARA file. |
-| C1 | Committed | **Yes** (retrain) | C1 (one commit) | Behind `review_fixes.fix_grid_transpose` flag (default legacy). `get_grid` gains `fix_transpose`: True builds the node list in `stack(["lat","lon"])` order (lat outer, lon inner), False reproduces the legacy `meshgrid(indexing="xy")` transpose. **Substance:** the returned `latlons` list is `grid`, which the encoder uses at `encoder.py:183` (`h3.geo_to_h3(lat, lon)`) to assign each node to an H3 mesh cell (plus the release cell and edge distances). Legacy placed node `k` on the mesh at the transpose of its data location, so mesh geometry disagreed with the node's own features/footprint; the fix aligns them. Since H3 is hexagonal (not symmetric under a lat/lon swap), the node→cell grouping genuinely differs. `idx_latlons` (the second return) is discarded and its consumers (`append_latlon`/`better_meshnodes`/`higher_res`) are off by default — not the substantive path. Flag threaded into both training scripts. Verified on a synthetic 3×4 grid: fixed node 1 = `(lat[0],lon[1])`, legacy = `(lat[1],lon[0])`. Part of the C1/C3 2×2 factorial. |
-| C3 | Planned | **Yes** (retrain) | — | Behind `shuffle_each_epoch` flag (default legacy). Rebuild train loader each epoch with a per-epoch seed so batch composition varies; folds in C24 local-RNG cleanup. Part of the C1/C3 2×2 factorial comparison. |
+| C1 | Committed | **Yes** (retrain) | `95a87f8` | Behind `review_fixes.fix_grid_transpose` flag (default legacy). `get_grid` gains `fix_transpose`: True builds the node list in `stack(["lat","lon"])` order (lat outer, lon inner), False reproduces the legacy `meshgrid(indexing="xy")` transpose. **Substance:** the returned `latlons` list is `grid`, which the encoder uses at `encoder.py:183` (`h3.geo_to_h3(lat, lon)`) to assign each node to an H3 mesh cell (plus the release cell and edge distances). Legacy placed node `k` on the mesh at the transpose of its data location, so mesh geometry disagreed with the node's own features/footprint; the fix aligns them. Since H3 is hexagonal (not symmetric under a lat/lon swap), the node→cell grouping genuinely differs. `idx_latlons` (the second return) is discarded and its consumers (`append_latlon`/`better_meshnodes`/`higher_res`) are off by default — not the substantive path. Flag threaded into both training scripts. Verified on a synthetic 3×4 grid: fixed node 1 = `(lat[0],lon[1])`, legacy = `(lat[1],lon[0])`. Part of the C1/C3 2×2 factorial. |
+| C3 | Implemented, awaiting commit | **Yes** (retrain) | — | Behind `review_fixes.use_tensor_loader` flag (default False = xbatcher). New additive `make_tensor_dataloader` in `datasets.py` materialises the scaled inputs/fps into an in-memory `TensorDataset`; `DataLoader(shuffle=True)` then reshuffles batch **composition** every epoch natively (no per-epoch rebuild, `run_full_training` untouched). Train loader only; test stays on xbatcher; xbatcher path kept intact behind the else branch. Doubles as the review's P2 train-path groundwork. Local `torch.Generator` seed sidesteps C24 on this path. `resolve_tensor_loader_params` (next to the loader) cleans the reused xbatcher-style `dataloader_params` (drops worker/context keys + keys the loader sets explicitly; forces `num_workers=0`) — this both fixes a `shuffle` kwarg collision and, crucially, is **not silent**: `setup_GATES_dataloaders` prints requested-vs-used and **replaces** `parameters["dataloader"]["dataloader_params"]` with the used set so the saved `training_settings` reflect (and future re-runs use) the real config. Prints `[review_fixes] Using in-memory TENSOR train loader ...` when active. Verified vs xbatcher on synthetic data: identical labels/shapes/values with shuffle off; batch composition changes epoch-to-epoch with shuffle on. Part of the C1/C3 2×2 factorial. |
+
+## 7. Running a terminal test from the worktree
+
+The `gates` package is an **editable install pinned to the main repo**
+(`__editable__.gates-0.2.0.pth` → `.../graphnet_LPDM_emulator/gates`), so `import gates`
+uses main-repo code by default. To exercise the **worktree** code, put the worktree on
+`PYTHONPATH` (searched before the editable finder) and run from the worktree. The worktree
+has its own `config.yml` (gitignored) with `parameter_files_dir`/`save_models_dir`
+repointed at the worktree.
+
+```bash
+export PYTHONNOUSERSITE=1
+export PYTHONPATH=/user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/.claude/worktrees/code-review-fixes
+conda activate new_gates_env
+cd /user/work/ef17148/GCN/graphnet/graphnet_LPDM_emulator/.claude/worktrees/code-review-fixes
+python scripts/train_GATES_model.py NEW_parameter_template_terminal.json
+```
+
+Enable the review fixes in the parameter file via a top-level block:
+
+```json
+"review_fixes": { "fix_grid_transpose": true, "use_tensor_loader": true }
+```
+
+Sanity checks in the job log: `import gates` should resolve to the worktree path, and with
+`use_tensor_loader: true` you should see `[review_fixes] Using in-memory TENSOR train loader (not xbatcher): ...`.
