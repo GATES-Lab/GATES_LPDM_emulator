@@ -112,6 +112,7 @@ import gates
 import gates.training.training as gates_training
 import gates.training.training_dual as gates_training_dual
 import gates.training.distributed as gates_distributed  # multi-GPU (no-ops on one GPU)
+from gates.training.pretraining import load_pretrained_trunk  # optional trunk warm start
 from gates.data.load_data import get_grid
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
@@ -689,6 +690,9 @@ def build_model_and_context(parameters, training_ctx, paths_ctx):
     """
     head_lrs = resolve_head_learning_rates(parameters)
     model, model_ctx = gates_training_dual.setup_dual_model(parameters, training_ctx, paths_ctx)
+    # Optional warm start of the trunk from self-supervised met pretraining
+    # (train_met_pretrain.py); no "pretrained_trunk" block = untouched random init.
+    model_ctx.pretrained_trunk_meta = load_pretrained_trunk(model, parameters)
     model_ctx.optimizer = build_head_lr_optimizer(model, parameters, head_lrs)
     model_ctx.head_lrs = head_lrs
     return model, model_ctx
@@ -852,6 +856,7 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
         model, model_ctx = build_model_and_context(parameters, training_ctx, paths_ctx)
         gates_distributed.sync_model_from_main(model)
         write_to_file(f"per-head learning rates: {head_lrs}", paths_ctx.updates_path)
+        write_to_file(f"pretrained trunk: {getattr(model_ctx, 'pretrained_trunk_meta', None)}", paths_ctx.updates_path)
 
         if use_wandb:
             wandb.watch(model, log="all", log_freq=100)
