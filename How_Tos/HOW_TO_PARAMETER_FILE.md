@@ -271,10 +271,19 @@ Defines the GNN architecture.
 | `resolution` | H3 mesh resolution controlling hexagon granularity. Resolution 4 is standard (~1–3 grid nodes per hexagon). Lower = coarser. |
 | `output_dim` | Number of output values per grid node. `1` for a single footprint value. |
 | `residuals` | If `true`, each Processor block applies a residual connection: the mesh-node MLP output is added back to the node's own features (`out = node_mlp(...) + x`). Otherwise, the mesh features are completely replaced by the output of the next MLP. Default: `false`. |
-| `attention` | If `true`, replaces scatter-mean message aggregation in the Processor with multi-head self-attention over mesh nodes. Default: `false`. NEEDS TESTING|
+| `attention` | If `true`, the Processor's node update becomes masked self-attention over mesh nodes instead of edge-message + scatter-mean aggregation. Each node's new state is a softmax-weighted sum of its graph neighbours' (and its own) value vectors, where the weights come from the node embeddings (single hard-coded head; `node_dim` is the attention embedding dim). The mesh adjacency only supplies the attention *mask* (which pairs may attend); **`edge_attr` is not used**, so wind/distance/release edge features do not reach the node update on this path — treat attention as an *alternative* to message-passing, not an addition. See the note below. Default: `false`. |
 | `release_edges` | If `true`, adds a directed edge from the release mesh node (the h3 cell containing the satellite measurement point) to every non-adjacent mesh node. This lets all nodes receive a direct message from the release node's encoded met state (BLH, wind, stability) in the first Processor block, without waiting for multi-hop propagation. A binary `is_release_edge` flag is appended to edge features so the MLP can distinguish these long-range edges from regular k-ring-1 edges. When `dynamic_latlon=True` in `dynamic_edges`, release edge distances and lat/lon offsets are recomputed from actual input coordinates rather than fixed h3 grid geometry. Compatible with all `dynamic_edges` settings. Default: `false`. |
 | `initial_enc` | If `true`, applies an initial encoding MLP to each grid node's raw input features *before* they are aggregated onto the mesh nodes, instead of encoding only after aggregation. Cannot be combined with `dynamic_edges`. Default: `false`. |
 | `initial_enc_dim` | Output width of the initial encoding MLP (only used when `initial_enc=true`). When unset, it matches the encoder's node-encoder output (the mesh latent dimension), reproducing the previous behaviour. Setting it to a different value gives the two MLPs distinct roles: the initial MLP compresses/transforms each grid node's raw features (`input_dim → initial_enc_dim`) before spatial aggregation, and the node encoder then maps the aggregated mesh-node representation to the final latent space (`initial_enc_dim → node latent dim`). Default: `null` (i.e. matches the node-encoder output). |
+
+> **Note on `attention`.** A few things to know before enabling it: `node_dim` doubles
+> as the attention embedding dimension; the attention uses a single head (fixed in code,
+> not configurable); `attention` requires `disaggregated: false`; and with
+> `release_edges: true` the attention mask includes the release edges, so attention gains
+> a long-range path from the release node. Because the node update does not use `edge_attr`,
+> combining `attention` with the dynamic wind/distance edges will not help — those edge
+> features are inert on the attention path.
+> **A dedicated How-To page on attention will be added soon.**
 
 ---
 
