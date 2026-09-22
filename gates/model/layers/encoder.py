@@ -883,7 +883,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
             if self.dynamic_earthdistance:    
                 # calculate haversine distance for each edge using the lat/lon of the endpoints
                 from gates.data import haversine
-                src_lat = features[:, self.latlon_indices[1], :][:, None, self.mesh_edge_index[0, :]]  # (B, 1, E)
+                src_lat = features[:, self.latlon_indices[0], :][:, None, self.mesh_edge_index[0, :]]  # (B, 1, E)  # C2: [0]=lat (was [1]=lon)
                 src_lon = features[:, self.latlon_indices[1], :][:, None, self.mesh_edge_index[0, :]]  # (B, 1, E)
                 dst_lat = features[:, self.latlon_indices[0], :][:, None, self.mesh_edge_index[1, :]]  # (B, 1, E)
                 dst_lon = features[:, self.latlon_indices[1], :][:, None, self.mesh_edge_index[1, :]]  # (B, 1, E)

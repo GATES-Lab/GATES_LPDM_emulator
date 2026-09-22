@@ -195,12 +195,26 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=Non
             latlon_tuples = [("lat_coords", 0, 0), ("lon_coords", 0, 0)]
         elif type(latlon_tuples[0]) == list:
             latlon_tuples = [tuple(t) for t in latlon_tuples]
-        latlon_indices = [i for i, name in enumerate(input_names) if name in latlon_tuples]
-        if len(latlon_indices) != 2:
+        if len(latlon_tuples) != 2:
             raise ValueError(
-                f"Expected exactly 2 latlon feature indices, found {len(latlon_indices)} "
-                f"for tuples {latlon_tuples}. Check that lat/lon are included in input_names."
+                f"Expected exactly 2 latlon tuples [lat, lon], got {len(latlon_tuples)}: {latlon_tuples}."
             )
+        # Resolve each tuple explicitly and IN ORDER so latlon_indices[0] is always
+        # the lat feature and [1] the lon feature, regardless of where lat/lon sit in
+        # input_names. The encoder's dynamic_earthdistance haversine (encoder.py, C2 fix)
+        # reads src/dst lat from [0] and lon from [1] and silently mislabels them if the
+        # order here follows input_names instead of latlon_tuples.
+        name_to_idx = {}
+        for i, name in enumerate(input_names):
+            name_to_idx.setdefault(name, i)  # first occurrence wins
+        latlon_indices = []
+        for tup in latlon_tuples:
+            if tup not in name_to_idx:
+                raise ValueError(
+                    f"latlon feature {tup} not found in input_names. "
+                    f"Check that lat/lon coords are included in the inputs."
+                )
+            latlon_indices.append(name_to_idx[tup])
         dynamic_edge_params["latlon_mesh_edges"] = True
         dynamic_edge_params["latlon_indices"] = latlon_indices
     else:
