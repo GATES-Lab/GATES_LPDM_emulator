@@ -358,7 +358,8 @@ def train_and_save_model(parameters, model_save_dir):
                 entity=wandb_entity,
                 project=wandb_project, 
                 config=parameters,
-                tags=wandb_tags
+                tags=wandb_tags,
+                save_code=True
             )
 
 
