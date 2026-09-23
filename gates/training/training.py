@@ -624,7 +624,9 @@ def initialise_losses():
     # (e.g. metrics_transformed["mse"] is metrics_original["mse"]), so appends
     # through one key would corrupt the other series (finding C4).
     def new_metrics():
-        return {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
+        return {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": [],
+                "corrcoef": [],
+                "iou_q25": [], "iou_q50": [], "iou_q90": [], "iou_q99": []}
 
     def new_flux_metrics():
         return {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
@@ -676,11 +678,19 @@ def calculate_losses(losses, test_outputs_xr):
     computed_metrics = {}
 
     eval_metrics = gates_metrics.compute_footprint_metrics(
-        test_outputs_xr.fp_original, test_outputs_xr.fp_pred, metrics=["iou", "mae", "mse","bias", "nmae"], nonzero=False, ignore_mask=fp_mask, threshold=1e-5)
+        test_outputs_xr.fp_original, test_outputs_xr.fp_pred, metrics=["iou", "mae", "mse","bias", "nmae", "corrcoef", "corrcoef_log"], nonzero=False, ignore_mask=fp_mask, threshold=1e-5)
 
     transformed_eval_metrics = gates_metrics.compute_footprint_metrics(
-        test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, metrics=["iou", "mae", "mse","bias", "nmae"], ignore_mask=fp_mask, threshold=0, nonzero=False)
-    
+        test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, metrics=["iou", "mae", "mse","bias", "nmae", "corrcoef"], ignore_mask=fp_mask, threshold=0, nonzero=False)
+
+    # quantile-thresholded IoU: whole-field IoU at a low threshold saturates on the
+    # trivially-predicted footprint extent; thresholding at high quantiles of the
+    # true field isolates the core, where de-blurring actually shows up.
+    eval_metrics.update(gates_metrics.iou_at_quantiles(
+        test_outputs_xr.fp_original, test_outputs_xr.fp_pred, ignore_mask=fp_mask))
+    transformed_eval_metrics.update(gates_metrics.iou_at_quantiles(
+        test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, ignore_mask=fp_mask))
+
     static_mf_eval_metrics = gates_metrics.compute_static_mf_metrics(test_outputs_xr.fp_original, test_outputs_xr.fp_pred)
 
     for metric_name, metric_value in transformed_eval_metrics.items():
