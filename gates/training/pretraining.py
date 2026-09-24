@@ -1,6 +1,6 @@
 """Self-supervised pretraining of the GATES trunk (encoder + processor) on meteorology alone.
 
-Two pretext tasks, both defined on exactly the input tensors the dual model sees
+Pretext tasks, all defined on exactly the input tensors the dual model sees
 (``[B, num_nodes, feature_dim + aux_dim]``, scaled like the dual pipeline), so the
 pretrained trunk can be loaded into ``GraphSatelliteDualForecaster`` unchanged:
 
@@ -16,6 +16,28 @@ pretrained trunk can be loaded into ``GraphSatelliteDualForecaster`` unchanged:
                    tendencies instead of re-learning to copy (the plain task was worse than
                    persistence for the smooth fields: pressure, temperature). Its loss is
                    directly comparable with the plain task's persistence baseline.
+- ``"delta_forecast"`` the general time-shift task, of which ``next_delta`` is the special case
+                   ``source_deltas=[6, 12], target_delta=0``: every dynamic channel whose
+                   time delta is NOT in ``source_deltas`` is zeroed in the input and the channels
+                   at ``target_delta`` are predicted. Time deltas are hours BEFORE the footprint
+                   time, so a *larger* target delta than the sources is a BACKWARD forecast
+                   (where did this air come from?) — the direction a footprint describes.
+                   Recipes: ``[0, 6] -> 12`` backward 6 h, ``[0] -> 12`` backward 12 h,
+                   ``[12] -> 0`` forward 12 h, ``[0, 6, 12] -> 24`` backward 24 h. A target
+                   delta outside the dual model's input layout (e.g. 24 h) is loaded as extra
+                   TARGET-ONLY channels appended after the model's input columns
+                   (``pretrain.extra_time_deltas`` in ``train_met_pretrain.py``): the trunk
+                   still sees exactly the dual model's inputs. ``tendency: true`` predicts the
+                   change relative to the nearest source delta instead (zero = persistence).
+- ``"pseudo_footprint"`` the footprint-shaped task: nothing is hidden, the model sees exactly the
+                   dual input and predicts ONE channel per node — a kinematic pseudo-footprint
+                   (backward residence-time map of the air arriving in the release cell, built from
+                   the window's boundary-layer winds by ``gates/training/pseudo_footprint.py`` and
+                   scaled like the real footprints). The target is external to the input tensor
+                   (``corrupt(x, generator, y)``); the trivial baseline is the climatological mean
+                   map of the training samples. Because the head is a one-channel per-node map,
+                   the footprint decoder can be saved and transferred along with the trunk
+                   (``save_modules``).
 
 Static channels (coordinates, topography) and the auxiliary CAMS channels are never masked
 and never targets. ``wind_angle`` is masked with the other dynamic channels but is NOT a
@@ -35,7 +57,10 @@ import numpy as np
 import torch
 
 TRUNK_MODULES = ("encoder", "processor")
-PRETEXT_TASKS = ("masked", "next_delta", "next_delta_tendency")
+# Modules a pretraining run may save; the fp decoder only when its output is one channel per node.
+SAVEABLE_MODULES = TRUNK_MODULES + ("fp_decoder",)
+PRETEXT_TASKS = ("masked", "next_delta", "next_delta_tendency", "delta_forecast", "pseudo_footprint")
+EXTERNAL_TARGET_TASKS = ("pseudo_footprint",)
 # Variables that are never masked / never targets (everything else with a met name is dynamic).
 NON_TARGET_DYNAMIC = ("wind_angle",)
 # Mesh-size-dependent, never-trained tensors (see load_pretrained_trunk).
@@ -70,18 +95,68 @@ def channel_groups(variable_names, dynamic_variables):
     if not dyn:
         raise ValueError("no dynamic met channels found in variable_names")
     dyn_t = [i for i in dyn if names[i][0] not in NON_TARGET_DYNAMIC]
-    d0 = [i for i in dyn if int(names[i][2]) == 0]
-    d0_t = [i for i in d0 if names[i][0] not in NON_TARGET_DYNAMIC]
-    older = sorted({int(names[i][2]) for i in dyn if int(names[i][2]) > 0})
+    deltas = sorted({int(names[i][2]) for i in dyn})
+    older = [d for d in deltas if d > 0]
     if not older:
         raise ValueError("next_delta pretraining needs at least one time_delta > 0")
-    lookup = {(names[i][0], names[i][1], int(names[i][2])): i for i in dyn}
-    persistence = [lookup[(names[i][0], names[i][1], older[0])] for i in d0_t]
+    # next_delta == the forecast [older deltas] -> 0 (persistence from the youngest older delta)
+    fc = forecast_groups(names, dynamic_variables, source_deltas=older, target_delta=0)
     return {
-        "dynamic": dyn, "dynamic_targets": dyn_t, "delta0": d0, "delta0_targets": d0_t,
-        "delta0_persistence_source": persistence,
+        "dynamic": dyn, "dynamic_targets": dyn_t, "delta0": fc["hide"], "delta0_targets": fc["targets"],
+        "delta0_persistence_source": fc["persistence_source"], "deltas": deltas,
         "names": ["|".join(str(x) for x in v) for v in names],
     }
+
+
+def forecast_groups(variable_names, dynamic_variables, source_deltas, target_delta,
+                    tendency=False, model_channels=None):
+    """Index groups for the general ``delta_forecast`` task.
+
+    Args:
+        variable_names: as in :func:`channel_groups`, in TENSOR channel order. Target-only
+            channels (time deltas outside the model's input layout) may be listed after the
+            model's input columns; use ``model_channels`` to say where the model input ends.
+        dynamic_variables: names of the time-varying met variables.
+        source_deltas (sequence of int): time deltas (hours before the footprint time) the
+            model may see; every other dynamic channel inside the model input is zeroed.
+        target_delta (int): time delta of the channels to predict.
+        tendency (bool): predict ``x(target) - x(persistence source)`` instead of ``x(target)``.
+        model_channels (int or None): number of leading tensor columns the model receives;
+            None = all columns (no target-only channels).
+
+    Returns:
+        dict: ``hide`` (dynamic channels zeroed in the model input), ``targets`` (channels at
+        ``target_delta``, minus ``NON_TARGET_DYNAMIC``), ``persistence_source`` (for each
+        target, the same (variable, level) at the source delta closest in time to the target
+        = the persistence baseline), ``persistence_delta``, and the resolved
+        ``source_deltas`` / ``target_delta`` / ``tendency`` for the record.
+    """
+    dynamic_variables = set(dynamic_variables)
+    names = [tuple(v) for v in variable_names]
+    dyn = [i for i, v in enumerate(names) if v[0] in dynamic_variables]
+    present = sorted({int(names[i][2]) for i in dyn})
+    n_model = len(names) if model_channels is None else int(model_channels)
+    input_deltas = sorted({int(names[i][2]) for i in dyn if i < n_model})
+    source_deltas = sorted({int(d) for d in source_deltas})
+    target_delta = int(target_delta)
+    if not source_deltas:
+        raise ValueError("delta_forecast needs at least one source time delta")
+    if any(d not in input_deltas for d in source_deltas):
+        raise ValueError(f"source_deltas {source_deltas} must be among the model's input time deltas {input_deltas}")
+    if target_delta not in present:
+        raise ValueError(f"target_delta {target_delta} is not among the loaded time deltas {present}")
+    if target_delta in source_deltas:
+        raise ValueError(f"target_delta {target_delta} must not be one of source_deltas {source_deltas}")
+    hide = [i for i in dyn if i < n_model and int(names[i][2]) not in source_deltas]
+    targets = [i for i in dyn if int(names[i][2]) == target_delta and names[i][0] not in NON_TARGET_DYNAMIC]
+    if not targets:
+        raise ValueError(f"no target channels at time delta {target_delta}")
+    persistence_delta = min(source_deltas, key=lambda d: (abs(d - target_delta), d))
+    lookup = {(names[i][0], names[i][1], int(names[i][2])): i for i in dyn}
+    persistence = [lookup[(names[i][0], names[i][1], persistence_delta)] for i in targets]
+    return {"hide": hide, "targets": targets, "persistence_source": persistence,
+            "persistence_delta": persistence_delta, "source_deltas": source_deltas,
+            "target_delta": target_delta, "tendency": bool(tendency)}
 
 
 def block_mask(batch_size, height, width, block_size, mask_ratio, generator, device):
@@ -102,33 +177,78 @@ def block_mask(batch_size, height, width, block_size, mask_ratio, generator, dev
 
 
 class PretextTask:
-    """Builds (corrupted inputs, targets, loss mask) for one pretext task from a clean batch."""
+    """Builds (corrupted inputs, targets, loss mask) for one pretext task from a clean batch.
 
-    def __init__(self, task, groups, height, width, block_size=10, mask_ratio=0.5):
+    ``model_channels`` is the number of leading tensor columns the model receives (met + aux);
+    columns after it are target-only (see :func:`forecast_groups`) and are stripped from the
+    corrupted input. ``forecast`` (from :func:`forecast_groups`) is required for
+    ``"delta_forecast"`` and ignored otherwise.
+    """
+
+    def __init__(self, task, groups, height, width, block_size=10, mask_ratio=0.5,
+                 forecast=None, model_channels=None, baseline_map=None):
         if task not in PRETEXT_TASKS:
             raise ValueError(f"unknown pretext task {task!r}; allowed: {PRETEXT_TASKS}")
         self.task = task
         self.height, self.width = height, width
         self.block_size, self.mask_ratio = block_size, mask_ratio
+        self.model_channels = model_channels
         self.tendency = task == "next_delta_tendency"
-        if task == "masked":
-            self.hide_idx = torch.tensor(groups["dynamic"])
-            self.target_idx = torch.tensor(groups["dynamic_targets"])
+        self.persistence_baseline = task == "next_delta"
+        self.forecast = None
+        self.external_target = task in EXTERNAL_TARGET_TASKS
+        self.baseline_map = None
+        if self.external_target:
+            hide, targets, persistence = [], [], []
+            if baseline_map is None:
+                raise ValueError(f"{task} needs baseline_map (the mean target map over the training samples)")
+            self.baseline_map = torch.as_tensor(baseline_map, dtype=torch.float32).reshape(-1)
+        elif task == "masked":
+            hide, targets = groups["dynamic"], groups["dynamic_targets"]
+            persistence = groups["delta0_persistence_source"]
+        elif task == "delta_forecast":
+            if forecast is None:
+                raise ValueError("delta_forecast needs the groups from forecast_groups()")
+            hide, targets, persistence = forecast["hide"], forecast["targets"], forecast["persistence_source"]
+            self.tendency = bool(forecast.get("tendency", False))
+            self.persistence_baseline = not self.tendency
+            self.forecast = forecast
         else:
-            self.hide_idx = torch.tensor(groups["delta0"])
-            self.target_idx = torch.tensor(groups["delta0_targets"])
-        self.persistence_idx = torch.tensor(groups["delta0_persistence_source"])
-        self.num_targets = len(self.target_idx)
+            hide, targets = groups["delta0"], groups["delta0_targets"]
+            persistence = groups["delta0_persistence_source"]
+        if model_channels is not None and hide and max(hide) >= model_channels:
+            raise ValueError("hidden channels must lie inside the model's input columns")
+        self.hide_idx = torch.tensor(hide, dtype=torch.long)        # may be empty (nothing hidden)
+        self.target_idx = torch.tensor(targets, dtype=torch.long)
+        self.persistence_idx = torch.tensor(persistence, dtype=torch.long)
+        self.num_targets = 1 if self.external_target else len(self.target_idx)
+
+    def describe(self):
+        """JSON-able summary of what the task hides / predicts (for settings and trunk meta)."""
+        d = {"task": self.task, "tendency": self.tendency, "num_targets": self.num_targets,
+             "num_hidden_channels": int(self.hide_idx.numel()), "external_target": self.external_target}
+        if self.forecast is not None:
+            d.update({k: self.forecast[k] for k in ("source_deltas", "target_delta", "persistence_delta")})
+        return d
 
     def to(self, device):
         self.hide_idx = self.hide_idx.to(device)
         self.target_idx = self.target_idx.to(device)
         self.persistence_idx = self.persistence_idx.to(device)
+        if self.baseline_map is not None:
+            self.baseline_map = self.baseline_map.to(device)
         return self
 
-    def corrupt(self, x, generator):
-        """x: clean ``[B, N, F]``. Returns ``(x_corrupt, target [B,N,T], cell_mask [B,N] bool)``."""
-        target = x[:, :, self.target_idx]
+    def corrupt(self, x, generator, y=None):
+        """x: clean ``[B, N, F]`` (all tensor columns); ``y``: external target ``[B, N]`` (only for
+        :data:`EXTERNAL_TARGET_TASKS`). Returns ``(x_corrupt [B,N,model_channels], target [B,N,T],
+        cell_mask [B,N] bool)``."""
+        if self.external_target:
+            if y is None:
+                raise ValueError(f"{self.task} needs the external target y")
+            target = y.reshape(x.shape[0], x.shape[1], 1)
+        else:
+            target = x[:, :, self.target_idx]
         if self.tendency:
             target = target - x[:, :, self.persistence_idx]
         if self.task == "masked":
@@ -136,7 +256,7 @@ class PretextTask:
                                    self.mask_ratio, generator, x.device)
         else:
             cell_mask = torch.ones(x.shape[:2], dtype=torch.bool, device=x.device)
-        x_corrupt = x.clone()
+        x_corrupt = x.clone() if self.model_channels is None else x[:, :, :self.model_channels].clone()
         hidden = x_corrupt[:, :, self.hide_idx]
         hidden[cell_mask] = 0.0
         x_corrupt[:, :, self.hide_idx] = hidden
@@ -149,11 +269,14 @@ class PretextTask:
         return diff2[cell_mask].mean()
 
     def baseline_prediction(self, x):
-        """Trivial reference prediction from the CLEAN batch: persistence of the youngest older
-        time delta for ``next_delta``; the scaled mean (0) for ``masked``."""
-        if self.task == "next_delta":
+        """Trivial reference prediction from the CLEAN batch: persistence of the source time
+        delta nearest to the target for the plain forecast tasks; the scaled mean (0) for
+        ``masked`` and for the tendency variants (where 0 IS persistence)."""
+        if self.external_target:                      # climatological mean map
+            return self.baseline_map.view(1, -1, 1).expand(x.shape[0], -1, 1)
+        if self.persistence_baseline:
             return x[:, :, self.persistence_idx]
-        return torch.zeros_like(x[:, :, self.target_idx])   # masked: mean; tendency: persistence
+        return torch.zeros_like(x[:, :, self.target_idx])
 
 
 def build_pretrain_model(parameters, grid, feature_dim, aux_dim, size, num_targets):
@@ -179,10 +302,14 @@ def pretrain_forward(model, x):
     return model.fp_decoder(h, x)
 
 
-def save_trunk(model, path, meta):
-    """Save the trunk (encoder + processor) state dicts plus a ``meta`` record."""
-    payload = {name: getattr(model, name).state_dict() for name in TRUNK_MODULES}
-    payload["meta"] = meta
+def save_trunk(model, path, meta, modules=TRUNK_MODULES):
+    """Save the state dicts of ``modules`` (default: the trunk = encoder + processor; the fp decoder
+    may be added when its output is one channel per node) plus a ``meta`` record."""
+    unknown = set(modules) - set(SAVEABLE_MODULES)
+    if unknown:
+        raise ValueError(f"save_trunk: cannot save {sorted(unknown)}; allowed {SAVEABLE_MODULES}")
+    payload = {name: getattr(model, name).state_dict() for name in modules}
+    payload["meta"] = dict(meta, saved_modules=list(modules))
     torch.save(payload, path)
 
 
@@ -191,7 +318,8 @@ def load_pretrained_trunk(model, parameters):
     for it::
 
         "pretrained_trunk": {"path": "/abs/or/model_runs-relative/trunk_best.pt",
-                             "modules": ["encoder", "processor"]}   # default: both
+                             "modules": ["encoder", "processor"]}   # default: the trunk;
+                             # add "fp_decoder" for a checkpoint that saved it (pseudo_footprint)
 
     Loading is strict (every tensor of each listed module must match in name and shape), so
     a trunk pretrained with different inputs / model_parameters fails loudly. The only
@@ -206,10 +334,14 @@ def load_pretrained_trunk(model, parameters):
     if not path.is_file():
         raise FileNotFoundError(f"pretrained_trunk.path does not exist: {path}")
     modules = cfg.get("modules", list(TRUNK_MODULES))
-    unknown = set(modules) - set(TRUNK_MODULES)
+    unknown = set(modules) - set(SAVEABLE_MODULES)
     if unknown:
-        raise ValueError(f"pretrained_trunk.modules: unknown {sorted(unknown)}; allowed {TRUNK_MODULES}")
+        raise ValueError(f"pretrained_trunk.modules: unknown {sorted(unknown)}; allowed {SAVEABLE_MODULES}")
     payload = torch.load(path, map_location="cpu", weights_only=False)
+    missing = [m for m in modules if m not in payload]
+    if missing:
+        raise KeyError(f"pretrained_trunk.modules {missing} were not saved in {path} "
+                       f"(saved: {[k for k in payload if k != 'meta']})")
     for name in modules:
         state = dict(payload[name])
         module = getattr(model, name)
@@ -227,6 +359,6 @@ def load_pretrained_trunk(model, parameters):
         module.load_state_dict(state, strict=True)
     meta = payload.get("meta", {})
     print(f"Loaded pretrained trunk modules {modules} from {path} "
-          f"(task={meta.get('task')}, years={meta.get('train_years')}, "
+          f"(task={meta.get('task')}, pretext={meta.get('pretext')}, years={meta.get('train_years')}, "
           f"epoch={meta.get('epoch')}, val_loss={meta.get('val_loss')})")
     return meta

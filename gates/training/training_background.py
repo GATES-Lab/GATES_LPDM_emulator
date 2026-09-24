@@ -13,6 +13,7 @@ from .training_helperfuns import EarlyStopping
 import torch.optim as optim
 from .training_dataclasses import ModelContext
 from model.forecast import GraphSatelliteBackgroundPredictor
+from gates.data.far_field import far_field_context, append_far_field_to_inputs
 
 
 class LoadSquareSatelliteDataWithBCs(LoadSquareSatelliteData):
@@ -127,6 +128,12 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
     all_aux_data = []
     loading_times = {}
 
+    # Split the far-field config off ONCE, before the month loop (popping it from a copy inside
+    # the loop left every month after the first without the far-field channels, and the
+    # cross-month concat then filled them with NaN: jobs 6723986).
+    input_variables = dict(input_variables)
+    far_field_cfg = input_variables.pop("far_field", None)
+
     for year in years:
         for month in months:
             month_start = time.perf_counter()
@@ -145,8 +152,13 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
                 print(f"{month_key} : {loading_times[month_key]}")
                 continue
 
-            # set up the inputs
+            # set up the inputs ("far_field" is not an argument of the inputs builder: it is
+            # handled below, see gates/data/far_field.py)
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
+            if far_field_cfg:
+                context = far_field_context(data.met_file, inputs.fp_time.values, far_field_cfg,
+                                            interp_to=input_variables.get("interp_to"), verbose=verbose)
+                inputs = append_far_field_to_inputs(inputs, context)
 
 
             ### load the boundary condition data for this month

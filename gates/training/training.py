@@ -457,11 +457,13 @@ def setup_input_dataset(parameters, train_inputs):
     """
     train_inputs = train_inputs.astype('float32')
 
-    input_scaler_params = parameters.get("input_scaler", {})
+    # Copy before popping: this dict is part of the caller's `parameters`, which is later
+    # saved as training_settings_*.json. Popping in place dropped the "scaler" name from the
+    # saved settings, so a run could not be rebuilt from its own artifacts (principle 2).
+    input_scaler_params = dict(parameters.get("input_scaler", {}))
     if input_scaler_params:
         if "scaler" in input_scaler_params:
             inputs_scaler = _get_scaler(input_scaler_params["scaler"], gates_datasets)
-            # remove scaler from input_scaler_params
             input_scaler_params.pop("scaler")
         else:
             inputs_scaler = None
@@ -483,11 +485,11 @@ def setup_fp_dataset(parameters, train_fps):
     Returns:
         gates.data.datasets.FootprintDataset: Fitted footprint dataset wrapper.
     """
-    fp_scaler_params = parameters.get("fp_scaler", {})
+    # Copy before popping — see setup_input_dataset.
+    fp_scaler_params = dict(parameters.get("fp_scaler", {}))
     if fp_scaler_params:
         if "scaler" in fp_scaler_params:
             fp_scaler = _get_scaler(fp_scaler_params["scaler"], gates_datasets)
-            # remove scaler from fp_scaler_params
             fp_scaler_params.pop("scaler")
         else:
             fp_scaler = None
