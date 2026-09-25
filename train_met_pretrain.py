@@ -20,14 +20,17 @@ The parameter file is a normal dual parameter file plus a ``pretrain`` block::
         "no_cams_years": ["2012"],             # optional: met years WITHOUT CAMS files, loaded with
                                                # the footprint-only loader; their aux channels are 0
         "extra_time_deltas": [24],             # optional: extra met time deltas (hours before the
-                                               # footprint time) loaded as TARGET-ONLY channels for
+                                               # footprint time; NEGATIVE = hours after, e.g. [-6] for
+                                               # a t+6 h target) loaded as TARGET-ONLY channels for
                                                # delta_forecast; never fed to the model, so the trunk's
                                                # input layout stays that of ``variables.time_deltas``
         "runs": [
             {"name": "masked_2yr", "task": "masked", "train_years": ["2014", "2015"]},
             {"name": "nextdelta_4yr", "task": "next_delta", "train_years": ["2013","2014","2015","2017"]},
             {"name": "backward6h_4yr", "task": "delta_forecast", "train_years": ["2013","2014","2015","2017"],
-             "source_deltas": [0, 6], "target_delta": 12, "tendency": false}
+             "source_deltas": [0, 6], "target_delta": 12, "tendency": false},
+            {"name": "shifted6h_4yr", "task": "delta_forecast", "train_years": ["2013","2014","2015","2017"],
+             "source_deltas": [6, 12, 18], "target_delta": 0, "remap_sources": true}
         ]
     }
 
@@ -44,9 +47,16 @@ channel per node (``pseudo_footprint``), so the footprint head can be warm-start
 ``delta_forecast`` runs need ``source_deltas`` (time deltas the model may see; the other dynamic
 channels are zeroed) and ``target_delta`` (must be one of ``variables.time_deltas``, 0, or
 ``pretrain.extra_time_deltas``); ``tendency`` (default false) predicts the change relative to
-the nearest source delta instead. With ``extra_time_deltas``, footprints whose shifted met time
-falls outside the loaded met record (the first day of each year) are dropped for ALL channels,
-so the sample set is slightly smaller than in a plain load — noted in ``pretrain_settings.json``.
+the nearest source delta instead. ``remap_sources`` (default false) lets the sources be ANY loaded
+deltas, one per input slot of the dual layout — the k-th source in time order fills the k-th slot —
+so nothing is zeroed: the shifted-window forward task ``[6, 12, 18] -> 0`` (t-6 h in the t slot,
+t-12 h in the t-6 h slot, t-18 h in the t-12 h slot) needs ``extra_time_deltas: [18]``. A NEGATIVE
+extra delta is a time AFTER the footprint time: ``[0, 6, 12] -> -6`` predicts t+6 h from the exact
+dual input (nothing hidden, no slot shifted; persistence baseline = t), the phase-matched control of
+the shifted window. With ``extra_time_deltas``, footprints whose shifted met time falls outside the
+loaded met record (the first day of each year, or the last for negative deltas) are dropped for ALL
+channels, so the sample set is slightly smaller than in a plain load — noted in
+``pretrain_settings.json``.
 
 ``train_load_data.years`` must cover every year used by any run; the data is loaded ONCE and the
 runs execute sequentially. ``test_load_data`` (the fine-tuning test year) is used ONLY to report
@@ -359,7 +369,8 @@ def run_pretraining(parameters, run_cfg, x_train_all, x_val, info, out_root):
     if task_name == "delta_forecast":
         forecast = pretraining.forecast_groups(
             info["tensor_names"], dynamic_vars, run_cfg["source_deltas"], run_cfg["target_delta"],
-            tendency=run_cfg.get("tendency", False), model_channels=info["model_channels"])
+            tendency=run_cfg.get("tendency", False), model_channels=info["model_channels"],
+            remap=run_cfg.get("remap_sources", False))
     y_train_all = y_val = baseline_map = pseudo_entry = None
     if task_name == "pseudo_footprint":
         cfg = pseudo_fp.resolve_config(pre.get("pseudo_footprint"), run_cfg.get("pseudo_footprint"))
@@ -421,7 +432,8 @@ def run_pretraining(parameters, run_cfg, x_train_all, x_val, info, out_root):
         job_id = os.environ.get("SLURM_JOB_ID", "local")
         wandb.init(entity=wcfg.get("entity"), project=wcfg.get("project"), group=wcfg.get("group"),
                    tags=list(wcfg.get("tags", [])) + ["met_pretrain", task_name] + (
-                       [f"src{'-'.join(map(str, forecast['source_deltas']))}_tgt{forecast['target_delta']}"] if forecast else []),
+                       [f"src{'-'.join(map(str, forecast['source_deltas']))}_tgt{forecast['target_delta']}"] if forecast else []) + (
+                       ["shifted_window"] if forecast and forecast["remap"] else []),
                    name=f"{job_id}_pretrain_{name}", job_type="met_pretrain",
                    notes=run_cfg.get("notes"), config=settings)
 
@@ -534,7 +546,11 @@ def validate_run(run, input_deltas, loaded_deltas, parameters=None):
             raise ValueError(f"run {name}: delta_forecast needs {key!r}")
     src = sorted({int(d) for d in run["source_deltas"]})
     tgt = int(run["target_delta"])
-    if not src or any(d not in input_deltas for d in src):
+    if run.get("remap_sources", False):
+        if len(src) != len(input_deltas) or any(d not in loaded_deltas for d in src):
+            raise ValueError(f"run {name}: remap_sources needs one loaded source delta per input slot {input_deltas}; "
+                             f"got {src} (loaded {loaded_deltas})")
+    elif not src or any(d not in input_deltas for d in src):
         raise ValueError(f"run {name}: source_deltas {src} must be a non-empty subset of the model's input deltas {input_deltas}")
     if tgt not in loaded_deltas:
         raise ValueError(f"run {name}: target_delta {tgt} is not loaded ({loaded_deltas}); add it to "

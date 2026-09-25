@@ -29,6 +29,18 @@ pretrained trunk can be loaded into ``GraphSatelliteDualForecaster`` unchanged:
                    (``pretrain.extra_time_deltas`` in ``train_met_pretrain.py``): the trunk
                    still sees exactly the dual model's inputs. ``tendency: true`` predicts the
                    change relative to the nearest source delta instead (zero = persistence).
+                   ``remap_sources: true`` (the SHIFTED WINDOW) lets the sources be any loaded
+                   deltas, one per input slot of the dual layout: the k-th source in time order
+                   is written into the k-th slot, so every dynamic channel the model sees is a
+                   real field (nothing is zeroed) while the channel layout stays the dual
+                   model's. ``[6, 12, 18] -> 0`` (with ``extra_time_deltas: [18]``) is the
+                   next_delta forecast with a full window: t-6 h sits in the t slot, t-12 h in
+                   the t-6 h slot and t-18 h in the t-12 h slot; the slots' spacing is unchanged,
+                   their absolute (and diurnal) time is 6 h earlier than at fine-tuning.
+                   A NEGATIVE target delta is a time AFTER the footprint time (loaded as
+                   target-only channels, ``extra_time_deltas: [-6]``): ``[0, 6, 12] -> -6``
+                   predicts t+6 h from the exact dual input — nothing hidden, no slot shifted —
+                   the phase-matched control of the shifted window.
 - ``"pseudo_footprint"`` the footprint-shaped task: nothing is hidden, the model sees exactly the
                    dual input and predicts ONE channel per node — a kinematic pseudo-footprint
                    (backward residence-time map of the air arriving in the release cell, built from
@@ -109,7 +121,7 @@ def channel_groups(variable_names, dynamic_variables):
 
 
 def forecast_groups(variable_names, dynamic_variables, source_deltas, target_delta,
-                    tendency=False, model_channels=None):
+                    tendency=False, model_channels=None, remap=False):
     """Index groups for the general ``delta_forecast`` task.
 
     Args:
@@ -119,17 +131,23 @@ def forecast_groups(variable_names, dynamic_variables, source_deltas, target_del
         dynamic_variables: names of the time-varying met variables.
         source_deltas (sequence of int): time deltas (hours before the footprint time) the
             model may see; every other dynamic channel inside the model input is zeroed.
-        target_delta (int): time delta of the channels to predict.
+        target_delta (int): time delta of the channels to predict (negative = hours AFTER the
+            footprint time).
         tendency (bool): predict ``x(target) - x(persistence source)`` instead of ``x(target)``.
         model_channels (int or None): number of leading tensor columns the model receives;
             None = all columns (no target-only channels).
+        remap (bool): shifted window. ``source_deltas`` may then be ANY loaded deltas but must
+            number one per input slot (the distinct deltas inside the model input); the k-th
+            source in time order is written into the k-th slot, nothing is zeroed.
 
     Returns:
         dict: ``hide`` (dynamic channels zeroed in the model input), ``targets`` (channels at
         ``target_delta``, minus ``NON_TARGET_DYNAMIC``), ``persistence_source`` (for each
         target, the same (variable, level) at the source delta closest in time to the target
-        = the persistence baseline), ``persistence_delta``, and the resolved
-        ``source_deltas`` / ``target_delta`` / ``tendency`` for the record.
+        = the persistence baseline), ``persistence_delta``, the resolved
+        ``source_deltas`` / ``target_delta`` / ``tendency`` / ``remap`` for the record, and,
+        for the shifted window, ``remap_source`` -> ``remap_dest`` (tensor column of each source
+        channel and the input slot it is written into) plus ``input_slot_deltas``.
     """
     dynamic_variables = set(dynamic_variables)
     names = [tuple(v) for v in variable_names]
@@ -141,22 +159,39 @@ def forecast_groups(variable_names, dynamic_variables, source_deltas, target_del
     target_delta = int(target_delta)
     if not source_deltas:
         raise ValueError("delta_forecast needs at least one source time delta")
-    if any(d not in input_deltas for d in source_deltas):
+    if remap:
+        if len(source_deltas) != len(input_deltas):
+            raise ValueError(f"remap_sources needs one source delta per input slot {input_deltas}; got {source_deltas}")
+        if any(d not in present for d in source_deltas):
+            raise ValueError(f"source_deltas {source_deltas} must be among the loaded time deltas {present}")
+    elif any(d not in input_deltas for d in source_deltas):
         raise ValueError(f"source_deltas {source_deltas} must be among the model's input time deltas {input_deltas}")
     if target_delta not in present:
         raise ValueError(f"target_delta {target_delta} is not among the loaded time deltas {present}")
     if target_delta in source_deltas:
         raise ValueError(f"target_delta {target_delta} must not be one of source_deltas {source_deltas}")
-    hide = [i for i in dyn if i < n_model and int(names[i][2]) not in source_deltas]
+    hide = [] if remap else [i for i in dyn if i < n_model and int(names[i][2]) not in source_deltas]
     targets = [i for i in dyn if int(names[i][2]) == target_delta and names[i][0] not in NON_TARGET_DYNAMIC]
     if not targets:
         raise ValueError(f"no target channels at time delta {target_delta}")
     persistence_delta = min(source_deltas, key=lambda d: (abs(d - target_delta), d))
     lookup = {(names[i][0], names[i][1], int(names[i][2])): i for i in dyn}
     persistence = [lookup[(names[i][0], names[i][1], persistence_delta)] for i in targets]
+    remap_src, remap_dst = [], []
+    if remap:   # the k-th source (in time order) is shown in the k-th input slot
+        slot_source = dict(zip(input_deltas, source_deltas))
+        for i in dyn:
+            if i < n_model:
+                key = (names[i][0], names[i][1], slot_source[int(names[i][2])])
+                if key not in lookup:
+                    raise ValueError(f"no loaded channel {key} to fill the input slot {names[i]}")
+                remap_src.append(lookup[key])
+                remap_dst.append(i)
     return {"hide": hide, "targets": targets, "persistence_source": persistence,
             "persistence_delta": persistence_delta, "source_deltas": source_deltas,
-            "target_delta": target_delta, "tendency": bool(tendency)}
+            "target_delta": target_delta, "tendency": bool(tendency), "remap": bool(remap),
+            "remap_source": remap_src, "remap_dest": remap_dst,
+            "input_slot_deltas": input_deltas if remap else None}
 
 
 def block_mask(batch_size, height, width, block_size, mask_ratio, generator, device):
@@ -181,8 +216,9 @@ class PretextTask:
 
     ``model_channels`` is the number of leading tensor columns the model receives (met + aux);
     columns after it are target-only (see :func:`forecast_groups`) and are stripped from the
-    corrupted input. ``forecast`` (from :func:`forecast_groups`) is required for
-    ``"delta_forecast"`` and ignored otherwise.
+    corrupted input, unless the forecast is a shifted window (``remap``), in which case they are
+    written into the model's input slots. ``forecast`` (from :func:`forecast_groups`) is
+    required for ``"delta_forecast"`` and ignored otherwise.
     """
 
     def __init__(self, task, groups, height, width, block_size=10, mask_ratio=0.5,
@@ -219,6 +255,12 @@ class PretextTask:
         if model_channels is not None and hide and max(hide) >= model_channels:
             raise ValueError("hidden channels must lie inside the model's input columns")
         self.hide_idx = torch.tensor(hide, dtype=torch.long)        # may be empty (nothing hidden)
+        remap_src = list(self.forecast.get("remap_source", [])) if self.forecast is not None else []
+        remap_dst = list(self.forecast.get("remap_dest", [])) if self.forecast is not None else []
+        if model_channels is not None and remap_dst and max(remap_dst) >= model_channels:
+            raise ValueError("remapped input slots must lie inside the model's input columns")
+        self.remap_src = torch.tensor(remap_src, dtype=torch.long)  # empty unless a shifted window
+        self.remap_dst = torch.tensor(remap_dst, dtype=torch.long)
         self.target_idx = torch.tensor(targets, dtype=torch.long)
         self.persistence_idx = torch.tensor(persistence, dtype=torch.long)
         self.num_targets = 1 if self.external_target else len(self.target_idx)
@@ -229,12 +271,16 @@ class PretextTask:
              "num_hidden_channels": int(self.hide_idx.numel()), "external_target": self.external_target}
         if self.forecast is not None:
             d.update({k: self.forecast[k] for k in ("source_deltas", "target_delta", "persistence_delta")})
+            d["remap"] = bool(self.forecast.get("remap", False))
+            d["input_slot_deltas"] = self.forecast.get("input_slot_deltas")
         return d
 
     def to(self, device):
         self.hide_idx = self.hide_idx.to(device)
         self.target_idx = self.target_idx.to(device)
         self.persistence_idx = self.persistence_idx.to(device)
+        self.remap_src = self.remap_src.to(device)
+        self.remap_dst = self.remap_dst.to(device)
         if self.baseline_map is not None:
             self.baseline_map = self.baseline_map.to(device)
         return self
@@ -260,6 +306,8 @@ class PretextTask:
         hidden = x_corrupt[:, :, self.hide_idx]
         hidden[cell_mask] = 0.0
         x_corrupt[:, :, self.hide_idx] = hidden
+        if self.remap_dst.numel():                     # shifted window: the sources fill the input slots
+            x_corrupt[:, :, self.remap_dst] = x[:, :, self.remap_src]
         return x_corrupt, target, cell_mask
 
     @staticmethod

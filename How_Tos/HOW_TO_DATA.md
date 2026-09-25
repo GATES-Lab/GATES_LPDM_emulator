@@ -308,3 +308,13 @@ train_loader, _ = make_dataloader(
 train_features, train_labels = next(iter(dataloader))
 ```
 
+
+## Coarse far-field met context (optional, experimental)
+
+`variables.far_field` (see `gates/data/far_field.py`) block-averages the full-domain met onto a
+small grid for a few variables / levels / time deltas and appends the result to the inputs as
+`far_<var>_r<i>c<j>` channels broadcast over the window. It multiplies the input width (128 extra
+channels for a 4×4 grid with 2 variables × 2 levels × 2 deltas; 288 for 6×6) and the memory need
+accordingly (~340 GB RSS for 6×6 on the 2-year SA split). In the 2026-09 test it did not improve
+the footprint head and made the background head overfit more (experiment summary section 9), so
+it is off by default.
