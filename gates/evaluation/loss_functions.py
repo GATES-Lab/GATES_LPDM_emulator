@@ -795,13 +795,15 @@ class GradientMSELoss(nn.Module):
     """
 
     def __init__(self, fp_labels=None, nan_mask_label=None, beta=1.0,
-                 spatial_shape=None, core='squared', eps=1e-3):
+                 spatial_shape=None, core='squared', eps=1e-3,
+                 weight_label=None, weight_transform_fn=None,
+                 weight_transform_kwargs=None):
         """Initialize the loss.
 
         Args:
             fp_labels (list[str], optional): Variable names along the last dim of
-                ``fp_batch``; only required when ``nan_mask_label`` is set.
-                Defaults to None.
+                ``fp_batch``; required when ``nan_mask_label`` or ``weight_label``
+                is set. Defaults to None.
             nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
                 variable instead of passing it as a forward argument. Defaults to None.
             beta (float, optional): Weight on the gradient-error term. beta=0
@@ -811,9 +813,20 @@ class GradientMSELoss(nn.Module):
             core (str, optional): ``"squared"`` or ``"charbonnier"``. Defaults to
                 ``"squared"``.
             eps (float, optional): Charbonnier smoothing constant. Defaults to 1e-3.
+            weight_label (str, optional): If set, the base (per-pixel) term is
+                weighted element-wise by ``fp_batch[..., weight_label]`` (à la
+                ``PixelWeightedMSELoss``), so high-value pixels are not drowned out.
+                The gradient term is left unweighted (it is a shape penalty).
+                Defaults to None (unweighted base).
+            weight_transform_fn (callable or str, optional): Transform applied to the
+                weight field before multiplying, e.g. ``scale_and_shift``; a string
+                is evaluated with ``eval()``. Defaults to None (identity).
+            weight_transform_kwargs (dict, optional): Keyword arguments forwarded to
+                ``weight_transform_fn`` (e.g. ``{"w": 1000, "a": 1.0}``). Defaults to None.
 
         Raises:
-            ValueError: If ``nan_mask_label`` is set but ``fp_labels`` is None.
+            ValueError: If ``nan_mask_label`` or ``weight_label`` is set but
+                ``fp_labels`` is None.
         """
         super().__init__()
         if nan_mask_label is not None:
@@ -826,6 +839,13 @@ class GradientMSELoss(nn.Module):
         self.spatial_shape = spatial_shape
         self.core = core
         self.eps = eps
+        if weight_label is not None and fp_labels is None:
+            raise ValueError("fp_labels must be provided if weight_label is set")
+        self.weight_idx = _label_index(fp_labels, weight_label) if weight_label is not None else None
+        if type(weight_transform_fn) == str:
+            weight_transform_fn = eval(weight_transform_fn)
+        self.weight_transform_fn = weight_transform_fn
+        self.weight_transform_kwargs = weight_transform_kwargs or {}
 
     def forward(self, pred, target, fp_batch=None, nan_mask=None):
         """Compute the gradient-augmented MSE loss.
@@ -849,8 +869,14 @@ class GradientMSELoss(nn.Module):
 
         e = pred2 - tgt2
 
-        # base per-pixel term
-        base = torch.nanmean(_mask(_apply_core(e, self.core, self.eps), mask2))
+        # base per-pixel term (optionally pixel-weighted by an fp_batch field)
+        base_pix = _apply_core(e, self.core, self.eps)
+        if self.weight_idx is not None:
+            w = _to_2d(fp_batch[..., self.weight_idx], self.spatial_shape)
+            if self.weight_transform_fn is not None:
+                w = self.weight_transform_fn(w, **self.weight_transform_kwargs)
+            base_pix = base_pix * w
+        base = torch.nanmean(_mask(base_pix, mask2))
 
         # spatial gradient of the error field (== grad(pred) - grad(target))
         e_filled = e if mask2 is None else e.masked_fill(mask2.bool(), 0.0)
@@ -908,13 +934,15 @@ class StructuralLoss(nn.Module):
     """
 
     def __init__(self, fp_labels=None, nan_mask_label=None, gamma=1.0,
-                 mode='correlation', core='squared', eps=1e-3):
+                 mode='correlation', core='squared', eps=1e-3,
+                 weight_label=None, weight_transform_fn=None,
+                 weight_transform_kwargs=None):
         """Initialize the loss.
 
         Args:
             fp_labels (list[str], optional): Variable names along the last dim of
-                ``fp_batch``; only required when ``nan_mask_label`` is set.
-                Defaults to None.
+                ``fp_batch``; required when ``nan_mask_label`` or ``weight_label``
+                is set. Defaults to None.
             nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
                 variable instead of passing it as a forward argument. Defaults to None.
             gamma (float, optional): Weight on the structural term. gamma=0 recovers
@@ -924,10 +952,20 @@ class StructuralLoss(nn.Module):
             core (str, optional): ``"squared"`` or ``"charbonnier"`` for the base
                 MSE term. Defaults to ``"squared"``.
             eps (float, optional): Charbonnier smoothing constant. Defaults to 1e-3.
+            weight_label (str, optional): If set, the base (per-pixel) term is
+                weighted element-wise by ``fp_batch[..., weight_label]`` (à la
+                ``PixelWeightedMSELoss``), so high-value pixels are not drowned out.
+                The structural term is left unweighted (it is a shape penalty).
+                Defaults to None (unweighted base).
+            weight_transform_fn (callable or str, optional): Transform applied to the
+                weight field before multiplying, e.g. ``scale_and_shift``; a string
+                is evaluated with ``eval()``. Defaults to None (identity).
+            weight_transform_kwargs (dict, optional): Keyword arguments forwarded to
+                ``weight_transform_fn`` (e.g. ``{"w": 1000, "a": 1.0}``). Defaults to None.
 
         Raises:
-            ValueError: If ``nan_mask_label`` is set but ``fp_labels`` is None, or
-                if ``mode`` is not a recognised option.
+            ValueError: If ``nan_mask_label`` or ``weight_label`` is set but
+                ``fp_labels`` is None, or if ``mode`` is not a recognised option.
         """
         super().__init__()
         if nan_mask_label is not None:
@@ -944,6 +982,13 @@ class StructuralLoss(nn.Module):
         self.mode = mode
         self.core = core
         self.eps = eps
+        if weight_label is not None and fp_labels is None:
+            raise ValueError("fp_labels must be provided if weight_label is set")
+        self.weight_idx = _label_index(fp_labels, weight_label) if weight_label is not None else None
+        if type(weight_transform_fn) == str:
+            weight_transform_fn = eval(weight_transform_fn)
+        self.weight_transform_fn = weight_transform_fn
+        self.weight_transform_kwargs = weight_transform_kwargs or {}
 
     def forward(self, pred, target, fp_batch=None, nan_mask=None):
         """Compute the structure-augmented MSE loss.
@@ -971,20 +1016,43 @@ class StructuralLoss(nn.Module):
         nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
         spatial = _spatial_dims(pred)
 
-        # base per-pixel term
-        base = torch.nanmean(_mask(_apply_core(pred - target, self.core, self.eps), nan_mask))
+        # base per-pixel term (optionally pixel-weighted by an fp_batch field)
+        base_pix = _apply_core(pred - target, self.core, self.eps)
+        if self.weight_idx is not None:
+            w = _resolve_dims(fp_batch[..., self.weight_idx], pred.shape)
+            if self.weight_transform_fn is not None:
+                w = self.weight_transform_fn(w, **self.weight_transform_kwargs)
+            base_pix = base_pix * w
+        base = torch.nanmean(_mask(base_pix, nan_mask))
 
-        # per-sample spatial Pearson correlation over valid pixels
-        p = _mask(pred, nan_mask)
-        t = _mask(target, nan_mask)
-        p_centred = p - torch.nanmean(p, dim=spatial, keepdim=True)
-        t_centred = t - torch.nanmean(t, dim=spatial, keepdim=True)
+        # per-sample spatial Pearson correlation over valid pixels.
+        # Invalid pixels are zeroed with torch.where (not set to NaN): NaNs in the
+        # graph poison the per-sample mean/sum and produce NaN gradients everywhere,
+        # so masking is done via an explicit valid-count instead.
+        valid = torch.isfinite(pred) & torch.isfinite(target)
+        if nan_mask is not None:
+            valid = valid & ~nan_mask.bool()
+        zero = torch.zeros((), device=pred.device, dtype=pred.dtype)
 
-        cov = torch.nansum(p_centred * t_centred, dim=spatial)
-        var_p = torch.nansum(p_centred ** 2, dim=spatial)
-        var_t = torch.nansum(t_centred ** 2, dim=spatial)
-        corr = cov / (torch.sqrt(var_p * var_t) + 1e-8)   # (B,)
+        count = valid.sum(dim=spatial, keepdim=True).clamp(min=1)
+        p0 = torch.where(valid, pred, zero)
+        t0 = torch.where(valid, target, zero)
+        p_centred = torch.where(valid, pred - p0.sum(dim=spatial, keepdim=True) / count, zero)
+        t_centred = torch.where(valid, target - t0.sum(dim=spatial, keepdim=True) / count, zero)
 
-        structural = torch.nanmean(1.0 - corr)
+        cov = (p_centred * t_centred).sum(dim=spatial)
+        var_p = (p_centred ** 2).sum(dim=spatial)
+        var_t = (t_centred ** 2).sum(dim=spatial)
+        # eps goes *inside* the sqrt: d/dx sqrt(x) is infinite at x=0, so a
+        # constant field (var=0, e.g. an all-zero footprint) would otherwise give
+        # 0 * inf = NaN gradients.
+        corr = cov / torch.sqrt(var_p * var_t + 1e-8)   # (B,)
+
+        # correlation is undefined for a constant target; drop those samples
+        has_signal = var_t > 0
+        if has_signal.any():
+            structural = torch.mean(1.0 - corr[has_signal])
+        else:
+            structural = zero
 
         return base + self.gamma * structural
