@@ -9,7 +9,8 @@ from .data.load_data import (
 from .data.datasets import (
     FootprintDataset,
     InputsDataset,
-    make_dataloader 
+    make_dataloader,
+    get_square_satellite_inputs_v2,
 )
 
-__all__ = ["__version__","LoadSquareSatelliteData", "load_flux_data", "cut_flux_data", "get_square_satellite_inputs", "FootprintDataset", "InputsDataset", "make_dataloader", "cut_satellite_data"]
+__all__ = ["__version__","LoadSquareSatelliteData", "load_flux_data", "cut_flux_data", "get_square_satellite_inputs_v2", "FootprintDataset", "InputsDataset", "make_dataloader", "cut_satellite_data"]

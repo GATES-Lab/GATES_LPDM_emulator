@@ -109,6 +109,11 @@ def load_model_artifacts(model_dir: Path, model_name: str):
     return scalers, grid, training_params
 
 
+def strip_timestamp(name: str) -> str:
+    """Remove a trailing ``_YYYYmmdd_HHMMSS`` run timestamp from a model name."""
+    return re.sub(r"_\d{8}_\d{6}$", "", name)
+
+
 def determine_save_name(model_save_name_arg, model_dir: Path) -> str:
     """Determine the model_save_name used to organise output files.
 
@@ -118,7 +123,7 @@ def determine_save_name(model_save_name_arg, model_dir: Path) -> str:
     if model_save_name_arg:
         return model_save_name_arg
 
-    return re.sub(r"_\d{8}_\d{6}$", "", model_dir.name)
+    return strip_timestamp(model_dir.name)
 
 
 
@@ -142,14 +147,29 @@ def load_checkpoint(
     checkpoint: str,
     device: torch.device,
 ):
-    """Load model weights from a checkpoint file."""
+    """Load model weights from a checkpoint file.
+
+    ``checkpoint`` is either ``"best"`` (the EarlyStopping ``<model_name>_best.pt``,
+    a bare state dict) or an epoch number. Epoch checkpoints are saved under the
+    base model name without the run timestamp (``<base_name>_<epoch>.pt``), so
+    both the timestamped and the base name are tried.
+    """
     if checkpoint == "best":
         path = model_dir / f"{model_name}_best.pt"
         model.load_state_dict(torch.load(path, map_location=device))
         print(f"Loaded best model checkpoint from {path}")
     else:
         epoch = int(checkpoint)
-        path = model_dir / f"{model_name}_{epoch}.pt"
+        candidates = [
+            model_dir / f"{model_name}_{epoch}.pt",
+            model_dir / f"{strip_timestamp(model_name)}_{epoch}.pt",
+        ]
+        path = next((p for p in candidates if p.exists()), None)
+        if path is None:
+            raise FileNotFoundError(
+                f"No checkpoint for epoch {epoch} in {model_dir}; tried "
+                + ", ".join(p.name for p in candidates)
+            )
         state = torch.load(path, map_location=device)
         model.load_state_dict(state["model_state_dict"])
         print(f"Loaded epoch {epoch} checkpoint from {path}")
