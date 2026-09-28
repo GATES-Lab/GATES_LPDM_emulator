@@ -221,6 +221,80 @@ def _label_index(fp_labels, label, arg_name='weight_label'):
     return fp_labels.index(label)
 
 
+def _to_2d(t, spatial_shape=None):
+    """Reshape a flattened footprint tensor to ``(B, H, W)`` for spatial ops.
+
+    The training loop flattens footprints, so a prediction arrives as ``(B, N)``
+    or ``(B, N, 1)`` with ``N = H * W``. Spatial losses (gradient, structure) need
+    the 2D layout back. Tensors already shaped ``(B, H, W)`` are returned unchanged.
+
+    nan_mask convention: 1 = invalid/NaN, 0 = valid (preserved by the reshape).
+
+    Args:
+        t (torch.Tensor or None): Tensor shaped ``(B, H, W)``, ``(B, N)`` or
+            ``(B, N, 1)``. None is passed through as None.
+        spatial_shape (tuple[int, int] or None, optional): Explicit ``(H, W)`` for
+            non-square domains. If None, a square ``H = W = sqrt(N)`` is assumed.
+            Defaults to None.
+
+    Returns:
+        torch.Tensor or None: ``t`` reshaped to ``(B, H, W)``, or None.
+
+    Raises:
+        ValueError: If ``t`` has an unsupported rank, or ``N`` cannot be reshaped
+            to the requested / inferred ``(H, W)``.
+    """
+    if t is None:
+        return None
+    # drop a trailing singleton channel dim: (B, N, 1) -> (B, N)
+    if t.dim() == 3 and t.shape[-1] == 1:
+        t = t.squeeze(-1)
+    if t.dim() == 3:
+        return t  # already (B, H, W)
+    if t.dim() != 2:
+        raise ValueError(
+            f"Expected (B, H, W), (B, N) or (B, N, 1); got shape {tuple(t.shape)}"
+        )
+    b, n = t.shape
+    if spatial_shape is not None:
+        h, w = spatial_shape
+    else:
+        h = int(round(n ** 0.5))
+        w = h
+    if h * w != n:
+        raise ValueError(
+            f"Cannot reshape flattened length {n} to ({h}, {w}); "
+            "pass spatial_shape=(H, W) for non-square domains."
+        )
+    return t.reshape(b, h, w)
+
+
+def _apply_core(e, core="squared", eps=1e-3):
+    """Map an error tensor to a per-element penalty.
+
+    ``"squared"`` gives the usual ``e**2``; ``"charbonnier"`` gives the robust
+    ``sqrt(e**2 + eps**2)``, a smooth approximation to ``|e|`` that is less
+    dominated by large residuals (Charbonnier et al., 1994).
+
+    Args:
+        e (torch.Tensor): Error tensor (e.g. ``pred - target``).
+        core (str, optional): ``"squared"`` or ``"charbonnier"``. Defaults to
+            ``"squared"``.
+        eps (float, optional): Charbonnier smoothing constant. Defaults to 1e-3.
+
+    Returns:
+        torch.Tensor: Per-element penalty, same shape as ``e``.
+
+    Raises:
+        ValueError: If ``core`` is not ``"squared"`` or ``"charbonnier"``.
+    """
+    if core == "squared":
+        return e ** 2
+    if core == "charbonnier":
+        return torch.sqrt(e ** 2 + eps ** 2)
+    raise ValueError(f"Unknown core '{core}'. Use 'squared' or 'charbonnier'.")
+
+
 # ---------------------------------------------------------------------------
 # Loss functions
 #
@@ -684,3 +758,233 @@ class MSEPlusSumLoss(nn.Module):
         integral_mse = torch.nanmean((integral_pred - integral_target) ** 2)
 
         return mse + self.alpha * integral_mse
+
+
+class GradientMSELoss(nn.Module):
+    """MSE plus a penalty on the spatial-gradient error (anti-blur loss).
+
+    Plain MSE rewards the conditional mean, which is smoother than any single
+    footprint: a blurred prediction keeps roughly correct values but collapses
+    the field's slopes. This loss adds a term on the spatial gradient, which a
+    smoothed prediction cannot satisfy. Because
+    ``MSE(grad(pred), grad(target)) == MSE(grad(pred - target))``, the gradient
+    term is simply the smoothness of the *error* field — only over-smoothing
+    reduces it. This is the Gradient Difference Loss of Mathieu et al. (2016).
+
+    Formula::
+
+        L = core(pred - target)
+          + beta * core(grad(pred - target))
+
+    where ``core`` is squared error (default) or the robust Charbonnier
+    ``sqrt(e**2 + eps**2)``, and ``grad`` is the forward finite difference along
+    both spatial dims. Gradient entries touching a NaN/masked pixel are dropped.
+
+    Handles both ``(B, H, W)`` and flattened ``(B, N)`` / ``(B, N, 1)`` preds; a
+    flattened footprint is reshaped to a square ``(H, W)`` unless ``spatial_shape``
+    is given (see ``_to_2d``).
+
+    Usage::
+        criterion = GradientMSELoss(beta=0.5)
+        loss = criterion(pred, target)
+
+        # Charbonnier core + automatic nan mask from fp_batch:
+        criterion = GradientMSELoss(fp_labels, nan_mask_label='fp_nan_mask',
+                                    beta=0.5, core='charbonnier')
+        loss = criterion(pred, target, fp_batch)
+    """
+
+    def __init__(self, fp_labels=None, nan_mask_label=None, beta=1.0,
+                 spatial_shape=None, core='squared', eps=1e-3):
+        """Initialize the loss.
+
+        Args:
+            fp_labels (list[str], optional): Variable names along the last dim of
+                ``fp_batch``; only required when ``nan_mask_label`` is set.
+                Defaults to None.
+            nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
+                variable instead of passing it as a forward argument. Defaults to None.
+            beta (float, optional): Weight on the gradient-error term. beta=0
+                recovers plain (core) MSE. Defaults to 1.0.
+            spatial_shape (tuple[int, int], optional): ``(H, W)`` used to un-flatten
+                predictions; None assumes a square domain. Defaults to None.
+            core (str, optional): ``"squared"`` or ``"charbonnier"``. Defaults to
+                ``"squared"``.
+            eps (float, optional): Charbonnier smoothing constant. Defaults to 1e-3.
+
+        Raises:
+            ValueError: If ``nan_mask_label`` is set but ``fp_labels`` is None.
+        """
+        super().__init__()
+        if nan_mask_label is not None:
+            if fp_labels is None:
+                raise ValueError("fp_labels must be provided if nan_mask_label is set")
+            self.nan_mask_idx = _label_index(fp_labels, nan_mask_label, 'nan_mask_label')
+        else:
+            self.nan_mask_idx = None
+        self.beta = beta
+        self.spatial_shape = spatial_shape
+        self.core = core
+        self.eps = eps
+
+    def forward(self, pred, target, fp_batch=None, nan_mask=None):
+        """Compute the gradient-augmented MSE loss.
+
+        Args:
+            pred (torch.Tensor): Model output, shape (B, H, W), (B, N) or (B, N, 1).
+            target (torch.Tensor): Ground truth footprint, same shape as ``pred``.
+            fp_batch (torch.Tensor, optional): Supporting data used to extract the
+                nan mask if ``nan_mask_label`` was set. Defaults to None.
+            nan_mask (torch.Tensor, optional): 1=invalid pixel, shape matching
+                ``pred``. Defaults to None.
+
+        Returns:
+            torch.Tensor: Scalar loss, ``base + beta * gradient_error``.
+        """
+        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
+
+        pred2 = _to_2d(pred, self.spatial_shape)
+        tgt2 = _to_2d(target, self.spatial_shape)
+        mask2 = _to_2d(nan_mask, self.spatial_shape)
+
+        e = pred2 - tgt2
+
+        # base per-pixel term
+        base = torch.nanmean(_mask(_apply_core(e, self.core, self.eps), mask2))
+
+        # spatial gradient of the error field (== grad(pred) - grad(target))
+        e_filled = e if mask2 is None else e.masked_fill(mask2.bool(), 0.0)
+        dH = e_filled[:, 1:, :] - e_filled[:, :-1, :]
+        dW = e_filled[:, :, 1:] - e_filled[:, :, :-1]
+
+        if mask2 is not None:
+            valid = ~mask2.bool()
+            # a difference is only valid if both pixels it spans are valid
+            valid_H = valid[:, 1:, :] & valid[:, :-1, :]
+            valid_W = valid[:, :, 1:] & valid[:, :, :-1]
+            dH = dH.masked_fill(~valid_H, float('nan'))
+            dW = dW.masked_fill(~valid_W, float('nan'))
+
+        grad = torch.nanmean(torch.cat([
+            _apply_core(dH, self.core, self.eps).reshape(-1),
+            _apply_core(dW, self.core, self.eps).reshape(-1),
+        ]))
+
+        return base + self.beta * grad
+
+
+class StructuralLoss(nn.Module):
+    """MSE plus a structural term rewarding pattern/shape agreement.
+
+    Per-pixel MSE is scale-driven and blur-prone. A structural term instead
+    scores whether the prediction has the same spatial *pattern* as the truth,
+    largely independent of per-footprint offset or scale.
+
+    Formula::
+
+        L = core(pred - target) + gamma * structural
+
+    Structural terms (``mode``):
+
+    - ``"correlation"`` (default): per-sample spatial Pearson correlation between
+      predicted and true fields over valid pixels; ``structural = mean(1 - corr)``.
+      This is the Anomaly/Pattern Correlation Coefficient used as a standard
+      spatial-forecast skill score. Cheap, no windowing, and applied over the
+      flattened spatial dims directly.
+    - ``"ms_ssim"``: multi-scale structural similarity (Wang et al., 2003), used
+      as ``1 - MS-SSIM``. Not yet implemented (raises ``NotImplementedError``).
+
+    Both terms are best applied in the model's transformed (log) space and kept
+    additive to MSE — footprints are sparse/heavy-tailed, so a standalone
+    structural term is ill-conditioned.
+
+    Usage::
+        criterion = StructuralLoss(gamma=0.3)  # mode='correlation'
+        loss = criterion(pred, target)
+
+        criterion = StructuralLoss(fp_labels, nan_mask_label='fp_nan_mask',
+                                   gamma=0.3, mode='correlation')
+        loss = criterion(pred, target, fp_batch)
+    """
+
+    def __init__(self, fp_labels=None, nan_mask_label=None, gamma=1.0,
+                 mode='correlation', core='squared', eps=1e-3):
+        """Initialize the loss.
+
+        Args:
+            fp_labels (list[str], optional): Variable names along the last dim of
+                ``fp_batch``; only required when ``nan_mask_label`` is set.
+                Defaults to None.
+            nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
+                variable instead of passing it as a forward argument. Defaults to None.
+            gamma (float, optional): Weight on the structural term. gamma=0 recovers
+                plain (core) MSE. Defaults to 1.0.
+            mode (str, optional): ``"correlation"`` (spatial Pearson) or
+                ``"ms_ssim"`` (not yet implemented). Defaults to ``"correlation"``.
+            core (str, optional): ``"squared"`` or ``"charbonnier"`` for the base
+                MSE term. Defaults to ``"squared"``.
+            eps (float, optional): Charbonnier smoothing constant. Defaults to 1e-3.
+
+        Raises:
+            ValueError: If ``nan_mask_label`` is set but ``fp_labels`` is None, or
+                if ``mode`` is not a recognised option.
+        """
+        super().__init__()
+        if nan_mask_label is not None:
+            if fp_labels is None:
+                raise ValueError("fp_labels must be provided if nan_mask_label is set")
+            self.nan_mask_idx = _label_index(fp_labels, nan_mask_label, 'nan_mask_label')
+        else:
+            self.nan_mask_idx = None
+        if mode not in ('correlation', 'ms_ssim'):
+            raise ValueError(
+                f"Unknown mode '{mode}'. Use 'correlation' or 'ms_ssim'."
+            )
+        self.gamma = gamma
+        self.mode = mode
+        self.core = core
+        self.eps = eps
+
+    def forward(self, pred, target, fp_batch=None, nan_mask=None):
+        """Compute the structure-augmented MSE loss.
+
+        Args:
+            pred (torch.Tensor): Model output, shape (B, H, W), (B, N) or (B, N, 1).
+            target (torch.Tensor): Ground truth footprint, same shape as ``pred``.
+            fp_batch (torch.Tensor, optional): Supporting data used to extract the
+                nan mask if ``nan_mask_label`` was set. Defaults to None.
+            nan_mask (torch.Tensor, optional): 1=invalid pixel, shape matching
+                ``pred``. Defaults to None.
+
+        Returns:
+            torch.Tensor: Scalar loss, ``base + gamma * structural``.
+
+        Raises:
+            NotImplementedError: If ``mode='ms_ssim'`` (not yet implemented).
+        """
+        if self.mode == 'ms_ssim':
+            raise NotImplementedError(
+                "StructuralLoss mode='ms_ssim' is not implemented yet; "
+                "use mode='correlation'."
+            )
+
+        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
+        spatial = _spatial_dims(pred)
+
+        # base per-pixel term
+        base = torch.nanmean(_mask(_apply_core(pred - target, self.core, self.eps), nan_mask))
+
+        # per-sample spatial Pearson correlation over valid pixels
+        p = _mask(pred, nan_mask)
+        t = _mask(target, nan_mask)
+        p_centred = p - torch.nanmean(p, dim=spatial, keepdim=True)
+        t_centred = t - torch.nanmean(t, dim=spatial, keepdim=True)
+
+        cov = torch.nansum(p_centred * t_centred, dim=spatial)
+        var_p = torch.nansum(p_centred ** 2, dim=spatial)
+        var_t = torch.nansum(t_centred ** 2, dim=spatial)
+        corr = cov / (torch.sqrt(var_p * var_t) + 1e-8)   # (B,)
+
+        structural = torch.nanmean(1.0 - corr)
+
+        return base + self.gamma * structural

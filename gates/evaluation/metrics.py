@@ -74,6 +74,101 @@ def iou(true, pred, *, threshold=0, spatial_shape=None, ignore_mask=None, reduce
     else:
         return scores
 
+
+def iou_at_quantiles(true, pred, *, quantiles=(0.25, 0.5, 0.9, 0.99),
+                     per_sample=True, spatial_shape=None, ignore_mask=None,
+                     reduce="mean"):
+    """IoU evaluated at thresholds drawn from quantiles of the true footprint.
+
+    The whole-field IoU at a fixed low threshold saturates: footprints share a
+    trivially-predicted gross extent, and every model over-spreads by roughly the
+    same factor, so IoU sits near a constant that reflects the data rather than
+    skill. Thresholding at high quantiles of the *true* field instead isolates the
+    high-value core, where models actually differ and where de-blurring shows up.
+
+    The threshold is always derived from ``true`` (per-sample or dataset-level) and
+    applied to *both* fields, so a prediction that under-shoots the true intensity
+    fails to reach the threshold and is penalised — the property that makes this
+    track skill.
+
+    Args:
+        true (np.ndarray, torch.Tensor, or xr.DataArray): Ground truth footprint
+            array(s). Accepted shapes: (H, W), (HW,), (N, H, W), (N, HW).
+        pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint
+            array(s), same type/shape flexibility as ``true``.
+        quantiles (tuple[float], optional): Quantiles of the true field to use as
+            thresholds. Defaults to (0.25, 0.5, 0.9, 0.99).
+        per_sample (bool, optional): If True, the threshold for each footprint is
+            that footprint's own quantile (scale-invariant). If False, a single
+            dataset-level quantile over all valid true values is used. Defaults to True.
+        spatial_shape (tuple, optional): (H, W) — required only for flat (HW,) or
+            (N, HW) inputs that are not xarray DataArrays. Defaults to None.
+        ignore_mask (optional): Areas to exclude, from both the quantile computation
+            and the IoU. Same type/shape flexibility as ``true``/``pred``. True means
+            ignore. Defaults to None.
+        reduce (str, optional): "mean" to return a scalar per quantile, None to
+            return the per-sample (N,) array per quantile. Defaults to "mean".
+
+    Returns:
+        dict[str, float or np.ndarray]: Maps ``"iou_q<pct>"`` (e.g. ``"iou_q90"``) to
+        its IoU. A sample whose quantile threshold is exactly zero (a degenerate
+        cut for sparse footprints, equivalent to thresholding at 0) contributes NaN;
+        with ``reduce="mean"`` such samples are dropped from the mean, and a
+        dataset-level threshold of zero yields NaN for that quantile.
+    """
+    true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
+    ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
+
+    n = true_np.shape[0]
+
+    # True values used for quantiles: ignored / non-finite cells excluded via NaN.
+    true_for_q = true_np.astype(float)
+    true_for_q = np.where(np.isfinite(true_for_q), true_for_q, np.nan)
+    if ignore_np is not None:
+        true_for_q = np.where(ignore_np, np.nan, true_for_q)
+
+    results = {}
+    for q in quantiles:
+        key = f"iou_q{int(round(q * 100))}"
+
+        if per_sample:
+            # per-footprint threshold, shape (N,); NaN if a sample is all-invalid
+            flat = true_for_q.reshape(n, -1)
+            all_nan = np.isnan(flat).all(axis=1)
+            thr = np.full(n, np.nan)
+            if (~all_nan).any():
+                thr[~all_nan] = np.nanquantile(flat[~all_nan], q, axis=1)
+            thr_b = thr[:, None, None]
+
+            true_bin = true_np > thr_b
+            pred_bin = pred_np > thr_b
+            if ignore_np is not None:
+                true_bin = true_bin & ~ignore_np
+                pred_bin = pred_bin & ~ignore_np
+
+            intersection = np.sum(true_bin & pred_bin, axis=(1, 2))
+            union = np.sum(true_bin | pred_bin, axis=(1, 2))
+
+            scores = np.full(n, np.nan)
+            np.divide(intersection, union, out=scores, where=union > 0)
+            # degenerate cut: a quantile threshold of exactly zero -> NaN
+            scores[~np.isfinite(thr) | (thr == 0)] = np.nan
+        else:
+            thr = np.nanquantile(true_for_q, q)
+            if not np.isfinite(thr) or thr == 0:
+                results[key] = np.nan if reduce == "mean" else np.full(n, np.nan)
+                continue
+            scores = iou(true_np, pred_np, threshold=thr,
+                         ignore_mask=ignore_np, reduce=None)
+
+        if reduce == "mean":
+            results[key] = np.nan if np.isnan(scores).all() else float(np.nanmean(scores))
+        else:
+            results[key] = scores
+
+    return results
+
+
 def bias(true, pred, *, spatial_shape=None, ignore_mask=None, reduce="mean", nonzero=False, threshold=None):
     """Mean bias: mean(pred - true) over valid cells.
 

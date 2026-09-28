@@ -195,12 +195,26 @@ def setup_dynamic_edges(dynamic_wind=True, dynamic_latlon=False, wind_tuples=Non
             latlon_tuples = [("lat_coords", 0, 0), ("lon_coords", 0, 0)]
         elif type(latlon_tuples[0]) == list:
             latlon_tuples = [tuple(t) for t in latlon_tuples]
-        latlon_indices = [i for i, name in enumerate(input_names) if name in latlon_tuples]
-        if len(latlon_indices) != 2:
+        if len(latlon_tuples) != 2:
             raise ValueError(
-                f"Expected exactly 2 latlon feature indices, found {len(latlon_indices)} "
-                f"for tuples {latlon_tuples}. Check that lat/lon are included in input_names."
+                f"Expected exactly 2 latlon tuples [lat, lon], got {len(latlon_tuples)}: {latlon_tuples}."
             )
+        # Resolve each tuple explicitly and IN ORDER so latlon_indices[0] is always
+        # the lat feature and [1] the lon feature, regardless of where lat/lon sit in
+        # input_names. The encoder's dynamic_earthdistance haversine (encoder.py, C2 fix)
+        # reads src/dst lat from [0] and lon from [1] and silently mislabels them if the
+        # order here follows input_names instead of latlon_tuples.
+        name_to_idx = {}
+        for i, name in enumerate(input_names):
+            name_to_idx.setdefault(name, i)  # first occurrence wins
+        latlon_indices = []
+        for tup in latlon_tuples:
+            if tup not in name_to_idx:
+                raise ValueError(
+                    f"latlon feature {tup} not found in input_names. "
+                    f"Check that lat/lon coords are included in the inputs."
+                )
+            latlon_indices.append(name_to_idx[tup])
         dynamic_edge_params["latlon_mesh_edges"] = True
         dynamic_edge_params["latlon_indices"] = latlon_indices
     else:
@@ -319,6 +333,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
     all_inputs = []
     all_fp_xr = []
     loading_times = {}
+    failed_years = []
 
     # W&B loading metrics accumulate across calls (train then test, or across
     # regions) via the shared wandb_state from initialise_wandb_loading(). If the
@@ -380,9 +395,14 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
             loaded_samples = len(data.fp_xr.fp.time)
 
         except Exception as e:
+            # Record the failure and keep going so every year's error surfaces in
+            # one run, then raise after the loop (finding C5). Silently continuing
+            # with loaded_samples=0 would either train on fewer years than asked
+            # for, or blow up later in an opaque `xr.concat([])`.
             print(f"Error loading data for {year}: {e}")
             traceback.print_exc()
             loaded_samples = 0
+            failed_years.append((year_key, repr(e)))
 
         elapsed_mins = (time.perf_counter() - year_start) / 60
         loading_times[year_key] = f"{elapsed_mins:.2f}mins"
@@ -409,7 +429,13 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
     print("\n".join(f"{k} : {v}" for k, v in loading_times.items()))
     print("")
 
-    
+    if failed_years:
+        summary = "; ".join(f"{yr}: {err}" for yr, err in failed_years)
+        raise RuntimeError(
+            f"Data loading failed for {len(failed_years)} year(s) and was not "
+            f"silently skipped: {summary}"
+        )
+
     fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
     inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
 
@@ -539,7 +565,27 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
     train_scaled_inputs, train_scaled_fp = gates_datasets.trim_to_batch_size(train_scaled_inputs, train_scaled_fp, batch_size)
     test_scaled_inputs, test_scaled_fp = gates_datasets.trim_to_batch_size(test_scaled_inputs, test_scaled_fp, test_batch_size)
 
-    train_loader, fp_labels = gates_datasets.make_dataloader(train_scaled_inputs, train_scaled_fp, batch_size, randomize=True, dataloader_params=dataloader_params, flatten=True)   
+    # C3 / review P2 (behind review_fixes.use_tensor_loader, default False): swap the
+    # xbatcher train loader for an in-memory torch TensorDataset whose DataLoader shuffles
+    # batch *composition* every epoch. Test loader stays on xbatcher for now.
+    use_tensor_loader = parameters.get("review_fixes", {}).get("use_tensor_loader", False)
+    if use_tensor_loader:
+        # Resolve the requested dataloader_params into the set the tensor loader will
+        # actually use, print requested-vs-used, and write it back into parameters so the
+        # saved training_settings (and any re-run) reflect the real config directly.
+        seed = parameters.get("seed", 42)
+        requested_dl_params = dict(dataloader_params)
+        used_dl_params = gates_datasets.resolve_tensor_loader_params(requested_dl_params)
+        print(f"[review_fixes] tensor-loader dataloader_params REQUESTED: {requested_dl_params}")
+        print(f"[review_fixes] tensor-loader dataloader_params USED:      {used_dl_params}")
+        print(f"[review_fixes] (batch_size={batch_size}, shuffle=True, drop_last=True, "
+              f"generator_seed={seed} are set by the tensor loader itself, not via dataloader_params)")
+        parameters.setdefault("dataloader", {})["dataloader_params"] = used_dl_params
+        train_loader, fp_labels = gates_datasets.make_tensor_dataloader(
+            train_scaled_inputs, train_scaled_fp, batch_size, shuffle=True,
+            random_seed=seed, dataloader_params=used_dl_params, flatten=True)
+    else:
+        train_loader, fp_labels = gates_datasets.make_dataloader(train_scaled_inputs, train_scaled_fp, batch_size, randomize=True, dataloader_params=dataloader_params, flatten=True)
 
     #print("WAAAAAAAAAAAARNING")
     #print("Loading inputs and footprints for test set into memory!!!")
@@ -573,20 +619,30 @@ def initialise_losses():
         variable is present), each initialised to empty lists/dicts ready to be
         appended to.
     """
-    metrics_dict = {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
-    flux_metrics_dict = {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
+    # Build a fresh dict with brand-new lists on every call. A shallow
+    # ``metrics_dict.copy()`` would share the same list objects across keys
+    # (e.g. metrics_transformed["mse"] is metrics_original["mse"]), so appends
+    # through one key would corrupt the other series (finding C4).
+    def new_metrics():
+        return {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": [],
+                "corrcoef": [],
+                "iou_q25": [], "iou_q50": [], "iou_q90": [], "iou_q99": []}
+
+    def new_flux_metrics():
+        return {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
+
     losses = {
         "train": [],
         "test": [],
         "test_criterion": {"train": [], "test": []},
-        "metrics_transformed": metrics_dict.copy(),
-        "metrics_original": metrics_dict.copy(),
+        "metrics_transformed": new_metrics(),
+        "metrics_original": new_metrics(),
         "metrics_fluxes_static": {
-            "uniform": flux_metrics_dict.copy(),
-            "checkerboard": flux_metrics_dict.copy(),
-            "checkerboard_10": flux_metrics_dict.copy(),
+            "uniform": new_flux_metrics(),
+            "checkerboard": new_flux_metrics(),
+            "checkerboard_10": new_flux_metrics(),
         },
-        "metrics_fluxes": flux_metrics_dict.copy(),
+        "metrics_fluxes": new_flux_metrics(),
     }
     return losses
 
@@ -622,11 +678,19 @@ def calculate_losses(losses, test_outputs_xr):
     computed_metrics = {}
 
     eval_metrics = gates_metrics.compute_footprint_metrics(
-        test_outputs_xr.fp_original, test_outputs_xr.fp_pred, metrics=["iou", "mae", "mse","bias", "nmae"], nonzero=False, ignore_mask=fp_mask, threshold=1e-5)
+        test_outputs_xr.fp_original, test_outputs_xr.fp_pred, metrics=["iou", "mae", "mse","bias", "nmae", "corrcoef", "corrcoef_log"], nonzero=False, ignore_mask=fp_mask, threshold=1e-5)
 
     transformed_eval_metrics = gates_metrics.compute_footprint_metrics(
-        test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, metrics=["iou", "mae", "mse","bias", "nmae"], ignore_mask=fp_mask, threshold=0, nonzero=False)
-    
+        test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, metrics=["iou", "mae", "mse","bias", "nmae", "corrcoef"], ignore_mask=fp_mask, threshold=0, nonzero=False)
+
+    # quantile-thresholded IoU: whole-field IoU at a low threshold saturates on the
+    # trivially-predicted footprint extent; thresholding at high quantiles of the
+    # true field isolates the core, where de-blurring actually shows up.
+    eval_metrics.update(gates_metrics.iou_at_quantiles(
+        test_outputs_xr.fp_original, test_outputs_xr.fp_pred, ignore_mask=fp_mask))
+    transformed_eval_metrics.update(gates_metrics.iou_at_quantiles(
+        test_outputs_xr.fp_transformed, test_outputs_xr.fp_transformed_pred, ignore_mask=fp_mask))
+
     static_mf_eval_metrics = gates_metrics.compute_static_mf_metrics(test_outputs_xr.fp_original, test_outputs_xr.fp_pred)
 
     for metric_name, metric_value in transformed_eval_metrics.items():

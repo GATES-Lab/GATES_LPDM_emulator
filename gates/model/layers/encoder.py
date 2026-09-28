@@ -316,7 +316,7 @@ class SatelliteEncoder(torch.nn.Module):
             Attention mask means attention is only applied to connected nodes
             """
             self.attention_mask = 1-to_dense_adj(self.mesh_graph.edge_index).squeeze()
-            self.attention_mask.fill_diagonal_(1)
+            self.attention_mask.fill_diagonal_(0)  # C14: 0 = allowed (mask is bool'd later); each node MUST attend to itself
         else:
             self.attention_mask = None
 
@@ -715,7 +715,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
         self.attention = attention
         if attention:
             attn_mask = 1 - to_dense_adj(mesh_edge_index).squeeze()
-            attn_mask.fill_diagonal_(1)
+            attn_mask.fill_diagonal_(0)  # C14: 0 = allowed (mask is bool'd later); each node MUST attend to itself
             self.register_buffer('attention_mask', attn_mask)
         else:
             self.attention_mask = None
@@ -883,7 +883,7 @@ class SatelliteDynamicEncoder(torch.nn.Module):
             if self.dynamic_earthdistance:    
                 # calculate haversine distance for each edge using the lat/lon of the endpoints
                 from gates.data import haversine
-                src_lat = features[:, self.latlon_indices[1], :][:, None, self.mesh_edge_index[0, :]]  # (B, 1, E)
+                src_lat = features[:, self.latlon_indices[0], :][:, None, self.mesh_edge_index[0, :]]  # (B, 1, E)  # C2: [0]=lat (was [1]=lon)
                 src_lon = features[:, self.latlon_indices[1], :][:, None, self.mesh_edge_index[0, :]]  # (B, 1, E)
                 dst_lat = features[:, self.latlon_indices[0], :][:, None, self.mesh_edge_index[1, :]]  # (B, 1, E)
                 dst_lon = features[:, self.latlon_indices[1], :][:, None, self.mesh_edge_index[1, :]]  # (B, 1, E)
