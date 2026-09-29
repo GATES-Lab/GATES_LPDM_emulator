@@ -1,25 +1,42 @@
 {
-    "model_name" : "gates_template",
+    "model_name" : "gates_template_multiregion",
     "verbose": true,
     "load_before_training": true,
-    "notes": "Template training run: SAHARA, 50x50 domain, 2014-2015 train / 2016 test, fixed grid + in-memory shuffled loader.",
-    "train_load_data" : {
-        "years":["2014", "2015"],
-        "freq":3,
-        "region":"SAHARA",
-        "size":50,
+    "notes": "Template multi-region run (scripts/train_GATES_model_multiregion.py): SAHARA + BRAZIL, 50x50 domain, 2014-2015 train / 2016 test, fixed grid.",
+
+    "shared_load_parameters": {
+        "size": 50,
+        "freq": 3,
         "crop_met": false
     },
 
-    "test_load_data" : {
-        "years":["2016"],
-        "months" :["01", "02", "03"],
-        "freq":100
+    "regions": {
+        "0-SAHARA": {
+            "train_load_data": {
+                "years": ["2014", "2015"],
+                "region": "SAHARA"
+            },
+            "test_load_data": {
+                "years": ["2016"],
+                "months": ["01", "02", "03"],
+                "freq": 100
+            }
+        },
+        "1-BRAZIL": {
+            "train_load_data": {
+                "years": ["2014", "2015"],
+                "region": "BRAZIL"
+            },
+            "test_load_data": {
+                "years": ["2016"],
+                "months": ["01", "02", "03"],
+                "freq": 100
+            }
+        }
     },
 
     "review_fixes": {
-        "fix_grid_transpose": true,
-        "use_tensor_loader": true
+        "fix_grid_transpose": true
     },
 
     "flux":{
@@ -53,7 +70,11 @@
         "test_batch_size": 5,
         "nans_to_zeros": true,
         "dataloader_params": {
-                "pin_memory": true}
+                "prefetch_factor": 3,
+                "num_workers": 2,
+                "pin_memory": true,
+                "persistent_workers": true,
+                "multiprocessing_context": "forkserver"}
     },
 
     "model_parameters":{
@@ -77,7 +98,7 @@
     "wandb": {
         "project": "gates-template-tests",
         "entity": "gates-lab",
-        "tags": ["SAHARA", "gpu", "template"]
+        "tags": ["SAHARA", "BRAZIL", "multiregion", "gpu", "template"]
     },
 
     "epochs" : {

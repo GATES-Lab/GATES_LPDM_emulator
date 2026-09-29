@@ -11,14 +11,15 @@
 #SBATCH --exclude=bp1-gpu030,bp1-gpu035
 #SBATCH --output=launch/logs/%x_%j.out
 
-## chem007981 SEMT030444
+# NOTE: --account is the SLURM project code the job is charged to. 
+# Replace SEMT030444 with your own project code.
 
 
 
 export PYTHONNOUSERSITE=1
 eval "$(conda shell.bash hook)"
 conda init
-conda activate new_gates_env
+conda activate gates_env
 
 echo "cpus-per-task: $SLURM_CPUS_PER_TASK"
 echo "gpus: $SLURM_GPUS"
@@ -26,7 +27,6 @@ echo "memory: $SLURM_MEM_PER_NODE"
 echo "job name: $SLURM_JOB_NAME"
 echo "ntasks: $SLURM_NTASKS"
 
-echo "starting from new_gates_env, activating in file also"
 echo "Active env: ${CONDA_DEFAULT_ENV:-none}"
 echo "Python path: $(which python)"
 

@@ -1,8 +1,25 @@
 {
-    "model_name" : "gates_template",
+    "model_name" : "gates_template_sweep",
     "verbose": true,
     "load_before_training": true,
-    "notes": "Template training run: SAHARA, 50x50 domain, 2014-2015 train / 2016 test, fixed grid + in-memory shuffled loader.",
+    "notes": "Template sweep: NEW_parameter_template.json plus a list-form __sweep__ (one job per entry, not a cross product).",
+
+    "__sweep__": [
+        {
+            "dynamic_edges": {"dynamic_wind": true},
+            "model_parameters.use_dynamic_encoder": true,
+            "model_parameters.node_dim": 128,
+            "model_parameters.edge_dim": 128,
+            "model_parameters.hidden_dim_processor_node": 64,
+            "model_parameters.hidden_dim_processor_edge": 64,
+            "model_parameters.hidden_dim_decoder": 64
+        },
+        {
+            "loss_functions.criterion_params.w": 100,
+            "loss_functions.criterion_params.a": 0.5
+        }
+    ],
+
     "train_load_data" : {
         "years":["2014", "2015"],
         "freq":3,

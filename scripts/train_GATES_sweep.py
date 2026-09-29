@@ -29,9 +29,12 @@ is used as-is for every job. The "__sweep__" key itself is stripped before
 writing the per-combination files.
 
 Usage:
-    python train_GATES_sweep.py my_config.json
-    python train_GATES_sweep.py parameter_files/my_config.json --dry-run
-    python train_GATES_sweep.py parameter_files/my_config.json --sbatch-script launch_train_sweep.sh
+    python scripts/train_GATES_sweep.py my_config.json
+    python scripts/train_GATES_sweep.py parameter_files/my_config.json --dry-run
+    python scripts/train_GATES_sweep.py parameter_files/my_config.json --sbatch-script launch/launch_train_sweep.sh
+
+Jobs are always submitted from the repo root (so ``scripts/train_GATES_model.py``
+resolves inside the job), and their SLURM logs go to ``launch/logs/``.
 """
 
 import argparse
@@ -43,6 +46,10 @@ from itertools import product
 from pathlib import Path
 
 from gates.config import get_config
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_SBATCH_SCRIPT = REPO_ROOT / "launch" / "launch_train_sweep.sh"
+LOG_DIR = REPO_ROOT / "launch" / "logs"
 
 
 def set_nested(d, key_path, value):
@@ -89,8 +96,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Print jobs without submitting them")
     parser.add_argument(
         "--sbatch-script",
-        default="launch_train_sweep.sh",
-        help="SLURM batch script to submit (default: launch_train_sweep.sh)",
+        default=str(DEFAULT_SBATCH_SCRIPT),
+        help="SLURM batch script to submit. Relative paths are tried from the current "
+             "directory, then from the repo root (default: launch/launch_train_sweep.sh)",
     )
     parser.add_argument(
         "--output-dir",
@@ -143,9 +151,13 @@ def main():
     out_dir = Path(args.output_dir).resolve() if args.output_dir else param_path.parent / "sweep_configs"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    sbatch_script = Path(args.sbatch_script).resolve()
+    sbatch_script = Path(args.sbatch_script)
+    if not sbatch_script.is_absolute() and not sbatch_script.exists():
+        sbatch_script = REPO_ROOT / sbatch_script
+    sbatch_script = sbatch_script.resolve()
     if not sbatch_script.exists():
         sys.exit(f"Error: sbatch script not found: {sbatch_script}")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     base_name = param_path.stem
     base_model_name = params.get("model_name", base_name)
@@ -172,7 +184,7 @@ def main():
         sbatch_cmd = [
             "sbatch",
             f"--job-name={job_name}",
-            f"--output=slurms/slurm-%j_sweep{sweep_id:03d}.out",
+            f"--output={LOG_DIR}/%x_%j.out",
             # NONE prevents inheriting the submitting shell's env; explicit vars are still passed
             f"--export=NONE,SWEEP_PARAM_FILE={out_file},SWEEP_JOB_NAME={job_name}",
             str(sbatch_script),
@@ -188,7 +200,7 @@ def main():
                 sbatch_cmd,
                 capture_output=True,
                 text=True,
-                cwd=sbatch_script.parent,
+                cwd=REPO_ROOT,
             )
             if result.returncode != 0:
                 print(f"  ERROR: {result.stderr.strip()}", file=sys.stderr)

@@ -1,4 +1,4 @@
-# How to Launch a Training Job
+# How to Launch Jobs
 
 Once you have a [config file](HOW_TO_CONFIG.md) and a parameter file set up (see the [Parameter File reference](HOW_TO_PARAMETER_FILE.md)), start a training run with:
 
@@ -14,7 +14,15 @@ python scripts/train_GATES_model.py parameter_file.json --file_path /path/to/fol
 
 ## Launching on a SLURM Cluster
 
-`launch_train.sh` shows a working example of a SLURM batch script that requests a GPU, activates the environment, and launches a run:
+There are three SLURM batch scripts in `launch/`:
+
+| Script | Use it for |
+|--------|-----------|
+| `launch/launch_train.sh` | A single run. The parameter file is written into the script. |
+| `launch/launch_train_file.sh` | A single run. The job name and parameter file are passed on the command line, so one script serves every experiment. |
+| `launch/launch_train_sweep.sh` | One job of a sweep. It is submitted by `scripts/train_GATES_sweep.py`, not by hand (see [Launching a Sweep](#launching-a-sweep)). |
+
+All three follow the same pattern. They request a GPU, activate the environment inside the job, and run `scripts/train_GATES_model.py`:
 
 ```bash
 #!/bin/bash
@@ -25,11 +33,12 @@ python scripts/train_GATES_model.py parameter_file.json --file_path /path/to/fol
 #SBATCH --cpus-per-task=5
 #SBATCH --job-name=my_run
 #SBATCH --time=18:00:00
-#SBATCH --account=<your_account>
+#SBATCH --account=<your_project_code>
 #SBATCH --export=NONE
 #SBATCH --output=launch/logs/%x_%j.out
 
-# Activate the environment inside the job (--export=NONE gives a clean shell)
+# Activate the environment inside the job (--export=NONE gives a clean shell).
+# PYTHONNOUSERSITE=1 stops packages in ~/.local from shadowing the ones in the env.
 export PYTHONNOUSERSITE=1
 eval "$(conda shell.bash hook)"
 conda activate gates_env
@@ -37,13 +46,36 @@ conda activate gates_env
 python scripts/train_GATES_model.py parameter_file.json
 ```
 
-Submit it **from the repo root** with:
+The scripts assume the environment is called `gates_env`, which is the name in `env_gates_pytorch.yml`. If you created yours under a different name, change the `conda activate` line.
+
+### Before you submit
+
+- **Submit from the repo root.** The `--output` path and `scripts/...` are relative to the directory you run `sbatch` from.
+- **Create the log directory first:** `mkdir -p launch/logs`. SLURM will not create it. Logs are written as `<job-name>_<job-id>.out` (`%x` = job name, `%j` = job ID).
+- **Set your project code.** `--account` is the SLURM project code the job is charged to. The scripts in `launch/` have the GATES project code, so replace it with your own.
+
+### A single run: `launch_train.sh`
+
+Edit the parameter file name at the bottom of the script (and the `--job-name`), then:
 
 ```bash
 sbatch launch/launch_train.sh
 ```
 
-SLURM logs are written to `launch/logs/` as `<job-name>_<job-id>.out` (`%x` = job name, `%j` = job ID). The `--output` path is relative to the directory you run `sbatch` from, so submit from the repo root and make sure `launch/logs/` exists first (`mkdir -p launch/logs`) — SLURM will not create it.
+### A single run from the command line: `launch_train_file.sh`
+
+Pass the job name and the parameter file as arguments. The parameter file path is relative to `parameter_files_dir` in `config.yml`:
+
+```bash
+sbatch --job-name=<JOB_NAME> launch/launch_train_file.sh <JOB_NAME> <PARAM_JSON>
+
+# e.g.
+sbatch --job-name=exp01_benchmark launch/launch_train_file.sh exp01_benchmark experiments/01_benchmark.json
+```
+
+Pass the same name to `--job-name` and as the first argument. The SLURM job name sets the log file name (`%x`). The argument sets the W&B run name (`<job-id>_<JOB_NAME>`) and is recorded in `WANDB_NOTES` together with the parameter file.
+
+### Resource directives
 
 Adjust the `#SBATCH` resource directives for your cluster:
 
@@ -52,11 +84,12 @@ Adjust the `#SBATCH` resource directives for your cluster:
 | `--partition` / `--gres=gpu:1` | The GPU partition and one GPU per job. |
 | `--mem` | Total node memory. Also sizes the Dask cluster (see below). |
 | `--cpus-per-task` | CPU cores for the job. Drives the number of Dask workers. |
-| `--time` | Wall-clock limit; training checkpoints periodically so it can be resumed. |
-| `--account` | The billing account to charge. |
+| `--time` | Wall-clock limit. Checkpoints are saved every `epochs.model_save` epochs, but there is no resume option yet: a job that hits the limit has to be restarted from scratch. |
+| `--account` | The SLURM project code the job is charged to. Change it to your own. |
 | `--export=NONE` | Starts from a clean environment (hence the explicit `conda activate`). |
+| `--exclude` | Nodes to avoid. The scripts exclude two BluePebble nodes that caused problems. |
 
-The script exports a few W&B variables (`WANDB_NAME`, `WANDB_NOTES`) derived from the SLURM job so runs are easy to trace back to their launch settings — see the [W&B guide](HOW_TO_WandB.md).
+The scripts export a few W&B variables (`WANDB_NAME`, `WANDB_NOTES`) derived from the SLURM job so runs are easy to trace back to their launch settings — see the [W&B guide](HOW_TO_WandB.md).
 
 ### Dask cluster and per-worker memory
 
@@ -89,9 +122,22 @@ So each worker runs a single thread (`threads_per_worker=1`) with a hard `memory
 
 A dashboard link is printed at startup for monitoring worker memory and task progress.
 
+#### Parameter-file settings that affect memory
+
+Besides `--mem` and `--cpus-per-task`, two settings in the parameter file control peak memory (see the [Parameter File reference](HOW_TO_PARAMETER_FILE.md)):
+
+| Setting | Effect on memory |
+|---------|------------------|
+| [`variables.load_into_memory`](HOW_TO_PARAMETER_FILE.md#variables) | `true` loads the full-domain met for every needed timestamp before cropping: fast, but the highest peak memory. `false` keeps the met lazy while cropping. |
+| [`variables.chunk_size`](HOW_TO_PARAMETER_FILE.md#variables) | With `load_into_memory: false`, the met is read and cropped in blocks of this many samples, so peak memory scales with `chunk_size` rather than the dataset. Lower it if workers spill or restart during loading. |
+
+For large runs, a good starting point is `load_into_memory: false` with `chunk_size` around 64 (as in [`NEW_parameter_template.json`](../parameter_files/NEW_parameter_template.json)). If loading is memory-bound, lower `chunk_size` before raising `--mem`.
+
 ## Launching a Sweep
 
-To submit many training jobs from a single parameter file, use `scripts/train_GATES_sweep.py`. Add a `__sweep__` section to the parameter JSON; everything else in the file is shared across all jobs. The sweep launcher writes one parameter file per job into `<param_dir>/sweep_configs/` and submits a SLURM job for each, using `launch_train_sweep.sh` as the batch script.
+To submit many training jobs from a single parameter file, use `scripts/train_GATES_sweep.py`. Add a `__sweep__` section to the parameter JSON; everything else in the file is shared across all jobs. The sweep launcher writes one parameter file per job into `<param_dir>/sweep_configs/` and submits a SLURM job for each, using `launch/launch_train_sweep.sh` as the batch script.
+
+A ready-to-use example is [`parameter_files/NEW_parameter_template_sweep.json`](../parameter_files/NEW_parameter_template_sweep.json): the standard template plus a two-job list (a larger dynamic encoder, and a different `PixelWeightedMSELoss` weighting).
 
 Keys in the sweep section use **dot-notation** to address nested parameters at any depth (e.g. `model_parameters.num_blocks`). There are two ways to define the jobs:
 
@@ -131,8 +177,45 @@ python scripts/train_GATES_sweep.py my_config.json --dry-run
 python scripts/train_GATES_sweep.py my_config.json
 ```
 
-Each job is named `sweep_<model_name>_<NNN>` and its per-combination config is saved alongside the base parameter file. Use `--sbatch-script` to point at a different SLURM script, or `--output-dir` to change where the generated configs are written.
+The sweep launcher can be run from any directory. It always submits the jobs from the repo root, so `scripts/train_GATES_model.py` resolves inside each job.
 
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Print the jobs and their `sbatch` commands without submitting. The per-job configs are still written. |
+| `--output-dir` | Where to write the per-job configs (default: `<param_dir>/sweep_configs/`). |
+
+**Job names** come from the `model_name` in the sweep file (the file name is used only if `model_name` is missing). For `"model_name": "my_model"`, job `NNN` gets:
+
+| What | Name |
+|------|------|
+| `model_name` in its config | `my_model_sweep_NNN` |
+| Training output folder | `my_model_sweep_NNN_<YYYYmmdd_HHMMSS>/` |
+| SLURM job name | `sweep_my_model_NNN` |
+| SLURM log | `launch/logs/sweep_my_model_NNN_<job-id>.out` |
+| W&B run name | `<job-id>_sweep_my_model_NNN` |
+| Generated config | `sweep_configs/<param_file_stem>_sweep_NNN_<values>.json` |
+
+Each generated config also records `sweep_id` and `sweep_combination`, so a run can be traced back to its sweep entry.
+
+## Multi-region training
+
+To train a single model on footprints from several regions at once, use
+`scripts/train_GATES_model_multiregion.py`. It takes the same kind of parameter file and CLI as
+the standard trainer:
+
+```bash
+python scripts/train_GATES_model_multiregion.py parameter_file.json
+```
+
+On SLURM, swap the `python scripts/train_GATES_model.py ...` line in your batch script for this
+command. The same `--mem` / `--cpus-per-task` sizing applies.
+
+> **Note:** Multi-region training does **not** work with sweeps yet. `scripts/train_GATES_sweep.py`
+> only targets the standard single-region trainer.
+
+See [HOW_TO_MULTIREGION.md](HOW_TO_MULTIREGION.md) for the parameter file format and outputs.
 
 ## Predicting
 
@@ -149,117 +232,7 @@ python scripts/predict_GATES_model.py --test_year 2019 --reference_model my_mode
 `my_model_20240115_143022`) for an exact match, or a base name (e.g. `my_model`) to use the most
 recently created matching run.
 
-**Common arguments:**
+On SLURM, swap the `python scripts/train_GATES_model.py ...` line in your batch script for the
+predict command.
 
-| Argument | Description |
-|----------|-------------|
-| `--test_year` (required) | Year to predict. |
-| `--reference_model` (required) | Trained model directory (full timestamped name, or base name for the latest run). |
-| `--month` | Single month (`6` or `06`). If omitted, all 12 months are predicted. |
-| `--region` | Override the region stored in the training settings. |
-| `--checkpoint` | `best` (default) or an epoch integer. |
-| `--model_path` | Root directory to search for trained models (default: from `config.yml`). |
-| `--save_path` | Root directory for output NetCDF files (default: `{model_dir}/predictions/`). |
-| `--model_save_name` | Name used to organise output files (default: reference model's base name). |
-| `--dry_run` | Quick pipeline check: only the first month, subsampled with `freq=60`. |
-
-Predictions are written one file per month to
-`{save_path}/{model_save_name}/predictions/predictions_{year}_{month}.nc`, each containing the
-ground-truth footprints (`fp_original`, `fp_transformed`) alongside the model outputs (`fp_pred`
-in original space, `fp_transformed_pred` in transformed space) and the release coordinates. When
-`--region` (or `--size`) differ from the training settings, the `predictions` folder name is
-suffixed accordingly (e.g. `predictions_BRAZIL`). Prediction loads a **single month at a time**
-via `load_GATES_data_v2`'s single-month fast path, so month-by-month runs don't reload a whole
-year each time.
-
-Launch on SLURM the same way as training — swap the `python scripts/train_GATES_model.py ...`
-line in your batch script for the `predict_GATES_model.py` command above.
-
-### Predicting at a different size from training
-
-
->Note: Predicting at a **different size** from training is still being tested. The `--size` flag
-currently only affects the output folder name — the prediction size is taken from the training
-settings. Different-domain / different-size prediction (via a `reference_model` block and a new
-`grid_<name>.pickle`) is under development.
-
-
-## Multi-region training
-
-To train a single model on footprints from several regions at once, use
-`scripts/train_GATES_model_multiregion.py`. It takes the same kind of parameter file and CLI as
-the standard trainer:
-
-```bash
-python scripts/train_GATES_model_multiregion.py parameter_file.json
-```
-
->Note:
-Multi-region training does **not** work with sweeps yet — `scripts/train_GATES_sweep.py` only
-targets the standard single-region trainer.
-
-
-The difference is in the parameter file. Instead of top-level `train_load_data` / `test_load_data`,
-a multi-region file provides:
-
-- **`regions`** — a dict keyed by integer strings, optionally with a label (`"0"`, `"1"`, or
-  `"0-SAHARA"`, `"1-BRAZIL"`). The integer prefix sets the ordering. Each entry has its own
-  `train_load_data` and `test_load_data`.
-- **`shared_load_parameters`** — loading parameters common to every region (e.g. `size`,
-  `met_args`). These are merged in as base values; per-region keys override them.
-
-```json
-"shared_load_parameters": {
-    "size": 50,
-    "met_args": { "...": "..." }
-},
-"regions": {
-    "0-SAHARA": {
-        "train_load_data": {"region": "SAHARA", "years": [2016, 2017]},
-        "test_load_data":  {"years": [2018]}
-    },
-    "1-BRAZIL": {
-        "train_load_data": {"region": "BRAZIL", "years": [2016, 2017]},
-        "test_load_data":  {"years": [2018]}
-    }
-}
-```
-
-All other sections (`variables`, `dataloader`, `model_parameters`, loss functions, etc.) are
-shared across regions, exactly as in a single-region run. Every region **must** use the same
-spatial `size` and identical `variables` — the loader validates this and raises if they differ.
-
-During a run: each region's train and test data are loaded sequentially with `load_GATES_data_v2`;
-the train data is concatenated across regions (duplicate timestamps are dropped); scalers are fit
-once on the combined training set; and the model is validated **per region** each epoch, with both
-per-region and aggregate metrics logged. Early stopping uses the aggregate test loss. At the end,
-one NetCDF of test predictions is exported per region (`sample_predictions_test_<region>.nc`).
-
-## Inside `scripts/train_GATES_model.py`
-
-The training script is a thin driver over the `gates` package: all heavy lifting is delegated to `gates.training.training` (imported as `gates_training`). It defines four functions, layered from the CLI entry point down to the innermost batch loop.
-
-```
-__main__
-  parse args → get_config() → load_parameter_file() → resolve model_save_dir
-    │
-    └─> train_and_save_model(parameters, model_save_dir)   [orchestrator: one-time setup]
-           │  builds model, dataloaders, and context objects via gates_training.*
-           └─> run_full_training(...)                       [epoch loop]
-                  ├─> train_one_epoch(...)       per epoch   [one training pass]
-                  └─> validate_and_predict(...)  per epoch   [predictions + validation loss]
-```
-
-**`train_one_epoch(model, loader, model_ctx, epoch, paths_ctx=None)`**
-Runs a single training pass over the loader. Per batch: moves `(features, fp)` to the device, forward pass, computes the training loss (`criterion`) and backpropagates, then separately computes a display loss (`criterion_test`) under `no_grad` for monitoring. Returns `(mean_display_loss, mean_train_loss)`.
-
-**`validate_and_predict(model, model_ctx, loader)`**
-Decorated with `@torch.no_grad()`. Runs the model over the validation/test loader in `eval()` mode, accumulates `criterion_test`, and collects every batch's outputs. Returns `(mean_test_loss, all_preds)`.
-
-**`run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, test_loader, test_fp_dataset, losses, epoch_so_far=0)`**
-The epoch loop. Each epoch: trains, validates/predicts, inverse-transforms predictions back to original space via the fp scaler, writes them into `test_fp_dataset`, computes metrics (`gates_training.calculate_losses`), logs to W&B, and handles early stopping, periodic plotting, and checkpointing. Exports final predictions to NetCDF at the end.
-
-**`train_and_save_model(parameters, model_save_dir)`**
-Top-level orchestrator. Handles all one-time setup — timestamped model name, `PathContext` and output dirs, seeding, optional W&B init, train/test data loading (`load_GATES_data_v2` on a dask cluster), dataloader and scaler setup, grid creation, optional dynamic edges, `TrainingContext`, and model construction (`setup_GATES_model`) — before delegating to `run_full_training`.
-
-State is passed around through three context dataclasses to keep argument lists manageable: `PathContext` (all output paths), `TrainingContext` (scalers, grid, device, image dates, dynamic edges), and `ModelContext` (optimizer, loss functions, early stopping, W&B flag). Note the two distinct losses used throughout: `criterion` is trained on, while `criterion_test` is only monitored and reported.
+See [HOW_TO_PREDICT.md](HOW_TO_PREDICT.md) for all arguments and outputs.

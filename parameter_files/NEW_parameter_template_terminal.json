@@ -1,40 +1,26 @@
 {
-    "model_name" : "terminal_test_multiregion",
+    "model_name" : "terminal_test_zarr_flux",
     "verbose": true,
     "load_before_training": true,
-    "notes": "Tiny multi-region smoke test (scripts/train_GATES_model_multiregion.py): two SAHARA 'regions' on different months, 10x10 domain.",
-
-    "shared_load_parameters": {
-        "size": 10,
-        "freq": 20,
+    "notes": "Tiny single-region smoke test: SAHARA, 10x10 domain, one month train / one month test, zarr met + flux.",
+    "train_load_data" : {
+        "years":["2015"],
+        "months":["01"],
+        "freq":20,
+        "region":"SAHARA",
+        "size":10,
         "crop_met": false
     },
 
-    "regions": {
-        "0-SAHARA": {
-            "train_load_data": {
-                "years": ["2015"], "months": ["01", "03"],
-                "region": "SAHARA"
-            },
-            "test_load_data": {
-                "years": ["2016"], "months": ["01"],
-                "freq": 60
-            }
-        },
-        "1-SAHARA": {
-            "train_load_data": {
-                "years": ["2014"], "months": ["02"],
-                "region": "SAHARA"
-            },
-            "test_load_data": {
-                "years": ["2016"], "months": ["02"],
-                "freq": 60
-            }
-        }
+    "test_load_data" : {
+        "years":["2016"],
+        "months":["01"],
+        "freq":70
     },
 
     "review_fixes": {
-        "fix_grid_transpose": true
+        "fix_grid_transpose": true,
+        "use_tensor_loader": true
     },
 
     "flux":{
@@ -44,12 +30,13 @@
     },
 
     "variables" : {
-        "met_variables":["x_wind", "y_wind", "atmosphere_boundary_layer_thickness"],
+        "met_variables":["x_wind", "y_wind", "atmosphere_boundary_layer_thickness", "atmosphere_downward_eastward_stress", "atmosphere_downward_northward_stress", "specific_humidity", "surface_upward_sensible_heat_flux"],
         "met_levels":[3],
         "static_variables":["lat_coords", "lon_coords", "topog", "xy_distance_centre"],
         "time_deltas":[3],
         "chunk_size":3,
-        "load_into_memory":false
+        "load_into_memory":false,
+        "interp_to": "3h"
     },
 
     "input_scaler" : {
@@ -85,16 +72,17 @@
         "resolution":4,
         "output_dim":1,
         "residuals":false,
-        "attention":false
+        "attention":false,
+        "initial_enc": true,
+        "use_dynamic_encoder":false
     },
 
     "learning_rate":5e-5,
 
     "use_wandb":false,
 
-
     "epochs" : {
-        "training": 2,
+        "training": 1,
         "visualize": 5,
         "patience": 3,
         "model_save": 50
@@ -102,7 +90,12 @@
 
     "loss_functions" : {
         "criterion": "gates_losses.PixelWeightedMSELoss",
-        "criterion_params": {"weight_label":"fp_original", "transform_fn":"scale_and_shift", "w":1000, "a":1.0},
+        "criterion_params": {
+            "weight_label": "fp_original",
+            "transform_fn": "scale_and_shift",
+            "w": 1000,
+            "a": 1.0
+        },
         "criterion_test": "gates_losses.MSELoss",
         "criterion_test_params": {}
     }

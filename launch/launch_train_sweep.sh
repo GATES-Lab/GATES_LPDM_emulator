@@ -8,13 +8,19 @@
 #SBATCH --account=SEMT030444
 #SBATCH --exclude=bp1-gpu030,bp1-gpu035
 
-# Job name and output path are set by launch_sweep.py via sbatch --job-name and --output.
+# NOTE: --account is the SLURM project code the job is charged to. Replace
+# SEMT030444 with your own project code.
+
+# Submitted by scripts/train_GATES_sweep.py, which sets --job-name and --output
+# (launch/logs/%x_%j.out) and submits from the repo root.
 # SWEEP_PARAM_FILE and SWEEP_JOB_NAME are injected via --export=NONE,SWEEP_PARAM_FILE=...,SWEEP_JOB_NAME=...
+
+cd "${SLURM_SUBMIT_DIR:-.}" || { echo "Could not cd to submit dir $SLURM_SUBMIT_DIR"; exit 1; }
 
 export PYTHONNOUSERSITE=1
 eval "$(conda shell.bash hook)"
 conda init
-conda activate new_gates_env
+conda activate gates_env
 
 echo "cpus-per-task: $SLURM_CPUS_PER_TASK"
 echo "gpus: $SLURM_GPUS"
@@ -27,7 +33,7 @@ echo "Active env: ${CONDA_DEFAULT_ENV:-none}"
 echo "Python path: $(which python)"
 
 if [ -z "$SWEEP_PARAM_FILE" ]; then
-    echo "ERROR: SWEEP_PARAM_FILE is not set. Submit this script via launch_sweep.py."
+    echo "ERROR: SWEEP_PARAM_FILE is not set. Submit this script via scripts/train_GATES_sweep.py."
     exit 1
 fi
 
