@@ -28,7 +28,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         whole_world: bool = False,
         resolution: int = 2,
         feature_dim: int = 78,
-        output_dim: Optional[int] = None,
+        output_dim: Optional[int] = 1,
         node_dim: int = 256,
         edge_dim: int = 256,
         num_blocks: int = 9,
@@ -73,7 +73,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             feature_dim (int, optional): Input feature size. Defaults to 78.
             output_dim (int, optional): Output feature size, useful if you want only
                 a subset of variables in the output. If None, defaults to
-                ``feature_dim``. Defaults to None.
+                ``feature_dim``. Defaults to 1 (a single footprint value per node).
             node_dim (int, optional): Node hidden dimension. Defaults to 256.
             edge_dim (int, optional): Edge hidden dimension. Defaults to 256.
             num_blocks (int, optional): Number of message passing blocks in the
