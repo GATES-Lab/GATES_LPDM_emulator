@@ -74,21 +74,19 @@ def select_met_levels(met, levels=None):
     Args:
         met (xr.Dataset): Met dataset, optionally with a "levels" coordinate.
         levels (list, optional): Levels to keep. Levels not present in ``met`` are
-            dropped from this list (with a printed warning) and ignored. If None, or
-            if ``met`` has no "levels" coordinate, ``met`` is returned unchanged.
-            Defaults to None.
+            ignored (with a printed warning); the list itself is not modified. If
+            None or empty, or if ``met`` has no "levels" coordinate, ``met`` is
+            returned unchanged. Defaults to None.
 
     Returns:
         xr.Dataset: ``met`` subset to the requested (available) levels.
     """
     if levels is not None and len(levels)>0 and "levels" in met.coords:
-        for lev in levels:
-            if lev not in met.levels.values:
-                print("level ", lev, "cannot be found in the met file")
-                levels.remove(lev)
+        missing = [lev for lev in levels if lev not in met.levels.values]
+        for lev in missing:
+            print("level ", lev, "cannot be found in the met file")
 
-        met = met.sel(levels=levels)
-
+        met = met.sel(levels=[lev for lev in levels if lev not in missing])
 
     return met
 
@@ -99,9 +97,10 @@ def select_met_variables(met, variables=None):
         met (xr.Dataset): Met dataset to subset.
         variables (list[str], optional): Variable names to keep. Names not present in
             ``met.data_vars`` (other than "wind_speed"/"wind_angle", which may be
-            derived later) are dropped from this list (with a printed warning). Any
-            coordinates not in the protected set (levels, time, time_delta, lat, lon)
-            are also dropped. If None, ``met`` is returned unchanged. Defaults to None.
+            derived later) are ignored (with a printed warning); the list itself is
+            not modified. Any coordinates not in the protected set (levels, time,
+            time_delta, lat, lon) are also dropped. If None, ``met`` is returned
+            unchanged. Defaults to None.
 
     Returns:
         xr.Dataset: ``met`` subset to the requested variables and protected coords/vars.
@@ -109,11 +108,11 @@ def select_met_variables(met, variables=None):
     protected_variables = ["fp_time", "lat_coords", "lon_coords"]
     protected_coords = ["levels", "time", "time_delta", "lat", "lon"]
     if variables is not None:
-        for v in variables:
-            if v not in met.data_vars and v != "wind_speed" and v != "wind_angle":
-                print("variable ", v, " not found in met file")
-                variables.remove(v)
-        vars_to_drop = list(set(list(met.data_vars))- set(variables) - set(protected_variables))
+        missing = [v for v in variables if v not in met.data_vars and v != "wind_speed" and v != "wind_angle"]
+        for v in missing:
+            print("variable ", v, " not found in met file")
+        keep = [v for v in variables if v not in missing]
+        vars_to_drop = list(set(list(met.data_vars))- set(keep) - set(protected_variables))
         met = met.drop_vars(vars_to_drop)
 
         met = met.drop_vars(list(set(list(met.coords))- set(protected_coords)))
