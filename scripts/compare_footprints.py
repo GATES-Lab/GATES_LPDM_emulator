@@ -3,6 +3,9 @@
     python scripts/compare_footprints.py <out_prefix> <labelA>=<runA_dir> <labelB>=<runB_dir> \
         [--file sample_predictions_test_best_fp.nc]
 
+A run can also be given as ``<label>=<run_dir>::<file.nc>`` to pick its prediction file explicitly
+(e.g. to compare an averaged checkpoint with ``best_fp`` of the same run).
+
 Each run directory must hold the ``sample_predictions_test.nc`` written at the end of training
 (variables fp_original / fp_pred in linear units, fp_transformed / fp_transformed_pred in the
 log-scaled training space, fp_nan_mask with 1 = invalid).
@@ -45,7 +48,13 @@ def main():
         fname = argv[i + 1]
         argv = argv[:i] + argv[i + 2:]
     out_prefix = argv[0]
-    runs = [(a.split("=", 1)[0], load(a.split("=", 1)[1], fname)) for a in argv[1:]]
+    # <label>=<run_dir> uses the --file name; <label>=<run_dir>::<file.nc> names the prediction file
+    # of that run explicitly, so two checkpoints of ONE run can be compared with each other
+    runs = []
+    for a in argv[1:]:
+        label, target = a.split("=", 1)
+        run_dir, _, own_file = target.partition("::")
+        runs.append((label, load(run_dir, own_file or fname)))
     ref = runs[0][1]
     for label, d in runs[1:]:
         if not np.array_equal(ref.time.values, d.time.values):

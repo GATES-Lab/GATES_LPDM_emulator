@@ -368,6 +368,7 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
         concat_decoder_neighbours=False, concat_decoder_neighbours_2=False, better_meshnodes=False, scatter="mean", disaggregated=False, batchsize=5, attention=False, release_coords="default", release_edges=False, decoder_append_latlon=False, concat_enc_neighbours=False, initial_enc=False,
         num_classes=4, decoder_type: str = "conv", input_height=100, input_width=100,
         fp_output_dim: Optional[int] = None, bg_output_dim: Optional[int] = None,
+        wind_mesh_edges: bool = False, wind_indices=None,
     ):
         """
         Args:
@@ -379,6 +380,11 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
 
             fp_output_dim: Per-node output dimension of the footprint head. Defaults to 1
                 (a single footprint value per node), matching the GATES footprint setup.
+            wind_mesh_edges / wind_indices: wind-aware mesh edges (the mean over an edge's two
+                endpoint mesh nodes of the input channels ``wind_indices`` is appended to the edge
+                attributes per sample); resolved by the trainers from the ``dynamic_edges`` block.
+            release_edges: False, True / "out" (release node -> every mesh node) or "both"
+                (additionally every mesh node -> release node).
             bg_output_dim: Per-node intermediate output dimension of the background head
                 (the per-node features that are flattened/pooled into ``num_classes``).
                 Defaults to ``output_dim``.
@@ -406,7 +412,8 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
             mlp_norm_type=norm_type,
-            use_checkpointing=use_checkpointing, dropout=dropout, higher_res=higher_mesh_res, idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours, initial_enc=initial_enc
+            use_checkpointing=use_checkpointing, dropout=dropout, higher_res=higher_mesh_res, idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours, initial_enc=initial_enc,
+            wind_mesh_edges=wind_mesh_edges, wind_indices=wind_indices,
         )
         if not encode_edges:
             edge_dim = 2
@@ -426,14 +433,15 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
             hidden_layers_processor_node=hidden_layers_processor_node,
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
-            mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask
+            mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask,
+            residuals=residuals,
         )
 
-        if residuals:
-            # residuals attach the original encoder inputs (met + aux) to each node
-            decoder_input_dim = node_dim + feature_dim + aux_dim
-        else:
-            decoder_input_dim = node_dim
+        # ``residuals`` selects the residual mesh-node update inside every processor block (as
+        # documented in How_Tos/HOW_TO_PARAMETER_FILE.md). Both decoder heads always read the
+        # node_dim-wide processor state; the previous decoder_input_dim enlargement was never
+        # matched by a concatenation in the decoders and made residuals=True fail (2026-09-26).
+        decoder_input_dim = node_dim
 
         print("set up footprint decoder head")
         # ---- Head 1: per-node footprint decoder (as in GraphSatelliteForecaster) ----

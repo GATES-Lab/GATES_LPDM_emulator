@@ -94,7 +94,8 @@ class SatelliteEncoder(torch.nn.Module):
         hidden_layers_processor_edge=2,
         mlp_norm_type="LayerNorm",
         use_checkpointing: bool = False,
-        dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False, release_coords="default", release_edges=False, concat_enc_neighbours=False, initial_enc=False
+        dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False, release_coords="default", release_edges=False, concat_enc_neighbours=False, initial_enc=False,
+        wind_mesh_edges=False, wind_indices=None
 
     ):
         """
@@ -137,6 +138,13 @@ class SatelliteEncoder(torch.nn.Module):
             assert input_names is not None, "Pass input names to do edges v2 (wind on the mesh edges)"
             self.input_names=input_names
 
+        # release-edge mode: False = none; True or "out" = directed edges release -> every
+        # non-adjacent mesh node (broadcast of the release state); "both" = additionally every
+        # non-adjacent node -> release, so the release node pools the whole window and
+        # re-broadcasts it one block later (2026-09-27, summary section 19).
+        if release_edges not in (False, True, "out", "both"):
+            raise ValueError(f"release_edges must be false, true, 'out' or 'both', got {release_edges!r}")
+        self.release_mode = None if not release_edges else ("both" if release_edges == "both" else "out")
         self.release_edges = release_edges
         if self.release_edges:
             if release_coords=="default":
@@ -287,6 +295,22 @@ class SatelliteEncoder(torch.nn.Module):
         
         self.mesh_graph = self.create_mesh_graph()
 
+        # wind-aware mesh edges (optional): the mean over the two endpoint mesh nodes of the input
+        # channels ``wind_indices`` is appended to the static edge attributes, per sample, before
+        # the edge encoder (same convention as gates/model SatelliteDynamicEncoder; 2026-09-27).
+        self.wind_mesh_edges = bool(wind_mesh_edges)
+        self.n_edge_wind = 0
+        if self.wind_mesh_edges:
+            if wind_indices is None or len(wind_indices) == 0:
+                raise ValueError("wind_mesh_edges=True needs a non-empty wind_indices list")
+            if concat_enc_neighbours or initial_enc:
+                raise ValueError("wind_mesh_edges cannot be combined with concat_enc_neighbours / initial_enc: "
+                                 "wind_indices refer to the raw input channels")
+            if max(wind_indices) >= input_dim or min(wind_indices) < 0:
+                raise ValueError(f"wind_indices {list(wind_indices)} out of range for input_dim {input_dim}")
+            self.wind_indices = torch.tensor(list(wind_indices), dtype=torch.long)
+            self.n_edge_wind = len(wind_indices)
+
         self.attention=attention
         if attention:
             """
@@ -326,7 +350,7 @@ class SatelliteEncoder(torch.nn.Module):
         )
 
         self.mesh_edge_encoder = MLP(
-            self.mesh_graph.edge_attr.size()[-1],
+            self.mesh_graph.edge_attr.size()[-1] + self.n_edge_wind,
             output_edge_dim,
             hidden_dim_processor_edge,
             hidden_layers_processor_edge,
@@ -385,6 +409,13 @@ class SatelliteEncoder(torch.nn.Module):
             #print(features.size())
             #print("after scattering", np.shape(features))
 
+        if self.wind_mesh_edges:
+            # features is (batch, channels, mesh nodes) here: mean wind of each edge's two endpoints
+            self.wind_indices = self.wind_indices.to(features.device)
+            node_wind = features[:, self.wind_indices, :]
+            edge_wind = (node_wind[:, :, self.mesh_graph.edge_index[0, :]]
+                         + node_wind[:, :, self.mesh_graph.edge_index[1, :]]) / 2
+            edge_wind = einops.rearrange(edge_wind, "b f e -> (b e) f")
         features = einops.rearrange(features, "b f n -> (b n) f")
         #print(features.size(),features.dtype )
         out = self.node_encoder(features)  
@@ -404,12 +435,17 @@ class SatelliteEncoder(torch.nn.Module):
             # take mean of wind at each two vectors
             # concat with distance/latlon difference? 
             # encode
-            mesh_edge_attrs = self.mesh_edge_encoder(self.mesh_graph.edge_attr)
+            mesh_edge_attrs = None if self.wind_mesh_edges else self.mesh_edge_encoder(self.mesh_graph.edge_attr)
         else:
-            mesh_edge_attrs = self.mesh_edge_encoder(self.mesh_graph.edge_attr)
+            mesh_edge_attrs = None if self.wind_mesh_edges else self.mesh_edge_encoder(self.mesh_graph.edge_attr)
 
         # same inputs every time... could include info from bottom nodules
-        mesh_edge_attrs = einops.repeat(mesh_edge_attrs, "e f -> (repeat e) f", repeat=batch_size)
+        if self.wind_mesh_edges:
+            # per-sample edge attributes: static geometry (+ release flags) and the edge wind
+            static_attrs = einops.repeat(self.mesh_graph.edge_attr, "e f -> (repeat e) f", repeat=batch_size)
+            mesh_edge_attrs = self.mesh_edge_encoder(torch.cat([static_attrs, edge_wind], dim=-1))
+        else:
+            mesh_edge_attrs = einops.repeat(mesh_edge_attrs, "e f -> (repeat e) f", repeat=batch_size)
         #mesh_edge_attrs = torch.tensor(mesh_edge_attrs)
         mesh_edge_idx = torch.cat([self.mesh_graph.edge_index+ i * torch.max(self.mesh_graph.edge_index) + i for i in range(batch_size) ], dim=1)
 
@@ -434,6 +470,17 @@ class SatelliteEncoder(torch.nn.Module):
         edge_sources = []
         edge_targets = []
         edge_attrs = []
+        # release edges (optional): directed edges FROM the release-point mesh node TO every
+        # non-adjacent mesh node, so every node receives the release node's state in the first
+        # processor block instead of after num_blocks hops. A 4th edge attribute flags them
+        # (1 = release edge, 0 = regular k-ring-1 edge); the mesh edge encoder's input width
+        # follows the attribute count, so nothing changes when release_edges is False.
+        # (Rewritten 2026-09-26: the previous branch pointed the edges INTO the release node and
+        # reused the last neighbour's distance/offsets as the edge attributes.)
+        release_loc = h3.h3_to_geo(self.release_h3) if self.release_edges else None
+        both = getattr(self, "release_mode", None) == "both"
+        # flag columns: [is release->node edge] and, in "both" mode, [is node->release edge]
+        regular_flag = ([0.0, 0.0] if both else [0.0]) if self.release_edges else []
         for h3_index in self.base_h3_grid:
             # itself and all one-hop neighbouring points
             h_points = h3.k_ring(h3_index, 1)
@@ -443,19 +490,26 @@ class SatelliteEncoder(torch.nn.Module):
                 distance = h3.point_dist(loc_point, loc_neighbour, unit="km")
                 try:
                     edge_targets.append(self.base_h3_map[h])
-                    edge_attrs.append([distance, loc_point[0]-loc_neighbour[0], loc_point[1]-loc_neighbour[1]])
+                    edge_attrs.append([distance, loc_point[0]-loc_neighbour[0], loc_point[1]-loc_neighbour[1]] + regular_flag)
                     edge_sources.append(self.base_h3_map[h3_index])
                 except KeyError:
                     # this except will be triggered if h (one of the neighbouring points to h3_index) is not in the list
                     # this can only happen if using a reduced domain (whole_world = False), at the edges of this domain
                     continue
             if self.release_edges:
-                print("here!")
                 if h3_index != self.release_h3 and (self.release_h3 not in h_points):
-                    # add edge to centre, only if edge does not already exist
-                    edge_targets.append(self.base_h3_map[self.release_h3])
-                    edge_attrs.append([distance, loc_point[0]-loc_neighbour[0], loc_point[1]-loc_neighbour[1]])
-                    edge_sources.append(self.base_h3_map[h3_index])
+                    # long-range edge release -> h3_index (adjacent nodes already have a k-ring edge);
+                    # attributes follow the regular convention [distance, src-dst lat, src-dst lon]
+                    dist_to_release = h3.point_dist(release_loc, loc_point, unit="km")
+                    edge_sources.append(self.base_h3_map[self.release_h3])
+                    edge_targets.append(self.base_h3_map[h3_index])
+                    edge_attrs.append([dist_to_release, release_loc[0]-loc_point[0], release_loc[1]-loc_point[1], 1.0]
+                                      + ([0.0] if both else []))
+                    if both:
+                        # return edge h3_index -> release: the release node aggregates the window
+                        edge_sources.append(self.base_h3_map[h3_index])
+                        edge_targets.append(self.base_h3_map[self.release_h3])
+                        edge_attrs.append([dist_to_release, loc_point[0]-release_loc[0], loc_point[1]-release_loc[1], 0.0, 1.0])
 
         edge_index = torch.tensor([edge_sources, edge_targets], dtype=torch.long)
         edge_attrs = torch.tensor(edge_attrs, dtype=torch.float)

@@ -12,6 +12,24 @@ scalers and model are rebuilt exactly as that run had them (principle 2). Severa
 passed at once: they must share a data-loading configuration, and the (expensive) load and the
 transforms are then done once and reused, which also guarantees every run is scored on identical
 inputs. The output NetCDF has the same variables as the one written during training.
+
+Applying a run to a data configuration it was NOT trained on (window-size study, 2026-09-28)::
+
+    python predict_dual_model.py --run_dir <run> --checkpoint best_fp \
+        --override train_load_data.size=100 --override 'train_load_data.years=["2014"]' \
+        --override 'train_load_data.months=["01"]' --use-saved-scalers --allow-grid-mismatch \
+        --out sample_predictions_test_best_fp_size100.nc
+
+``--override key=value`` (repeatable; dotted keys, JSON values) changes the loaded settings before
+the data is loaded, e.g. the window ``size`` of both the training and the test set (``test_load_data``
+inherits from ``train_load_data``). ``--use-saved-scalers`` applies the run's SAVED input scaler and
+background normalisation instead of refitting them on the (possibly different, possibly tiny)
+training set that is loaded — with it, the training years/months only fix the reference footprint
+of the grid, so a single month suffices. ``--allow-grid-mismatch`` builds the model for the new grid
+and drops the two state entries whose shape is tied to the grid size: ``encoder.h3_nodes`` (an
+unused all-zero placeholder) and the background head's final linear layer (whose input is the
+flattened window, so the BACKGROUND OUTPUT IS INVALID and written as NaN; the footprint head is
+per-node and transfers). Everything else is loaded strictly.
 """
 
 import argparse
@@ -111,6 +129,76 @@ def find_checkpoint(run_dir, name):
 
 DATA_KEYS = ("train_load_data", "test_load_data", "variables", "background_setup", "data_dirs")
 
+# state-dict entries whose SHAPE follows the grid size; only these may be dropped by --allow-grid-mismatch
+GRID_TIED_STATE_KEYS = ("encoder.h3_nodes", "bg_decoder.linear_class.weight")
+
+
+def apply_overrides(parameters, overrides):
+    """Apply ``["dotted.key=<json value>", ...]`` to ``parameters`` in place; returns the changes.
+
+    Intermediate dicts are created as needed. Values are parsed as JSON, so strings need quotes
+    (``'train_load_data.years=["2014"]'``) while numbers/booleans/null do not.
+    """
+    changes = []
+    for item in overrides or []:
+        if "=" not in item:
+            raise SystemExit(f"--override expects key=value, got {item!r}")
+        key, raw = item.split("=", 1)
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"--override {key}: value {raw!r} is not valid JSON ({e})")
+        node = parameters
+        parts = key.split(".")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise SystemExit(f"--override {key}: '{part}' is not a dict in the settings")
+        changes.append((key, node.get(parts[-1]), value))
+        node[parts[-1]] = value
+    return changes
+
+
+class SavedInputScaler:
+    """Minimal stand-in for ``InputsDataset`` around an already fitted input scaler object."""
+
+    def __init__(self, scaler):
+        self.scaler = scaler
+
+    def transform(self, inputs):
+        transformed = self.scaler.transform(inputs)
+        if transformed.dtype != "float32":
+            transformed = transformed.astype("float32", copy=False)
+        return transformed
+
+
+def load_saved_norm_vals(run_dir):
+    """The background / auxiliary normalisation (mean, std) the run trained with."""
+    files = sorted(Path(run_dir).glob("training_outputs/norm_vals_*.json"))
+    if not files:
+        raise FileNotFoundError(f"no norm_vals_*.json in {run_dir}/training_outputs")
+    with open(files[0]) as f:
+        raw = json.load(f)
+    return {k: tuple(v) for k, v in raw.items()}
+
+
+def filter_state_for_model(state, model, allowed=GRID_TIED_STATE_KEYS):
+    """Drop the entries of ``state`` whose shape differs from the model's; only ``allowed`` keys may.
+
+    Returns ``(filtered_state, dropped_keys)``. Raises if any other entry mismatches, so an
+    architecture that does not match the checkpoint is never loaded partially by accident.
+    """
+    model_state = model.state_dict()
+    dropped, bad = [], []
+    for key, tensor in state.items():
+        if key in model_state and tuple(model_state[key].shape) != tuple(tensor.shape):
+            (dropped if key in allowed else bad).append((key, tuple(tensor.shape), tuple(model_state[key].shape)))
+    if bad:
+        raise RuntimeError("checkpoint / model shape mismatch beyond the grid-tied entries: "
+                           + ", ".join(f"{k} {a} vs {b}" for k, a, b in bad))
+    filtered = {k: v for k, v in state.items() if k not in {d[0] for d in dropped}}
+    return filtered, [d[0] for d in dropped]
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -118,6 +206,14 @@ def main():
     ap.add_argument("--checkpoint", default="best_fp", help="checkpoint suffix: best_fp, best_bg, best, or an epoch number")
     ap.add_argument("--out", default=None, help="output file name inside each run dir "
                                                 "(default: sample_predictions_test_<checkpoint>.nc)")
+    ap.add_argument("--override", action="append", default=[], metavar="KEY=JSON",
+                    help="repeatable; change a saved setting before loading, e.g. train_load_data.size=100")
+    ap.add_argument("--use-saved-scalers", action="store_true",
+                    help="apply the run's saved input scaler and background normalisation instead of "
+                         "refitting them on the loaded training set")
+    ap.add_argument("--allow-grid-mismatch", action="store_true",
+                    help="build the model for the loaded window size and drop the grid-tied state entries "
+                         "(encoder.h3_nodes, bg head linear); the background output is then invalid (NaN)")
     args = ap.parse_args()
     out_name = args.out or f"sample_predictions_test_{args.checkpoint}.nc"
 
@@ -132,6 +228,13 @@ def main():
     print("Regenerating test predictions for:")
     for r, c in zip(run_dirs, checkpoints):
         print(f"  {r.name}  <-  {c.name}")
+
+    for p in params:
+        changes = apply_overrides(p, args.override)
+    for key, old, new in changes:
+        print(f"override {key}: {old!r} -> {new!r}")
+    if args.override and not args.use_saved_scalers:
+        print("WARNING: settings overridden but the scalers are REFITTED on the overridden training set")
 
     base = copy.deepcopy(params[0])
     set_reproducibility(base.get("seed") or 34)
@@ -152,8 +255,16 @@ def main():
     if background_params["use_auxiliary_bc"]:
         train_aux = format_aux_data(train_aux, time_coord=train_fp_data.time)
         test_aux = format_aux_data(test_aux, time_coord=test_fp_data.time)
-    norm_train_bgs, norm_train_aux, norm_vals = normalize_boundary_data(train_bgs, aux_data=train_aux)
-    norm_test_bgs, norm_test_aux, norm_vals = normalize_boundary_data(test_bgs, aux_data=test_aux, norm_vals=norm_vals)
+    if args.use_saved_scalers:
+        saved_norm = load_saved_norm_vals(run_dirs[0])
+        print(f"using the saved background / auxiliary normalisation of {run_dirs[0].name}: {saved_norm}")
+        norm_train_bgs, norm_train_aux, norm_vals = normalize_boundary_data(train_bgs, aux_data=train_aux, norm_vals=saved_norm)
+        norm_test_bgs, norm_test_aux, norm_vals = normalize_boundary_data(test_bgs, aux_data=test_aux, norm_vals=saved_norm)
+        input_dataset = SavedInputScaler(saved_scalers[0]["inputs_scaler"])
+    else:
+        norm_train_bgs, norm_train_aux, norm_vals = normalize_boundary_data(train_bgs, aux_data=train_aux)
+        norm_test_bgs, norm_test_aux, norm_vals = normalize_boundary_data(test_bgs, aux_data=test_aux, norm_vals=norm_vals)
+        input_dataset = None
 
     feature_dim = train_inputs.shape[-1]
     aux_dim = train_aux.aux.shape[0] if background_params["use_auxiliary_bc"] else 0
@@ -161,10 +272,14 @@ def main():
 
     train_loader, test_loader, fp_labels, test_scaled_fp, scalers = gates_training_dual.setup_dual_dataloaders(
         base, train_inputs, train_fp_data, norm_train_bgs,
-        test_inputs, test_fp_data, norm_test_bgs, norm_train_aux, norm_test_aux)
+        test_inputs, test_fp_data, norm_test_bgs, norm_train_aux, norm_test_aux,
+        input_dataset=input_dataset)
     del train_loader
     check_refitted_scalers(scalers, saved_scalers[0], run_dirs[0])
     grid, _ = get_grid(train_fp_data, base.get("grid_reference_fp"))
+    window = len(train_fp_data.lat.values)
+    print(f"window {window} x {len(train_fp_data.lon.values)} cells, grid of {len(grid)} nodes, "
+          f"{len(test_fp_data.time)} test footprints")
     training_ctx = BoundaryTrainingContext(
         base, device, False, [], [], grid, fp_labels, scalers, feature_dim,
         len(train_fp_data.lat.values), aux_dim)
@@ -177,7 +292,18 @@ def main():
         model, model_ctx = build_model_and_context(p_infer, training_ctx, paths_ctx)
         state = torch.load(ckpt, map_location=device, weights_only=False)
         state = state.get("model_state_dict", state) if isinstance(state, dict) and "model_state_dict" in state else state
-        model.load_state_dict(state, strict=True)
+        dropped = []
+        if args.allow_grid_mismatch:
+            state, dropped = filter_state_for_model(state, model)
+            missing, unexpected = model.load_state_dict(state, strict=False)
+            if unexpected or set(missing) != set(dropped):
+                raise RuntimeError(f"unexpected partial load: missing {missing}, unexpected {unexpected}, dropped {dropped}")
+            print(f"grid-mismatch load: dropped {dropped} (checkpoint trained on another window size)")
+        else:
+            model.load_state_dict(state, strict=True)
+        bg_valid = "bg_decoder.linear_class.weight" not in dropped
+        if not bg_valid:
+            print("WARNING: the background head's final layer is untrained for this window -> bg output written as NaN")
         model.to(device)
 
         avg_total, avg_fp, avg_bg, bg_mae, fp_out, bg_out, bg_true = validate_and_predict(
@@ -191,9 +317,13 @@ def main():
         ds["fp_pred"] = (("time", "lat", "lon"), original_space.reshape(*ds.fp_original.shape))
         mean, std = norm_vals["outputs"]
         ds["bg_true_ppb"] = (("time",), denormalize(np.asarray(bg_true), mean, std).reshape(-1) * 1e9)
-        ds["bg_pred_ppb"] = (("time",), denormalize(np.asarray(bg_out), mean, std).reshape(-1) * 1e9)
+        bg_pred_ppb = denormalize(np.asarray(bg_out), mean, std).reshape(-1) * 1e9
+        ds["bg_pred_ppb"] = (("time",), bg_pred_ppb if bg_valid else np.full_like(bg_pred_ppb, np.nan))
         ds.attrs.update({"model_name": run_dir.name, "checkpoint": ckpt.name,
-                         "test_fp_loss": float(avg_fp), "test_bg_loss": float(avg_bg)})
+                         "test_fp_loss": float(avg_fp), "test_bg_loss": float(avg_bg) if bg_valid else float("nan"),
+                         "window_size": int(window), "overrides": json.dumps(args.override),
+                         "scalers": "saved" if args.use_saved_scalers else "refitted",
+                         "dropped_state": json.dumps(dropped)})
         out_path = run_dir / out_name
         ds.to_netcdf(out_path)
         print("wrote", out_path)

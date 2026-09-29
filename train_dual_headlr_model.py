@@ -162,6 +162,94 @@ def resolve_head_learning_rates(parameters):
     return lrs
 
 
+def resolve_head_weight_decay(parameters):
+    """Return the optional per-head AdamW weight decay ``{"trunk"|"fp"|"bg": value}``.
+
+    Read from ``parameters["head_weight_decay"]``; groups without an entry are absent from the
+    result (optimizer default). Raises ``ValueError`` on unknown keys, negative values, or when
+    ``bg_head.weight_decay`` is set together with ``head_weight_decay.bg``.
+    """
+    cfg = parameters.get("head_weight_decay", None) or {}
+    unknown = set(cfg) - set(HEAD_GROUPS)
+    if unknown:
+        raise ValueError(f"head_weight_decay: unknown keys {sorted(unknown)}; allowed: {list(HEAD_GROUPS)}")
+    out = {k: float(v) for k, v in cfg.items() if v is not None}
+    bad = {k: v for k, v in out.items() if v < 0}
+    if bad:
+        raise ValueError(f"head_weight_decay must be >= 0, got {bad}")
+    if "bg" in out and parameters.get("bg_head", {}).get("weight_decay", None) is not None:
+        raise ValueError("bg_head.weight_decay and head_weight_decay.bg are both set; use one")
+    return out
+
+
+class LrSchedule:
+    """Optional learning-rate schedule applied to EVERY optimizer group ("lr_schedule" block).
+
+    ::
+
+        "lr_schedule": {
+            "type": "cosine",            # "constant" (default: no schedule) or "cosine"
+            "warmup_epochs": 5,          # linear ramp from warmup_start_scale to 1 (0 = none)
+            "warmup_start_scale": 0.1,
+            "min_scale": 0.02,           # cosine floor, as a fraction of each group's base LR
+            "total_epochs": null         # epoch at which the floor is reached (null = the run length)
+        }
+
+    Each group's learning rate is ``base * scale(epoch)``, where ``base`` is that group's
+    ``head_learning_rates`` entry, so the ratio between the heads is preserved. A bg warm-up in
+    "lr" mode multiplies the bg group on top. The scale depends on the epoch only, so every
+    multi-GPU rank applies the same value. Not combinable with a bg refit (its second optimizer
+    is not scheduled): rejected at construction.
+    """
+
+    def __init__(self, parameters, total_epochs):
+        cfg = parameters.get("lr_schedule", None) or {}
+        unknown = set(cfg) - {"type", "warmup_epochs", "warmup_start_scale", "min_scale", "total_epochs"}
+        if unknown:
+            raise ValueError(f"lr_schedule: unknown keys {sorted(unknown)}")
+        self.kind = cfg.get("type", "constant")
+        if self.kind not in ("constant", "cosine"):
+            raise ValueError(f"lr_schedule.type must be 'constant' or 'cosine', got {self.kind!r}")
+        self.warmup_epochs = int(cfg.get("warmup_epochs") or 0)
+        self.warmup_start = float(cfg.get("warmup_start_scale", 0.1))
+        self.min_scale = float(cfg.get("min_scale", 0.02))
+        self.total_epochs = int(cfg.get("total_epochs") or total_epochs)
+        if self.warmup_epochs < 0 or not 0.0 < self.warmup_start <= 1.0 or not 0.0 <= self.min_scale <= 1.0:
+            raise ValueError("lr_schedule: need warmup_epochs >= 0, 0 < warmup_start_scale <= 1, 0 <= min_scale <= 1")
+        if self.total_epochs <= self.warmup_epochs:
+            raise ValueError(f"lr_schedule.total_epochs ({self.total_epochs}) must exceed warmup_epochs ({self.warmup_epochs})")
+        if self.active and parameters.get("bg_schedule", {}).get("refit_start_epoch") is not None:
+            raise ValueError("lr_schedule cannot be combined with bg_schedule.refit_start_epoch")
+        self.scale = 1.0
+
+    @property
+    def active(self):
+        return self.kind != "constant" or self.warmup_epochs > 0
+
+    def scale_at(self, epoch):
+        """Multiplier of the base learning rates for ``epoch`` (0-based)."""
+        if self.warmup_epochs and epoch < self.warmup_epochs:
+            return self.warmup_start + (1.0 - self.warmup_start) * epoch / self.warmup_epochs
+        if self.kind == "constant":
+            return 1.0
+        span = max(1, self.total_epochs - 1 - self.warmup_epochs)
+        x = min(1.0, max(0.0, (epoch - self.warmup_epochs) / span))
+        return self.min_scale + (1.0 - self.min_scale) * 0.5 * (1.0 + math.cos(math.pi * x))
+
+    def apply(self, model_ctx, bg_sched, epoch):
+        """Set every group's learning rate for ``epoch``; call AFTER ``BgSchedule.apply_warmup``."""
+        self.scale = self.scale_at(epoch)
+        if not self.active:
+            return self.scale
+        head_lrs = getattr(model_ctx, "head_lrs", None) or {}
+        bg_warm = (bg_sched.warmup_scale
+                   if (bg_sched.warmup_epochs and bg_sched.warmup_mode == "lr") else 1.0)
+        for g in model_ctx.optimizer.param_groups:
+            base = head_lrs.get(g.get("name"), model_ctx.lr)
+            g["lr"] = base * self.scale * (bg_warm if g.get("name") == "bg" else 1.0)
+        return self.scale
+
+
 def build_head_lr_optimizer(model, parameters, lrs):
     """One AdamW with a parameter group per head: trunk (everything that is not a decoder
     head), ``fp_decoder`` and ``bg_decoder``, each at its own learning rate.
@@ -182,6 +270,12 @@ def build_head_lr_optimizer(model, parameters, lrs):
     bg_weight_decay = parameters.get("bg_head", {}).get("weight_decay", None)
     if bg_weight_decay is not None:
         groups[2]["weight_decay"] = bg_weight_decay
+    # Optional per-head AdamW weight decay ("head_weight_decay": {"trunk", "fp", "bg"}); a group
+    # without an entry keeps the optimizer default (0.01).
+    for g in groups:
+        wd = resolve_head_weight_decay(parameters).get(g["name"])
+        if wd is not None:
+            g["weight_decay"] = wd
 
     n_total = sum(1 for _ in model.parameters())
     n_grouped = sum(len(g["params"]) for g in groups)
@@ -465,6 +559,12 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
     write_to_file("starting dual refit training loop", paths_ctx.updates_path)
 
     sched = BgSchedule(training_ctx.parameters)
+    lr_sched = LrSchedule(training_ctx.parameters, total_epochs=epoch_so_far + model_ctx.epochs_num)
+    if lr_sched.active:
+        msg = (f"lr schedule: {lr_sched.kind}, warm-up {lr_sched.warmup_epochs} epochs from scale "
+               f"{lr_sched.warmup_start:g}, floor {lr_sched.min_scale:g} at epoch {lr_sched.total_epochs - 1}")
+        print(msg)
+        write_to_file(msg, paths_ctx.updates_path)
     if (sched.refit_start_epoch is not None
             and sched.refit_start_epoch >= epoch_so_far + model_ctx.epochs_num):
         print(f"Warning: bg_schedule.refit_start_epoch={sched.refit_start_epoch} is beyond the "
@@ -495,6 +595,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
 
         # --- Schedule transitions, applied BEFORE the epoch trains ---
         sched.apply_warmup(model_ctx, epoch, paths_ctx)
+        lr_sched.apply(model_ctx, sched, epoch)
         sched.maybe_freeze(model, model_ctx, epoch, paths_ctx)
         sched.maybe_start_refit(model, model_ctx, epoch, paths_ctx, bg_ckpt, losses)
 
@@ -555,6 +656,9 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "bg/warmup_scale": sched.warmup_scale,
                 "lr/bg_current": next((g["lr"] for g in model_ctx.optimizer.param_groups
                                        if g.get("name") == "bg"), model_ctx.lr),
+                "lr/trunk_current": next((g["lr"] for g in model_ctx.optimizer.param_groups
+                                          if g.get("name") == "trunk"), model_ctx.lr),
+                "lr/schedule_scale": lr_sched.scale,
                 **list_of_metrics,
             }
             if bg_mae_denorm is not None:
@@ -821,6 +925,11 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
 
     save_object(scalers, "scalers", paths_ctx.training_outputs_path, model_name,
                 description=f"Input and footprint scaler objects used in model {model_name}", use_wandb=use_wandb)
+
+    # Wind-aware mesh edges (optional "dynamic_edges" block): resolve the wind channels' positions in
+    # the model input ONCE, here, and record them in the training settings saved below, so every
+    # rebuild of the model (multi-GPU workers, predict_dual_model.py) uses the same indices.
+    gates_training_dual.resolve_dual_dynamic_edges(parameters, train_inputs.variable_name.values)
 
     image_plots = random.sample(list(range(len(test_inputs))), k=4)
     image_dates = np.datetime_as_string(test_fp_data.time.values[sorted(image_plots)])

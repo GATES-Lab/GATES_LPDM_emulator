@@ -41,7 +41,8 @@ def _trim_dual_to_batch_size(inputs, fps, bgs, batch_size):
 
 def setup_dual_dataloaders(parameters, train_inputs, train_fps, train_bgs,
                             test_inputs, test_fps, test_bgs,
-                            train_auxiliary_cams=None, test_auxiliary_cams=None):
+                            train_auxiliary_cams=None, test_auxiliary_cams=None,
+                            input_dataset=None):
     """Scale inputs/footprints, append aux CAMS, and build dual train/test DataLoaders.
 
     Args:
@@ -51,6 +52,13 @@ def setup_dual_dataloaders(parameters, train_inputs, train_fps, train_bgs,
         train_fps / test_fps (xr.DataArray or xr.Dataset): Footprint targets (time, lat, lon).
         train_bgs / test_bgs (xr.DataArray): Normalised background targets (time, num_classes).
         train_auxiliary_cams / test_auxiliary_cams (xr.DataArray or None): Aux CAMS features.
+        input_dataset (optional): An already FITTED input-scaler wrapper (anything with
+            ``transform(inputs)`` and a ``scaler`` attribute, e.g. the ``InputsDataset`` of an
+            earlier run). When given, the input scaler is NOT refitted on ``train_inputs``: the
+            inputs are transformed with the saved statistics. Used by ``predict_dual_model.py`` to
+            apply a trained model to a data configuration it was not trained on (a different
+            window size), where refitting would change the input space (principle 3). Default
+            None = fit on ``train_inputs`` as during training.
 
     Returns:
         train_loader (DataLoader): yields (inputs, fps, background).
@@ -61,7 +69,10 @@ def setup_dual_dataloaders(parameters, train_inputs, train_fps, train_bgs,
         scalers (dict): {'inputs_scaler', 'fp_scaler'}.
     """
     # --- Inputs (scale, then append auxiliary CAMS, as in the background pipeline) ---
-    input_dataset = setup_input_dataset(parameters, train_inputs)
+    if input_dataset is None:
+        input_dataset = setup_input_dataset(parameters, train_inputs)
+    else:
+        print("Using a pre-fitted input scaler (not refitted on these training inputs)")
     train_scaled_inputs = input_dataset.transform(train_inputs)
     test_scaled_inputs = input_dataset.transform(test_inputs)
 
@@ -115,6 +126,69 @@ def setup_dual_dataloaders(parameters, train_inputs, train_fps, train_bgs,
     return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
 
 
+def resolve_dual_dynamic_edges(parameters, input_names):
+    """Resolve the optional ``dynamic_edges`` block into model keyword arguments (dual model).
+
+    The dual model's encoder supports WIND-AWARE mesh edges only: for every mesh edge the mean
+    over its two endpoint mesh nodes of the input channels named in ``wind_tuples`` is appended
+    to the edge attributes, per sample. The channel positions are resolved once, here, and stored
+    in ``parameters["dynamic_edges_resolved"]`` so they are written to the training settings and
+    every rebuild of the model (multi-GPU workers, ``predict_dual_model.py``) uses the same ones.
+
+    Args:
+        parameters (dict): Full parameter dict. Reads ``parameters["dynamic_edges"]``, e.g.
+            ``{"dynamic_wind": true, "wind_tuples": [["x_wind", 3, 0], ["y_wind", 3, 0]]}``
+            (the default tuples if omitted). Modified in place.
+        input_names (iterable): ``(variable, level, time_delta)`` of the model's met/static input
+            channels, in input order. Auxiliary boundary channels follow them in the model input
+            and are never selected.
+
+    Returns:
+        dict: ``{}`` when no wind edges are requested, else
+        ``{"wind_mesh_edges": True, "wind_indices": [...]}``.
+
+    Raises:
+        ValueError: for the unsupported ``dynamic_latlon`` / ``dynamic_earthdistance`` options,
+            duplicated tuples, or tuples that are not among ``input_names``.
+    """
+    cfg = parameters.get("dynamic_edges") or {}
+    if cfg.get("dynamic_latlon") or cfg.get("dynamic_earthdistance"):
+        raise ValueError("dynamic_edges: dynamic_latlon / dynamic_earthdistance are not supported by the dual "
+                         "model's encoder (only dynamic_wind is)")
+    if not cfg.get("dynamic_wind", False):
+        parameters.pop("dynamic_edges_resolved", None)
+        return {}
+    tuples = cfg.get("wind_tuples") or [["x_wind", 3, 0], ["y_wind", 3, 0]]
+    wanted = [(str(v), int(level), int(delta)) for v, level, delta in tuples]
+    if len(set(wanted)) != len(wanted):
+        raise ValueError(f"dynamic_edges.wind_tuples contains duplicates: {wanted}")
+    names = [(str(n[0]), int(n[1]), int(n[2])) for n in input_names]
+    missing = [w for w in wanted if w not in names]
+    if missing:
+        raise ValueError(f"dynamic_edges.wind_tuples not found among the model inputs: {missing}")
+    indices = [names.index(w) for w in wanted]
+    parameters["dynamic_edges_resolved"] = {
+        "wind_mesh_edges": True, "wind_indices": indices, "wind_channels": [list(w) for w in wanted]}
+    print(f"Wind-aware mesh edges: {len(indices)} channels {wanted} at input positions {indices}")
+    return {"wind_mesh_edges": True, "wind_indices": indices}
+
+
+def dual_dynamic_edge_kwargs(parameters):
+    """Model kwargs for the dynamic edges from ``parameters["dynamic_edges_resolved"]``.
+
+    Fails loudly when wind edges are requested but were never resolved, so a trainer that does
+    not call :func:`resolve_dual_dynamic_edges` cannot silently train without them.
+    """
+    resolved = parameters.get("dynamic_edges_resolved")
+    requested = (parameters.get("dynamic_edges") or {}).get("dynamic_wind", False)
+    if requested and not resolved:
+        raise ValueError("dynamic_edges.dynamic_wind is set but parameters['dynamic_edges_resolved'] is missing: "
+                         "call resolve_dual_dynamic_edges(parameters, input_names) before building the model")
+    if not resolved:
+        return {}
+    return {"wind_mesh_edges": bool(resolved["wind_mesh_edges"]), "wind_indices": list(resolved["wind_indices"])}
+
+
 def setup_dual_model(parameters, training_ctx, paths_ctx):
     """Instantiate the dual-head model, optimizer, per-head criteria and early stopping.
 
@@ -163,6 +237,7 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
         input_width=training_ctx.size,
         decoder_type=decoder,
         **model_parameters,
+        **dual_dynamic_edge_kwargs(parameters),
     )
 
     loss_cfg = parameters["loss_functions"]
@@ -263,8 +338,16 @@ def freeze_bg_head(model):
 
 def initialise_dual_losses():
     """Loss tracking dict for the dual-head training run."""
-    metrics_dict = {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
-    flux_metrics_dict = {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
+    # Every metric group needs its OWN lists. (Until 2026-09-27 the groups were shallow copies of
+    # one dict, so they shared the inner lists: the histories saved in the periodic checkpoints
+    # interleave transformed/original values and the three flux patterns. Loss series, W&B logging
+    # and the trained weights were never affected; scripts/mf_metric_curves.py reads both layouts.)
+    def metrics_dict():
+        return {"nmae": [], "mse": [], "bias": [], "mae": [], "iou": []}
+
+    def flux_metrics_dict():
+        return {"corrcoef": [], "mae": [], "mean_bias": [], "r2_score": []}
+
     losses = {
         "train": [],
         "test": [],
@@ -273,12 +356,12 @@ def initialise_dual_losses():
         "train_bg": [],
         "test_bg": [],
         "test_bg_mae_denorm": [],
-        "metrics_transformed": metrics_dict.copy(),
-        "metrics_original": metrics_dict.copy(),
+        "metrics_transformed": metrics_dict(),
+        "metrics_original": metrics_dict(),
         "metrics_fluxes_static": {
-            "uniform": flux_metrics_dict.copy(),
-            "checkerboard": flux_metrics_dict.copy(),
-            "checkerboard_10": flux_metrics_dict.copy(),
+            "uniform": flux_metrics_dict(),
+            "checkerboard": flux_metrics_dict(),
+            "checkerboard_10": flux_metrics_dict(),
         },
     }
     return losses
