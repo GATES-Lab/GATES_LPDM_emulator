@@ -485,7 +485,11 @@ class SatelliteEncoder(torch.nn.Module):
             # itself and all one-hop neighbouring points
             h_points = h3.k_ring(h3_index, 1)
             loc_point = h3.h3_to_geo(h3_index)
-            for h in h_points:  
+            # sorted: k_ring returns a SET of strings, whose iteration order changes from one
+            # Python process to the next (hash randomisation). The edge ORDER then differed between
+            # launches and between the ranks of a multi-GPU run, and with it the order of the
+            # floating-point sums in the processor: same graph, results different in the last digits.
+            for h in sorted(h_points):
                 loc_neighbour = h3.h3_to_geo(h)
                 distance = h3.point_dist(loc_point, loc_neighbour, unit="km")
                 try:
@@ -797,7 +801,11 @@ class FixedSatelliteEncoder(torch.nn.Module):
             # itself and all one-hop neighbouring points
             h_points = h3.k_ring(h3_index, 1)
             loc_point = h3.h3_to_geo(h3_index)
-            for h in h_points:  
+            # sorted: k_ring returns a SET of strings, whose iteration order changes from one
+            # Python process to the next (hash randomisation). The edge ORDER then differed between
+            # launches and between the ranks of a multi-GPU run, and with it the order of the
+            # floating-point sums in the processor: same graph, results different in the last digits.
+            for h in sorted(h_points):
                 loc_neighbour = h3.h3_to_geo(h)
                 distance = h3.point_dist(loc_point, loc_neighbour, unit="km")
                 try:

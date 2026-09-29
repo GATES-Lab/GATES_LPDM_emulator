@@ -42,6 +42,7 @@ import gates.training.training_background as gates_training_background
 import gates.training.training_dual as gates_training_dual
 import gates.training.dual_analysis as dual_analysis  # ANALYSIS-ONLY diagnostics (opt-in)
 import gates.training.distributed as gates_distributed  # multi-GPU (no-ops on one GPU)
+import gates.training.lean_dual_data as gates_lean  # month cache / large training sets (opt-in)
 from gates.data.load_data import get_grid
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
@@ -489,6 +490,15 @@ def load_dual_data(parameters, verbose=True, return_summary=False):
 
     background_params = resolve_background_params(parameters)
 
+    if gates_lean.data_cache_enabled(parameters):
+        # Month cache ("data_cache" block): every month is loaded once and kept on disk, and the
+        # training inputs are NOT concatenated in memory (train_inputs is a LazyMonthInputs).
+        bundle, summary = gates_lean.load_lean_dual_data(
+            parameters, train_load_data_params, test_load_data_params, input_variables,
+            datapath_args, background_params, verbose=verbose)
+        bundle = DualDataBundle(*bundle)
+        return (bundle, summary) if return_summary else bundle
+
     print("Loading shared met, fp AND BACKGROUND data (train + test)...")
     client, cluster = gates_training.make_cluster()
 
@@ -714,11 +724,22 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     parameters["num_features"] = num_features
     print("using num_features =", num_features, "out of which aux_dim =", aux_dim)
 
-    train_loader, test_loader, fp_labels, test_scaled_fp, scalers = gates_training_dual.setup_dual_dataloaders(
-        parameters, train_inputs, train_fp_data, norm_train_bgs,
-        test_inputs, test_fp_data, norm_test_bgs,
-        norm_train_aux_data, norm_test_aux_data,
-    )
+    if isinstance(train_inputs, gates_lean.LazyMonthInputs):
+        # Month cache ("data_cache" block): the training batches are built straight in shared
+        # memory (same batches as the standard pipeline), there is no training DataLoader.
+        train_loader = None
+        train_tensors, test_loader, fp_labels, test_scaled_fp, scalers = gates_lean.setup_lean_dual_data(
+            parameters, train_inputs, train_fp_data, norm_train_bgs,
+            test_inputs, test_fp_data, norm_test_bgs,
+            norm_train_aux_data, norm_test_aux_data,
+        )
+    else:
+        train_tensors = None
+        train_loader, test_loader, fp_labels, test_scaled_fp, scalers = gates_training_dual.setup_dual_dataloaders(
+            parameters, train_inputs, train_fp_data, norm_train_bgs,
+            test_inputs, test_fp_data, norm_test_bgs,
+            norm_train_aux_data, norm_test_aux_data,
+        )
 
     save_object(scalers, "scalers", paths_ctx.training_outputs_path, model_name,
                 description=f"Input and footprint scaler objects used in model {model_name}", use_wandb=use_wandb)
@@ -748,7 +769,7 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
                       bg_detrended=background_params["detrend"])
     dist_run, train_loader, test_loader = gates_distributed.setup_training_loaders(
         Path(__file__).stem, num_gpus, parameters, training_ctx, paths_ctx,
-        train_loader, test_loader, run_kwargs)
+        train_loader, test_loader, run_kwargs, train_tensors=train_tensors)
 
     try:
         model, model_ctx = build_model_and_context(parameters, training_ctx, paths_ctx)

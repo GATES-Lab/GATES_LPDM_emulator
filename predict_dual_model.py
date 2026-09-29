@@ -44,7 +44,9 @@ import numpy as np
 import torch
 
 import gates
+import gates.training.training as gates_training
 import gates.training.training_dual as gates_training_dual
+import gates.training.lean_dual_data as gates_lean
 from gates.data.load_data import get_grid
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
@@ -127,7 +129,7 @@ def find_checkpoint(run_dir, name):
     return matches[0]
 
 
-DATA_KEYS = ("train_load_data", "test_load_data", "variables", "background_setup", "data_dirs")
+DATA_KEYS = ("train_load_data", "test_load_data", "variables", "background_setup", "data_dirs", "data_cache")
 
 # state-dict entries whose SHAPE follows the grid size; only these may be dropped by --allow-grid-mismatch
 GRID_TIED_STATE_KEYS = ("encoder.h3_nodes", "bg_decoder.linear_class.weight")
@@ -255,6 +257,13 @@ def main():
     if background_params["use_auxiliary_bc"]:
         train_aux = format_aux_data(train_aux, time_coord=train_fp_data.time)
         test_aux = format_aux_data(test_aux, time_coord=test_fp_data.time)
+    # Runs trained from the month cache ("data_cache" block): the training inputs are not held in
+    # memory, so the input scaler cannot be refitted here; the run's saved one is applied instead.
+    from_cache = isinstance(train_inputs, gates_lean.LazyMonthInputs)
+    if from_cache and not args.use_saved_scalers:
+        print("data_cache run: applying the run's SAVED input scaler and background normalisation "
+              "(the training inputs are not loaded)")
+        args.use_saved_scalers = True
     if args.use_saved_scalers:
         saved_norm = load_saved_norm_vals(run_dirs[0])
         print(f"using the saved background / auxiliary normalisation of {run_dirs[0].name}: {saved_norm}")
@@ -270,11 +279,17 @@ def main():
     aux_dim = train_aux.aux.shape[0] if background_params["use_auxiliary_bc"] else 0
     base["num_features"] = feature_dim + aux_dim
 
-    train_loader, test_loader, fp_labels, test_scaled_fp, scalers = gates_training_dual.setup_dual_dataloaders(
-        base, train_inputs, train_fp_data, norm_train_bgs,
-        test_inputs, test_fp_data, norm_test_bgs, norm_train_aux, norm_test_aux,
-        input_dataset=input_dataset)
-    del train_loader
+    if from_cache:
+        fp_dataset = gates_training.setup_fp_dataset(base, train_fp_data)
+        test_loader, fp_labels, test_scaled_fp = gates_training_dual.setup_dual_eval_loader(
+            base, input_dataset, fp_dataset, test_inputs, test_fp_data, norm_test_bgs, norm_test_aux)
+        scalers = {"inputs_scaler": input_dataset.scaler, "fp_scaler": fp_dataset.scaler}
+    else:
+        train_loader, test_loader, fp_labels, test_scaled_fp, scalers = gates_training_dual.setup_dual_dataloaders(
+            base, train_inputs, train_fp_data, norm_train_bgs,
+            test_inputs, test_fp_data, norm_test_bgs, norm_train_aux, norm_test_aux,
+            input_dataset=input_dataset)
+        del train_loader
     check_refitted_scalers(scalers, saved_scalers[0], run_dirs[0])
     grid, _ = get_grid(train_fp_data, base.get("grid_reference_fp"))
     window = len(train_fp_data.lat.values)

@@ -35,6 +35,8 @@ data_paths:
 user_paths:
   save_models_dir: "path/to/folder/where/models/should/be/saved"
   parameter_files_dir: "path/to/folder/with/parameter_files"
+  # optional: root of the on-disk month cache ("data_cache" block of the parameter file)
+  data_cache_dir: null
   
 domains:
   BRAZIL:

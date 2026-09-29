@@ -419,8 +419,18 @@ class InputsDataset:
             scaler = eval(scaler) if isinstance(scaler, str) else scaler
             self.scaler = scaler(**scaler_params)
 
-    def fit(self):
-        """Fit the underlying scaler on ``self.inputs`` (or a random subsample of it).
+    def select_fit_times(self, fp_times=None):
+        """Times of the samples the scaler is fitted on.
+
+        Args:
+            fp_times (array-like of datetime64, optional): The ``fp_time`` values of the
+                inputs. Defaults to those of ``self.inputs``. Passed explicitly by the
+                month-cache pipeline (``gates/training/lean_dual_data.py``), which never
+                builds the full inputs DataArray.
+
+        Returns:
+            np.ndarray or None: Sorted times of the random subsample when
+            ``fit_on_subsample`` < 1, or None when all samples are used.
 
         Raises:
             ValueError: If ``fit_on_subsample`` is not a float/int between 0 and 1.
@@ -428,20 +438,29 @@ class InputsDataset:
         if self.fit_on_subsample<=0 or type(self.fit_on_subsample) not in [int, float] or self.fit_on_subsample>1:
             raise ValueError(f"fit_on_subsample should be a float between 0 and 1, but got {self.fit_on_subsample}. Please provide a valid value for fit_on_subsample.")
         elif self.fit_on_subsample<1:
-            times = pd.DatetimeIndex(self.inputs.fp_time.values)
+            times = pd.DatetimeIndex(self.inputs.fp_time.values if fp_times is None else fp_times)
             n_samples = int(len(times)*self.fit_on_subsample)
             if self.verbose: print(f"fit_on_subsample is {self.fit_on_subsample}, so only using {n_samples} samples to fit the scaler. samples chosen randomly (seed={self.seed})")
 
             # Local RNG so the fitting subset is deterministic given self.seed,
             # independent of how much the global NumPy RNG has been advanced earlier.
             rng = np.random.default_rng(self.seed)
-            selected_times = np.sort(rng.choice(times, n_samples, replace=False))
+            return np.sort(rng.choice(times, n_samples, replace=False))
+        return None
 
+    def fit(self):
+        """Fit the underlying scaler on ``self.inputs`` (or a random subsample of it).
+
+        Raises:
+            ValueError: If ``fit_on_subsample`` is not a float/int between 0 and 1.
+        """
+        selected_times = self.select_fit_times()
+        if selected_times is not None:
             self.subsampled_inputs = self.inputs.sel(fp_time=selected_times)
 
             self.scaler.fit(self.subsampled_inputs)
 
-        elif self.fit_on_subsample>=1:
+        else:
             self.scaler.fit(self.inputs)
 
     def transform(self, inputs):
@@ -526,6 +545,23 @@ class DefaultInputsScaler:
                 dimension of (variable, levels, time_delta) tuples.
         """
         variable_names = inputs.variable_name.values
+        for varname in self.start_fit(variable_names): #np.unique(varnames):
+            self.fit_variable(varname, inputs.sel(variable=varname), variable_names)
+
+    def start_fit(self, variable_names):
+        """Record the variable names of the inputs being fitted and return the base variable names.
+
+        ``fit`` is ``start_fit`` followed by one ``fit_variable`` call per returned name. The two
+        steps are public so a caller that cannot hold all inputs in memory can fit one variable
+        at a time (``gates/training/lean_dual_data.py``).
+
+        Args:
+            variable_names (array-like): The (variable, levels, time_delta) tuples of the
+                ``variable_name`` MultiIndex of the inputs.
+
+        Returns:
+            list[str]: Base variable names, in order of first appearance.
+        """
         varnames = []
         for var in variable_names:
             if var[0] not in varnames:
@@ -534,49 +570,53 @@ class DefaultInputsScaler:
         self.full_variable_names = list(variable_names)
         self.fitted_variable_names = varnames
         #print(varnames)
+        return varnames
 
-        for varname in varnames: #np.unique(varnames):
-            var_data = inputs.sel(variable=varname)
-            if varname in self.ignore_variables:
-                if self.verbose: print(f"Not transforming variable {varname} because it is in ignore_variables")
-                scaler = GhostScaler()
+    def fit_variable(self, varname, var_data, variable_names):
+        """Fit the scaler(s) of ONE base variable.
+
+        Args:
+            varname (str): Base variable name.
+            var_data (xr.DataArray): ``inputs.sel(variable=varname)`` of the data to fit on.
+            variable_names (array-like): All (variable, levels, time_delta) tuples of the inputs.
+        """
+        if varname in self.ignore_variables:
+            if self.verbose: print(f"Not transforming variable {varname} because it is in ignore_variables")
+            scaler = GhostScaler()
+            for vc in variable_names:
+                if vc[0] == varname and len(vc)==3:
+                    self.scalers[vc] = scaler
+
+
+        elif varname in self.minmax_variables:
+            if self.verbose: print(f"fitting minmax scaler for var {varname}")
+            scaler = XarrayMinMaxScaler(compute=self.compute)
+            scaler = scaler.fit(var_data)
+
+            # save the scaler
+            for vc in variable_names:
+                if vc[0] == varname and len(vc)==3:
+                    self.scalers[vc] = scaler
+
+                    #print(f"saved minmax scaler for variable {vc}")
+
+        else:
+            if self.verbose: print(f"fitting standardise scaler for var {varname}")
+            levels = np.unique(var_data.levels.values)
+
+            for level in levels:
+                if self.verbose: print(f"      at level {level}")
+                scaler = XarrayScaler(compute=self.compute)
+                level_data = var_data.sel(levels=level)
+                scaler = scaler.fit(level_data)
+
+                # save the scaler for this variable and level for each variable tuple in the multiindex that matches this variable and level
                 for vc in variable_names:
-                    if vc[0] == varname and len(vc)==3:
-                        self.scalers[vc] = scaler
-                
-
-            elif varname in self.minmax_variables:
-                if self.verbose: print(f"fitting minmax scaler for var {varname}")
-                scaler = XarrayMinMaxScaler(compute=self.compute)
-                scaler = scaler.fit(var_data)
-
-                # save the scaler
-                for vc in variable_names:
-                    if vc[0] == varname and len(vc)==3:
+                    if vc[0] == varname and vc[1] == level and len(vc)==3:
                         self.scalers[vc] = scaler
 
-                        #print(f"saved minmax scaler for variable {vc}")
-                
-            else:
-                if self.verbose: print(f"fitting standardise scaler for var {varname}")
-                levels = np.unique(var_data.levels.values)
+                        #print(f"saved standardise scaler for variable {vc}")
 
-                for level in levels:
-                    if self.verbose: print(f"      at level {level}")
-                    scaler = XarrayScaler(compute=self.compute)
-                    level_data = var_data.sel(levels=level)
-                    scaler = scaler.fit(level_data)
-
-                    # save the scaler for this variable and level for each variable tuple in the multiindex that matches this variable and level
-                    for vc in variable_names:
-                        if vc[0] == varname and vc[1] == level and len(vc)==3:
-                            self.scalers[vc] = scaler
-                        
-                            #print(f"saved standardise scaler for variable {vc}")
-            
-
-
-        
     def transform(self, inputs: xr.DataArray) -> xr.DataArray:
         """Apply the fitted per-variable scalers to ``inputs``.
 
@@ -1056,12 +1096,16 @@ class FootprintDataset:
         """Fit the underlying scaler on ``self.fp``."""
         self.scaler.fit(self.fp)
 
-    def transform(self, fp):
+    def transform(self, fp, chunk=True):
         """Transform footprint data and package it into a Dataset.
 
         Args:
             fp (xr.DataArray or xr.Dataset): Footprint data to transform, in the
                 same format accepted by the constructor.
+            chunk (bool, optional): If True (default), the returned Dataset is chunked
+                by ``time`` (one dask chunk per footprint). False keeps the variables as
+                they are (same values); used for large training sets, where one dask
+                task per footprint is too slow.
 
         Returns:
             xr.Dataset: Dataset with ``fp_transformed`` and ``fp_original`` variables
@@ -1096,7 +1140,8 @@ class FootprintDataset:
 
 
         # add coord linked to time index with idx
-        ds = ds.chunk({"time": 1})
+        if chunk:
+            ds = ds.chunk({"time": 1})
         ds = ds.assign_coords(idx=("time", list(range(len(ds.time)))))
         
         self.transformed_fp = transformed_fp

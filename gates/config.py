@@ -120,6 +120,8 @@ class Config():
             saved, loaded from the config file.
         parameter_files_dir (Path): Path to the directory where parameter files for
             training should be saved, loaded from the config file.
+        data_cache_dir (Path or None): Root directory of the on-disk month cache
+            (``user_paths.data_cache_dir``), or None if not specified (optional).
     """
 
     def __setattr__(self, name, value):
@@ -187,6 +189,11 @@ class Config():
 
         self.save_models_dir = Path(self.user_paths["save_models_dir"])
         self.parameter_files_dir = Path(self.user_paths["parameter_files_dir"])
+        # optional: root of the on-disk month cache (gates/data/month_cache.py)
+        if self.user_paths.get("data_cache_dir", None) is not None:
+            self.data_cache_dir = Path(self.user_paths["data_cache_dir"])
+        else:
+            self.data_cache_dir = None
         object.__setattr__(self, "_locked", True)
 
 

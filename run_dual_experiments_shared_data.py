@@ -9,7 +9,8 @@ selection, normalisation, scalers, dataloaders and model, so only the raw load i
 Because the data is loaded once, every experiment MUST use the same data-loading configuration.
 Overriding any of the following keys would silently invalidate the shared data, so it is rejected:
 
-    train_load_data, test_load_data, variables, background_setup, data_dirs, load_into_memory
+    train_load_data, test_load_data, variables, background_setup, data_dirs, load_into_memory,
+    data_cache
 
 If you need to sweep those, use ``run_dual_experiments.py`` instead (it re-loads per experiment).
 
@@ -46,7 +47,7 @@ from gates.training.experiment_utils import (
 # bundle would no longer be valid for that experiment.
 DATA_LOADING_KEYS = {
     "train_load_data", "test_load_data", "variables", "background_setup",
-    "data_dirs", "load_into_memory",
+    "data_dirs", "load_into_memory", "data_cache",
 }
 
 

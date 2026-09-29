@@ -84,26 +84,24 @@ def get_auxiliary_bc_data(bc_file, height_indeces=[4], verbose=True):
 
 
 
-def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, detrend=True, verbose=True, load_into_memory=True, use_aux_bc=True, aux_indeces=[4], loading_times_out=None):
-    """
-    Load footprints, met inputs, and background data for each year-month pair in data_parameters.
+class MonthLoadError(Exception):
+    """The footprint / met loader could not be built for a month: the month is skipped (and reported)."""
 
-    Args:
-        data_parameters (dict): Data loading parameters, must include 'years'/'year' and 'months'/'month'.
-        input_variables (dict): Keyword arguments forwarded to get_square_satellite_inputs_v2.
-        datapath_args (dict): Additional kwargs forwarded to LoadSquareSatelliteData (default: {}).
-        detrend (bool): If True, subtract the southern boundary midpoint value from background corrections (default: True).
-        verbose (bool): If True, print loading progress (default: True).
-        load_into_memory (bool): If True, materialise each month before concatenating (default: True).
-        use_aux_bc (bool): If True, extract and return auxiliary boundary condition data (default: True).
-        aux_indeces (list[int]): Height indices for auxiliary boundary condition extraction (default: [4]).
-        loading_times_out (dict, optional): If given, filled with the per-month loading time in
-            minutes as floats ({"YYYY-M": mins}), so callers can log the loading summary.
+
+def resolve_month_loading(data_parameters, input_variables, datapath_args={}):
+    """Shared prelude of the month-by-month loaders (:func:`load_GATES_data_with_bg` and the on-disk
+    month cache, ``gates/data/month_cache.py``).
+
     Returns:
-        fp_xr (xr.Dataset): Concatenated footprints, shape (time, lat, lon).
-        inputs (xr.DataArray): Concatenated met inputs, shape (fp_time, lat, lon, variable_name).
-        bgs (xr.Dataset): Concatenated background corrections, shape (time,).
-        aux_data (xr.Dataset or None): Auxiliary CAMS boundary data, or None if use_aux_bc is False.
+        regions (list[str]): ``data_parameters["region"]`` as a list. More than one region (e.g.
+            ``["BRAZIL", "SOUTHAMERICA"]``) loads every month once per region; all regions must
+            belong to the SAME domain, because the auxiliary CAMS data is per domain and month.
+        years, months (list): As resolved by ``_resolve_years_months``.
+        base_params (dict): ``data_parameters`` without the year / month / region keys.
+        input_variables (dict): Copy of ``input_variables`` without the "far_field" block.
+        far_field_cfg (dict or None): The "far_field" block.
+        datapath_args (dict): Copy of ``datapath_args`` with "met_args" merged into
+            ``base_params["met_args"]``.
     """
     # Copy before the merge/pop below: callers reuse the same datapath_args for the
     # train and test loads, and popping "met_args" from the shared dict would drop
@@ -119,89 +117,203 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
 
     base_params = {
         k: v for k, v in data_parameters.items()
-        if k not in ("year", "years", "month", "months", "load_into_memory")
+        if k not in ("year", "years", "month", "months", "load_into_memory", "region")
     }
-
-    all_inputs = []
-    all_fp_xr = []
-    all_bgs = []
-    all_aux_data = []
-    loading_times = {}
+    region = data_parameters.get("region", "BRAZIL")  # same default as LoadSquareSatelliteData
+    regions = list(region) if isinstance(region, (list, tuple)) else [region]
+    if len(set(regions)) != len(regions):
+        raise ValueError(f"region lists the same region twice: {regions}")
 
     # Split the far-field config off ONCE, before the month loop (popping it from a copy inside
     # the loop left every month after the first without the far-field channels, and the
     # cross-month concat then filled them with NaN: jobs 6723986).
     input_variables = dict(input_variables)
     far_field_cfg = input_variables.pop("far_field", None)
+    return regions, years, months, base_params, input_variables, far_field_cfg, datapath_args
 
-    for year in years:
-        for month in months:
-            month_start = time.perf_counter()
-            month_key = f"{year}-{month}"
-            if verbose:
-                print(f"Loading year={year}, month={month}")
-            month_params = {**base_params, "year": year, "month": month}
-            try:
-                data = LoadSquareSatelliteDataWithBCs(**month_params, **datapath_args, verbose=verbose)
-            except Exception as e:
-                print(f"Error loading data for {year}-{month}: {e}")
+
+def load_GATES_month_with_bg(region, year, month, base_params, input_variables, far_field_cfg=None,
+                             datapath_args={}, detrend=True, verbose=True, load_into_memory=True,
+                             use_aux_bc=True, aux_indeces=[4]):
+    """Load ONE month of one region: met inputs, footprints, background and auxiliary CAMS data.
+
+    The arguments are the outputs of :func:`resolve_month_loading`. Raises :class:`MonthLoadError`
+    if the footprint / met loader cannot be built for this month; any later failure propagates.
+
+    Returns:
+        inputs (xr.DataArray): Met inputs, shape (fp_time, lat, lon, variable_name).
+        fp_xr (xr.Dataset): Footprints, shape (time, lat, lon).
+        background (xr.Dataset): Background corrections, shape (time,).
+        aux_data (xr.Dataset or None): Auxiliary CAMS boundary data of the month.
+        info (dict): ``{"domain": domain of the region (the CAMS data is per domain),
+            "fp_pattern": glob pattern of the footprint files that were loaded}``.
+    """
+    month_params = {**base_params, "region": region, "year": year, "month": month}
+    try:
+        data = LoadSquareSatelliteDataWithBCs(**month_params, **datapath_args, verbose=verbose)
+    except Exception as e:
+        raise MonthLoadError(str(e)) from e
+
+    # set up the inputs ("far_field" is not an argument of the inputs builder: it is
+    # handled below, see gates/data/far_field.py)
+    inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
+    if far_field_cfg:
+        context = far_field_context(data.met_file, inputs.fp_time.values, far_field_cfg,
+                                    interp_to=input_variables.get("interp_to"), verbose=verbose)
+        inputs = append_far_field_to_inputs(inputs, context)
+
+
+    ### load the boundary condition data for this month
+    monthly_boundary = load_cams_data(data.domain, species="ch4", year=year, month=month)
+    monthly_boundary.load()
+
+    # calculate the convolution between the boundary conditions and the boundary footprints to get the background contribution to the concentrations for this month
+    background = calculate_bg(data.fp_data_full, monthly_boundary)
+
+    if detrend:
+        # extract the monthly boundary condition information at the midpoint of the south domain to use as a detrending factor, and reindex to the time coordinate of the background data using forward fill
+        det_factor = calculate_detrending_factor(monthly_boundary)
+        det_factor_reindexed = det_factor.reindex(time=background.time, method="ffill", tolerance=pd.Timedelta("32D") )
+
+        background = background - det_factor_reindexed
+
+    if use_aux_bc:
+        print("Getting auxiliary cams data for month")
+        aux_data = get_auxiliary_bc_data(monthly_boundary, height_indeces=aux_indeces, verbose=verbose)
+    else:
+        aux_data = None
+
+
+    if load_into_memory:
+        print(f"Loading data into memory for {year}-{month} before concatenation...")
+        inputs = inputs.load()
+        data.fp_xr = data.fp_xr.load()
+        background = background.load()
+        if aux_data is not None:
+            aux_data = aux_data.load()
+
+    return inputs, data.fp_xr, background, aux_data, {"domain": data.domain, "fp_pattern": str(data.fp_datadir)}
+
+
+def month_key_for(region, year, month, regions):
+    """Key of a month in the loading-time summaries: "YYYY-MM", prefixed by the region only when
+    several regions are loaded (single-region keys are unchanged)."""
+    return f"{year}-{month}" if len(regions) == 1 else f"{region}:{year}-{month}"
+
+
+def check_unique_times(times, regions):
+    """Refuse a data set in which a time stamp occurs twice (the samples are identified by
+    their time). Happens when the regions of a region list overlap: e.g. every footprint of the
+    GOSAT-BRAZIL series is also part of the GOSAT-SOUTHAMERICA series.
+
+    Args:
+        times (np.ndarray): Time stamps of the samples, sorted.
+        regions (list[str]): The regions that were loaded (for the message).
+    """
+    times = np.asarray(times)
+    if len(times) < 2:
+        return
+    repeated = times[1:][np.diff(times) == np.timedelta64(0)]
+    if len(repeated):
+        hint = (f" The regions {list(regions)} overlap: load the one that contains the others."
+                if len(regions) > 1 else "")
+        raise ValueError(f"{len(repeated)} of the {len(times)} footprints have a time stamp that occurs more "
+                         f"than once (first: {repeated[0]}).{hint}")
+    if not np.all(np.diff(times) > np.timedelta64(0)):
+        raise ValueError("the footprint times are not sorted")
+
+
+def concat_months(all_inputs, all_fp_xr, all_bgs, all_aux_data):
+    """Concatenate the per-month outputs of :func:`load_GATES_month_with_bg` and sort them by time.
+
+    ``all_inputs`` may be None (the month cache assembles the inputs itself, without building the
+    concatenated array). Auxiliary CAMS data is per month and domain: months that were loaded for
+    several regions must be passed ONCE in ``all_aux_data``.
+    """
+    fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
+    inputs = None if all_inputs is None else xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
+    bgs = xr.concat(all_bgs, dim="time").sortby("time")
+    if all_aux_data and all_aux_data[0] is not None:
+        aux_data = xr.concat(all_aux_data, dim="time").sortby("time")
+    else:
+        aux_data = None
+    return fp_xr, inputs, bgs, aux_data
+
+
+def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, detrend=True, verbose=True, load_into_memory=True, use_aux_bc=True, aux_indeces=[4], loading_times_out=None):
+    """
+    Load footprints, met inputs, and background data for each year-month pair in data_parameters.
+
+    Args:
+        data_parameters (dict): Data loading parameters, must include 'years'/'year' and 'months'/'month'.
+            'region' may be a list of regions of the same domain (every month is then loaded once per region).
+        input_variables (dict): Keyword arguments forwarded to get_square_satellite_inputs_v2.
+        datapath_args (dict): Additional kwargs forwarded to LoadSquareSatelliteData (default: {}).
+        detrend (bool): If True, subtract the southern boundary midpoint value from background corrections (default: True).
+        verbose (bool): If True, print loading progress (default: True).
+        load_into_memory (bool): If True, materialise each month before concatenating (default: True).
+        use_aux_bc (bool): If True, extract and return auxiliary boundary condition data (default: True).
+        aux_indeces (list[int]): Height indices for auxiliary boundary condition extraction (default: [4]).
+        loading_times_out (dict, optional): If given, filled with the per-month loading time in
+            minutes as floats ({"YYYY-M": mins}), so callers can log the loading summary.
+    Returns:
+        fp_xr (xr.Dataset): Concatenated footprints, shape (time, lat, lon).
+        inputs (xr.DataArray): Concatenated met inputs, shape (fp_time, lat, lon, variable_name).
+        bgs (xr.Dataset): Concatenated background corrections, shape (time,).
+        aux_data (xr.Dataset or None): Auxiliary CAMS boundary data, or None if use_aux_bc is False.
+    """
+    regions, years, months, base_params, input_variables, far_field_cfg, datapath_args = resolve_month_loading(
+        data_parameters, input_variables, datapath_args)
+
+    all_inputs = []
+    all_fp_xr = []
+    all_bgs = []
+    all_aux_data = []
+    loading_times = {}
+    domains = set()
+    aux_months = set()
+
+    for region in regions:
+        for year in years:
+            for month in months:
+                month_start = time.perf_counter()
+                month_key = month_key_for(region, year, month, regions)
+                if verbose:
+                    print(f"Loading year={year}, month={month}" + (f", region={region}" if len(regions) > 1 else ""))
+                try:
+                    inputs, fp_xr, background, aux_data, info = load_GATES_month_with_bg(
+                        region, year, month, base_params, input_variables, far_field_cfg, datapath_args,
+                        detrend=detrend, verbose=verbose, load_into_memory=load_into_memory,
+                        use_aux_bc=use_aux_bc, aux_indeces=aux_indeces)
+                except MonthLoadError as e:
+                    print(f"Error loading data for {year}-{month}: {e}")
+                    elapsed_mins = (time.perf_counter() - month_start) / 60
+                    loading_times[month_key] = f"{elapsed_mins:.2f}mins"
+                    if loading_times_out is not None:
+                        loading_times_out[month_key] = elapsed_mins
+                    print(f"{month_key} : {loading_times[month_key]}")
+                    continue
+
+                domains.add(info["domain"])
+                if len(domains) > 1:
+                    raise ValueError(f"regions {regions} belong to different domains {sorted(domains)}: "
+                                     "the auxiliary CAMS data is per domain, load them separately")
+
+                all_inputs.append(inputs)
+                all_fp_xr.append(fp_xr)
+                all_bgs.append(background)
+                # the auxiliary CAMS data is per (domain, month): keep it once per month
+                if (year, month) not in aux_months:
+                    aux_months.add((year, month))
+                    all_aux_data.append(aux_data)
+
+
+
                 elapsed_mins = (time.perf_counter() - month_start) / 60
                 loading_times[month_key] = f"{elapsed_mins:.2f}mins"
                 if loading_times_out is not None:
                     loading_times_out[month_key] = elapsed_mins
                 print(f"{month_key} : {loading_times[month_key]}")
-                continue
-
-            # set up the inputs ("far_field" is not an argument of the inputs builder: it is
-            # handled below, see gates/data/far_field.py)
-            inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
-            if far_field_cfg:
-                context = far_field_context(data.met_file, inputs.fp_time.values, far_field_cfg,
-                                            interp_to=input_variables.get("interp_to"), verbose=verbose)
-                inputs = append_far_field_to_inputs(inputs, context)
-
-
-            ### load the boundary condition data for this month
-            monthly_boundary = load_cams_data(data.domain, species="ch4", year=year, month=month)
-            monthly_boundary.load()
-
-            # calculate the convolution between the boundary conditions and the boundary footprints to get the background contribution to the concentrations for this month
-            background = calculate_bg(data.fp_data_full, monthly_boundary)
-
-            if detrend:
-                # extract the monthly boundary condition information at the midpoint of the south domain to use as a detrending factor, and reindex to the time coordinate of the background data using forward fill
-                det_factor = calculate_detrending_factor(monthly_boundary)
-                det_factor_reindexed = det_factor.reindex(time=background.time, method="ffill", tolerance=pd.Timedelta("32D") )
-
-                background = background - det_factor_reindexed
-
-            if use_aux_bc:
-                print("Getting auxiliary cams data for month")
-                aux_data = get_auxiliary_bc_data(monthly_boundary, height_indeces=aux_indeces, verbose=verbose)
-            else:
-                aux_data = None
-                
-
-            if load_into_memory:
-                print(f"Loading data into memory for {year}-{month} before concatenation...")
-                inputs = inputs.load()
-                data.fp_xr = data.fp_xr.load()
-                background = background.load()
-                if aux_data is not None:
-                    aux_data = aux_data.load()
-
-            all_inputs.append(inputs)
-            all_fp_xr.append(data.fp_xr)
-            all_bgs.append(background)
-            all_aux_data.append(aux_data)
-
-
-
-            elapsed_mins = (time.perf_counter() - month_start) / 60
-            loading_times[month_key] = f"{elapsed_mins:.2f}mins"
-            if loading_times_out is not None:
-                loading_times_out[month_key] = elapsed_mins
-            print(f"{month_key} : {loading_times[month_key]}")
 
     print("")
     print("")
@@ -210,13 +322,9 @@ def load_GATES_data_with_bg(data_parameters, input_variables, datapath_args={}, 
     print("")
 
 
-    fp_xr = xr.concat(all_fp_xr, dim="time").sortby("time")
-    inputs = xr.concat(all_inputs, dim="fp_time").sortby("fp_time")
-    bgs = xr.concat(all_bgs, dim="time").sortby("time")
-    if all_aux_data[0] is not None:
-        aux_data = xr.concat(all_aux_data, dim="time").sortby("time")
-    else:
-        aux_data = None
+    fp_xr, inputs, bgs, aux_data = concat_months(all_inputs, all_fp_xr, all_bgs, all_aux_data)
+    if len(regions) > 1:
+        check_unique_times(fp_xr.time.values, regions)
     return fp_xr, inputs, bgs, aux_data
 
 # ---------------------------------------------------------------

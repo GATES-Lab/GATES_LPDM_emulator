@@ -379,7 +379,7 @@ def start_workers(trainer_module_name, num_gpus, parameters, training_ctx, paths
 
 
 def setup_training_loaders(trainer_module_name, num_gpus, parameters, training_ctx, paths_ctx,
-                           train_loader, test_loader, run_kwargs):
+                           train_loader, test_loader, run_kwargs, train_tensors=None):
     """Swap in the in-memory batch loaders when configured and start the multi-GPU workers.
 
     The one call a trainer's ``train_and_save_model`` makes between building its DataLoaders
@@ -390,10 +390,15 @@ def setup_training_loaders(trainer_module_name, num_gpus, parameters, training_c
     * single GPU, ``in_memory_batches`` on: same batches in the same order, served from memory;
     * ``num_gpus > 1``: workers spawned (see :func:`start_workers`), ``dist_run`` must be
       ``finish()``-ed after training (or ``abort()``-ed on failure).
+
+    ``train_tensors`` are training batches that are ALREADY in shared memory (the month-cache
+    pipeline, ``gates/training/lean_dual_data.py``, builds them directly): ``train_loader`` is then
+    ignored and the in-memory loaders are used whatever the number of GPUs.
     """
-    if not use_in_memory_batches(parameters, num_gpus):
+    if train_tensors is None and not use_in_memory_batches(parameters, num_gpus):
         return None, train_loader, test_loader
-    train_tensors = materialise_batches(train_loader, "training batches")
+    if train_tensors is None:
+        train_tensors = materialise_batches(train_loader, "training batches")
     test_tensors = materialise_batches(test_loader, "test batches")
     del train_loader, test_loader
     if num_gpus == 1:

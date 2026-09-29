@@ -74,34 +74,22 @@ def setup_dual_dataloaders(parameters, train_inputs, train_fps, train_bgs,
     else:
         print("Using a pre-fitted input scaler (not refitted on these training inputs)")
     train_scaled_inputs = input_dataset.transform(train_inputs)
-    test_scaled_inputs = input_dataset.transform(test_inputs)
 
     use_auxiliary_bc = parameters.get("background_setup", {}).get("use_auxiliary_bc", False)
     if use_auxiliary_bc:
         train_auxiliary_cams.load()
-        test_auxiliary_cams.load()
         print("Concatenating inputs and auxiliary cams")
         train_scaled_inputs = concat_auxiliary_to_inputs(train_scaled_inputs, train_auxiliary_cams)
-        test_scaled_inputs = concat_auxiliary_to_inputs(test_scaled_inputs, test_auxiliary_cams)
 
     # --- Footprints (scale, as in the footprint pipeline) ---
     fp_dataset = setup_fp_dataset(parameters, train_fps)
     train_scaled_fp = fp_dataset.transform(train_fps)
-    test_scaled_fp = fp_dataset.transform(test_fps)
 
-    dataloader_info = parameters.get("dataloader", {})
-    batch_size = dataloader_info.get("batch_size", 5)
-    test_batch_size = dataloader_info.get("test_batch_size", 5)
-    dataloader_params = dataloader_info.get("dataloader_params", {})
-    if "prefetch_factor" in dataloader_params and dataloader_params["prefetch_factor"] == 0:
-        dataloader_params["prefetch_factor"] = None
+    batch_size, _, dataloader_params = _dual_dataloader_settings(parameters)
 
     # Trim inputs/fps/bgs together so each divides its batch size and stays aligned
     train_scaled_inputs, train_scaled_fp, train_bgs = _trim_dual_to_batch_size(
         train_scaled_inputs, train_scaled_fp, train_bgs, batch_size
-    )
-    test_scaled_inputs, test_scaled_fp, test_bgs = _trim_dual_to_batch_size(
-        test_scaled_inputs, test_scaled_fp, test_bgs, test_batch_size
     )
 
     train_loader, fp_labels = gates_datasets.make_dual_dataloader(
@@ -110,13 +98,8 @@ def setup_dual_dataloaders(parameters, train_inputs, train_fps, train_bgs,
         dataloader_params=dataloader_params, flatten=True
     )
 
-    test_dataloader_params = {"num_workers": 0, "persistent_workers": False, "prefetch_factor": None}
-    print("SPECIAL TEST PARAMS", test_dataloader_params)
-    test_loader, fp_labels_test = gates_datasets.make_dual_dataloader(
-        test_scaled_inputs, test_scaled_fp, test_bgs,
-        batch_size=test_batch_size, randomize=False,
-        dataloader_params=test_dataloader_params, flatten=True
-    )
+    test_loader, fp_labels_test, test_scaled_fp = setup_dual_eval_loader(
+        parameters, input_dataset, fp_dataset, test_inputs, test_fps, test_bgs, test_auxiliary_cams)
 
     if fp_labels != fp_labels_test:
         raise ValueError("Train and test footprint labels do not match - check the data loading.")
@@ -124,6 +107,60 @@ def setup_dual_dataloaders(parameters, train_inputs, train_fps, train_bgs,
     scalers = {"inputs_scaler": input_dataset.scaler, "fp_scaler": fp_dataset.scaler}
 
     return train_loader, test_loader, fp_labels, test_scaled_fp, scalers
+
+
+def _dual_dataloader_settings(parameters):
+    """``(batch_size, test_batch_size, dataloader_params)`` of ``parameters["dataloader"]``."""
+    dataloader_info = parameters.get("dataloader", {})
+    batch_size = dataloader_info.get("batch_size", 5)
+    test_batch_size = dataloader_info.get("test_batch_size", 5)
+    dataloader_params = dataloader_info.get("dataloader_params", {})
+    if "prefetch_factor" in dataloader_params and dataloader_params["prefetch_factor"] == 0:
+        dataloader_params["prefetch_factor"] = None
+    return batch_size, test_batch_size, dataloader_params
+
+
+def setup_dual_eval_loader(parameters, input_dataset, fp_dataset, test_inputs, test_fps, test_bgs,
+                           test_auxiliary_cams=None):
+    """Scale the test set with already FITTED scalers and build its (unshuffled) DataLoader.
+
+    The test half of :func:`setup_dual_dataloaders`, shared with the month-cache pipeline
+    (``gates/training/lean_dual_data.py``), which builds the training tensors itself.
+
+    Args:
+        parameters (dict): Full parameter dict (needs 'background_setup', 'dataloader').
+        input_dataset: Fitted input-scaler wrapper (``transform(inputs)``).
+        fp_dataset: Fitted ``FootprintDataset``.
+        test_inputs (xr.DataArray): Met inputs (fp_time, lat, lon, variable_name).
+        test_fps (xr.DataArray or xr.Dataset): Footprint targets (time, lat, lon).
+        test_bgs (xr.DataArray): Normalised background targets (time, num_classes).
+        test_auxiliary_cams (xr.DataArray or None): Aux CAMS features.
+
+    Returns:
+        test_loader (DataLoader): yields (inputs, fps, background).
+        fp_labels (list): footprint variable label(s).
+        test_scaled_fp (xr.Dataset): transformed (and trimmed) test footprints.
+    """
+    test_scaled_inputs = input_dataset.transform(test_inputs)
+    if parameters.get("background_setup", {}).get("use_auxiliary_bc", False):
+        test_auxiliary_cams.load()
+        test_scaled_inputs = concat_auxiliary_to_inputs(test_scaled_inputs, test_auxiliary_cams)
+
+    test_scaled_fp = fp_dataset.transform(test_fps)
+
+    _, test_batch_size, _ = _dual_dataloader_settings(parameters)
+    test_scaled_inputs, test_scaled_fp, test_bgs = _trim_dual_to_batch_size(
+        test_scaled_inputs, test_scaled_fp, test_bgs, test_batch_size
+    )
+
+    test_dataloader_params = {"num_workers": 0, "persistent_workers": False, "prefetch_factor": None}
+    print("SPECIAL TEST PARAMS", test_dataloader_params)
+    test_loader, fp_labels = gates_datasets.make_dual_dataloader(
+        test_scaled_inputs, test_scaled_fp, test_bgs,
+        batch_size=test_batch_size, randomize=False,
+        dataloader_params=test_dataloader_params, flatten=True
+    )
+    return test_loader, fp_labels, test_scaled_fp
 
 
 def resolve_dual_dynamic_edges(parameters, input_names):

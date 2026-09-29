@@ -456,7 +456,18 @@ def setup_input_dataset(parameters, train_inputs):
         gates.data.datasets.InputsDataset: Fitted input dataset wrapper.
     """
     train_inputs = train_inputs.astype('float32')
+    input_dataset = build_input_dataset(parameters, train_inputs)
+    input_dataset.fit()
 
+    return input_dataset
+
+
+def build_input_dataset(parameters, train_inputs):
+    """Build the InputsDataset (scaler wrapper) of :func:`setup_input_dataset` WITHOUT fitting it.
+
+    Separate so the month-cache pipeline (``gates/training/lean_dual_data.py``) can build the
+    same wrapper and fit its scaler one variable at a time.
+    """
     # Copy before popping: this dict is part of the caller's `parameters`, which is later
     # saved as training_settings_*.json. Popping in place dropped the "scaler" name from the
     # saved settings, so a run could not be rebuilt from its own artifacts (principle 2).
@@ -468,10 +479,7 @@ def setup_input_dataset(parameters, train_inputs):
         else:
             inputs_scaler = None
 
-    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params, verbose=parameters.get("verbose", False), seed=parameters.get("seed", 34))
-    input_dataset.fit()
-
-    return input_dataset
+    return gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params, verbose=parameters.get("verbose", False), seed=parameters.get("seed", 34))
 
 def setup_fp_dataset(parameters, train_fps):
     """Build and fit a FootprintDataset (scaler wrapper) for the training footprints.
