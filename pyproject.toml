@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-only"
 keywords = ["LPDM", "GNN", "emulator", "atmospheric transport", "ML"]
+# NOTE: this list is deliberately minimal. The full, pinned dependency set lives in
+# env_gates_pytorch.yml (torch/CUDA/PyG builds must come from conda). Create that
+# environment first, then run `pip install -e .` from the repo root.
 dependencies = [
 "numpy",
 "xarray",

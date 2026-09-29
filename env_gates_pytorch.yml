@@ -19,13 +19,18 @@ dependencies:
   - dask=2024.5.0
   - xbatcher=0.4.0
   - netcdf4=1.6.2
+  - h5netcdf=1.7.3
+  - zarr=2.18.7 # must stay <3
   - matplotlib=3.8.4
+  - ipympl=0.9.8
   - cartopy=0.25.0
   - scikit-learn=1.5.1
+  - joblib=1.5.3
   - einops=0.8.0
-  - h3-py=3.7.7
+  - h3-py=3.7.7 # the code uses the h3 v3 API (geo_to_h3, k_ring)
   - pyyaml=6.0.3
   - tqdm=4.67.3
+  - wandb=0.25.1
   - ipykernel=7.2.0
   - pip=26.0.1
   - pytest=8.3.5
@@ -33,7 +38,33 @@ dependencies:
       - --find-links https://data.pyg.org/whl/torch-2.3.0+cu121.html
       - torch-scatter==2.1.2
 
-## NOTE: 
-# if you are running this on a cluster where pytorch-cuda is not available, create the environment using the following:
-
-# CONDA_OVERRIDE_CUDA=12.1 conda env create -f env_gates_pytorch.yml
+## INSTALL NOTES
+#
+# 1. Create the environment (from the repo root):
+#
+#      conda env create -f env_gates_pytorch.yml
+#
+#    On a cluster where pytorch-cuda is not available at solve time (e.g. a login
+#    node with no GPU), tell conda which CUDA version to target:
+#
+#      CONDA_OVERRIDE_CUDA=12.1 conda env create -f env_gates_pytorch.yml
+#
+# 2. Install the gates package itself, in editable mode, from the repo root:
+#
+#      conda activate gates_env
+#      pip install -e .
+#
+#    This file is the source of truth for dependencies; pyproject.toml only lists a
+#    minimal set, so `pip install -e .` will not pull in the packages above.
+#
+# 3. torch-scatter is installed from the PyG wheel index and must match the torch
+#    and CUDA build (here torch 2.3.0 + CUDA 12.1 -> 2.1.2+pt23cu121). For a
+#    CPU-only or different CUDA build, change the --find-links URL accordingly,
+#    e.g. https://data.pyg.org/whl/torch-2.3.0+cpu.html
+#
+# 4. Always set PYTHONNOUSERSITE=1 before activating the environment (in your shell
+#    and in SLURM scripts), so packages in ~/.local don't shadow the ones in the env:
+#
+#      export PYTHONNOUSERSITE=1
+#      eval "$(conda shell.bash hook)"
+#      conda activate gates_env
