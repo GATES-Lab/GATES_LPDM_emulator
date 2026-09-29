@@ -43,6 +43,32 @@ from .training_helperfuns import EarlyStopping, write_to_file #save_wandb_artifa
 
 from .training_dataclasses import ModelContext
 
+def _merge_datapath_args(data_parameters, datapath_args):
+    """Merge the ``data_dirs`` path overrides into the data-loading parameters.
+
+    Paths can be set both in the load block (e.g. ``train_load_data``) and in the
+    top-level ``data_dirs`` (via ``PathContext.resolve_datapath_args``). Passing both
+    to ``LoadSquareSatelliteData`` would give it the same keyword twice, so they are
+    merged here. ``met_args`` and ``topog_args`` are merged key by key, and
+    ``fp_datadir`` is replaced; in all cases ``datapath_args`` wins.
+
+    Args:
+        data_parameters (dict): Data-loading parameters. Not modified.
+        datapath_args (dict): Path overrides from ``resolve_datapath_args``, with any
+            of "fp_datadir", "met_args" and "topog_args". Not modified.
+
+    Returns:
+        dict: A copy of ``data_parameters`` with the path overrides merged in.
+    """
+    merged = dict(data_parameters)
+    for key in ("met_args", "topog_args"):
+        if key in datapath_args:
+            merged[key] = {**merged.get(key, {}), **datapath_args[key]}
+    if "fp_datadir" in datapath_args:
+        merged["fp_datadir"] = datapath_args["fp_datadir"]
+    return merged
+
+
 def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbose=True):
     """Load a satellite dataset and its met inputs for the GATES model.
 
@@ -52,8 +78,8 @@ def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbos
         input_variables (dict): Variable extraction settings forwarded to
             ``get_square_satellite_inputs_v2``.
         datapath_args (dict, optional): Additional arguments required for data
-            loading, such as file paths; merged into ``data_parameters`` (with
-            "met_args" merged specially if present in both). Defaults to {}.
+            loading, such as file paths; merged into ``data_parameters`` (see
+            ``_merge_datapath_args``). Defaults to {}.
         verbose (bool, optional): If True, prints verbose output during data loading.
             Defaults to True.
 
@@ -62,15 +88,11 @@ def load_GATES_data(data_parameters, input_variables, datapath_args = {}, verbos
             - data (LoadSquareSatelliteData): The loaded data object.
             - inputs (xr.DataArray): Met inputs of shape (fp_time, lat, lon, variable_name).
     """
-    ## if the met args dict is in both data_parameters and datapath_args, merge
-    if "met_args" in data_parameters and "met_args" in datapath_args:
-        merged_met_args = {**data_parameters["met_args"], **datapath_args["met_args"]}
-        data_parameters["met_args"] = merged_met_args
-        datapath_args.pop("met_args")
+    data_parameters = _merge_datapath_args(data_parameters, datapath_args)
 
-    parallel_loading = data_parameters.get("parallel_loading", False)
+    parallel_loading = data_parameters.pop("parallel_loading", False)
 
-    data = LoadSquareSatelliteData(**data_parameters, **datapath_args, verbose=verbose, parallel_loading=parallel_loading)
+    data = LoadSquareSatelliteData(**data_parameters, verbose=verbose, parallel_loading=parallel_loading)
 
     inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
 
@@ -269,8 +291,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
             get_square_satellite_inputs_v2. Its 'met_variables'/'met_levels' are also
             used to populate met_args so they need not be duplicated there.
         datapath_args (dict): Path overrides merged into data_parameters before each
-            yearly load. If both contain 'met_args', they are merged with datapath_args
-            taking precedence.
+            yearly load (see ``_merge_datapath_args``); datapath_args takes precedence.
         verbose (bool): Print per-year progress messages. Defaults to True.
         load_into_memory (bool): If True, materialise each year's inputs and footprints
             into memory before concatenating, avoiding large cross-year Dask task graphs.
@@ -288,13 +309,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
         fp_xr (xr.Dataset): Concatenated footprints with shape (time, lat, lon).
         inputs (xr.DataArray): Concatenated met inputs with shape (fp_time, lat, lon, variable_name).
     """
-    # met_args may arrive from data_parameters and/or datapath_args. Merge them
-    # (datapath_args wins) into data_parameters and drop met_args from datapath_args
-    # so it isn't passed twice into LoadSquareSatelliteData below. Rebind to a copy
-    # rather than mutating the caller's dict, which is reused for the test load.
-    if "met_args" in datapath_args:
-        data_parameters["met_args"] = {**data_parameters.get("met_args", {}), **datapath_args["met_args"]}
-        datapath_args = {k: v for k, v in datapath_args.items() if k != "met_args"}
+    data_parameters = _merge_datapath_args(data_parameters, datapath_args)
 
     #load_into_memory = data_parameters.get("load_into_memory", False)
     years, months = _resolve_years_months(data_parameters)
@@ -352,7 +367,7 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
                 print(f"Loading year={year} (whole year in one pass)")
         year_params = {**base_params, "year": year, "month": load_month}
         try:
-            data = LoadSquareSatelliteData(**year_params, **datapath_args, verbose=verbose)
+            data = LoadSquareSatelliteData(**year_params, verbose=verbose)
 
             if flux_args is not None and len(flux_args) > 0:
                 # Copy so we don't mutate the caller's dict (it's the same object as

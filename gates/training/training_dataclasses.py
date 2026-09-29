@@ -58,20 +58,24 @@ class PathContext:
                 "landcover_datadir".
 
         Returns:
-            dict: ``{"fp_datadir": ..., "met_args": {"met_datadir": ...}, "topog_args": {"topog_datadir": ..., "landcover_datadir": ...}}``,
-            populated only with the keys present in ``parameters["data_dirs"]``.
+            dict: ``{"fp_datadir": ..., "met_args": {"met_datadir": ...}, "topog_args": {"topog_path": ..., "landcover_path": ...}}``,
+            populated only with the keys present in ``parameters["data_dirs"]`` (an
+            empty dict if there are none). The ``data_dirs`` names match
+            ``config.yml``; the returned names match ``LoadSquareSatelliteData``.
         """
-        datapath_args = {"met_args":{}, "topog_args":{}}
-        if "data_dirs" in parameters:
-            if "fp_datadir" in parameters["data_dirs"]:
-                datapath_args["fp_datadir"] = parameters["data_dirs"]["fp_datadir"]
-            if "met_datadir" in parameters["data_dirs"]:
-                datapath_args["met_args"]["met_datadir"] = parameters["data_dirs"]["met_datadir"]
-            if "topog_datadir" in parameters["data_dirs"]:
-                datapath_args["topog_args"]["topog_datadir"] = parameters["data_dirs"]["topog_datadir"]
-            if "landcover_datadir" in parameters["data_dirs"]:
-                datapath_args["topog_args"]["landcover_datadir"] = parameters["data_dirs"]["landcover_datadir"]
-        #self.datapath_args = datapath_args
+        datapath_args = {}
+        data_dirs = parameters.get("data_dirs", {})
+        if "fp_datadir" in data_dirs:
+            datapath_args["fp_datadir"] = data_dirs["fp_datadir"]
+        if "met_datadir" in data_dirs:
+            datapath_args["met_args"] = {"met_datadir": data_dirs["met_datadir"]}
+        topog_args = {}
+        if "topog_datadir" in data_dirs:
+            topog_args["topog_path"] = data_dirs["topog_datadir"]
+        if "landcover_datadir" in data_dirs:
+            topog_args["landcover_path"] = data_dirs["landcover_datadir"]
+        if topog_args:
+            datapath_args["topog_args"] = topog_args
         return datapath_args
 
 
