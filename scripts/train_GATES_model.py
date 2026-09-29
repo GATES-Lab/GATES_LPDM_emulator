@@ -342,6 +342,7 @@ def train_and_save_model(parameters, model_save_dir):
 
     seed = parameters.get("seed", 34)
     set_reproducibility(seed)
+    parameters["seed"] = seed
     if verbose: print(f"Set random seed to {seed} for reproducibility.")
 
     if use_wandb:

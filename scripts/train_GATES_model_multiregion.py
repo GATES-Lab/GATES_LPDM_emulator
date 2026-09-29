@@ -524,6 +524,7 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
 
     seed = parameters.get("seed", 34)
     set_reproducibility(seed)
+    parameters["seed"] = seed
     if verbose:
         print(f"Set random seed to {seed} for reproducibility.")
 
@@ -609,9 +610,11 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
     train_scaled_inputs, train_scaled_fps = gates_datasets.trim_to_batch_size(
         train_scaled_inputs, train_scaled_fps, batch_size)
 
+    # dataloader.seed overrides the run-wide seed for the shuffle, as in setup_GATES_dataloaders
     train_loader, fp_labels = gates_datasets.make_dataloader(
         train_scaled_inputs, train_scaled_fps, batch_size,
-        randomize=True, dataloader_params=dataloader_params, flatten=True)
+        randomize=True, random_seed=dataloader_info.get("seed", seed),
+        dataloader_params=dataloader_params, flatten=True)
 
     scalers = {"inputs_scaler": input_dataset.scaler, "fp_scaler": fp_dataset.scaler,
                "input_names": list(train_scaled_inputs.variable_name.values)}
