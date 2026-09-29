@@ -19,6 +19,14 @@ from .load_data_helper_funs import *
 
 from .load_data import _get_release_idxs, _pad_domain
 
+# Default variable lists for DefaultInputsScaler.
+# Static and coordinate fields are min-max scaled to [0, 1].
+DEFAULT_MINMAX_VARIABLES = ["landcover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords",
+                            "xy_distance_centre", "earth_distance_centre", "sin_lat_coords",
+                            "sin_lon_coords", "cos_lat_coords", "cos_lon_coords"]
+# The disaggregated landcover fields are already fractions in [0, 1], so they are not transformed.
+DEFAULT_IGNORE_VARIABLES = [f"landcover_type_{i}" for i in range(10)]
+
 def _stack_and_label_variables(ds, var_names, var_type,  met_variables_dict=None, verbose=False):
     """Stack requested variables into a single ``variable_name`` dimension with tuple labels.
 
@@ -390,7 +398,7 @@ class InputsDataset:
                 Defaults to 1.
             scaler_params (dict, optional): Parameters to pass to the scaler when
                 initializing it. For example, for ``DefaultInputsScaler``, you can pass
-                ``{"minmax_variables": ["topog", "land_cover"]}`` to specify which
+                ``{"minmax_variables": ["topog", "landcover"]}`` to specify which
                 variables to apply minmax scaling to instead of standard scaling.
                 Defaults to {}.
             verbose (bool, optional): If True, prints out information about the fitting
@@ -489,20 +497,27 @@ class DefaultInputsScaler:
         verbose (bool): Whether to print information during fitting.
         compute (bool): Whether per-variable scalers compute parameters eagerly.
     """
-    def __init__(self, minmax_variables=["land_cover", "topog", "x_coords", "y_coords", "lat_coords", "lon_coords", "xy_distance_centre", "earth_distance_centre", "sin_lat_coords", "sin_lon_coords", "cos_lat_coords", "cos_lon_coords"], ignore_variables=[], verbose=True, compute=True):
+    def __init__(self, minmax_variables=None, ignore_variables=None, verbose=True, compute=True):
         """Initialize the scaler.
 
         Args:
             minmax_variables (list[str], optional): Variable names to scale with
-                ``XarrayMinMaxScaler`` instead of standard scaling. Defaults to a
-                predefined list of static/coordinate variables.
+                ``XarrayMinMaxScaler`` instead of standard scaling. If None, uses
+                ``DEFAULT_MINMAX_VARIABLES`` (landcover, topog and the coordinate/distance
+                fields). Passing a list replaces the default. Defaults to None.
             ignore_variables (list[str], optional): Variable names to leave untransformed
-                (assigned a ``GhostScaler``). Defaults to [].
+                (assigned a ``GhostScaler``). If None, uses ``DEFAULT_IGNORE_VARIABLES``
+                (the disaggregated landcover fractions ``landcover_type_0`` to
+                ``landcover_type_9``). Passing a list replaces the default. Defaults to None.
             verbose (bool, optional): If True, prints out information about the fitting
                 process. Defaults to True.
             compute (bool, optional): If True, computes the scaler parameters immediately
                 and stores them as numpy arrays. Defaults to True.
         """
+        if minmax_variables is None:
+            minmax_variables = list(DEFAULT_MINMAX_VARIABLES)
+        if ignore_variables is None:
+            ignore_variables = list(DEFAULT_IGNORE_VARIABLES)
 
         self.ignore_variables = ignore_variables
 
