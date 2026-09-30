@@ -999,10 +999,10 @@ class LoadBaseSatelliteData:
 
         if timestamp is not None:
             fp_to_plot = self.fp_data_full.sel(time=np.datetime64(timestamp)).copy()
-            if len(fp_to_plot.time.values)>1:
+            if "time" in fp_to_plot.dims:
                 print("there are multiple footprints for the timestamp you passed, check the timestamp and try again! plotting the first one")
                 fp_to_plot = fp_to_plot.isel(time=0)
-        
+
         else:
             fp_to_plot = self.fp_data_full.isel(time=idx).copy()
 
@@ -1017,8 +1017,7 @@ class LoadBaseSatelliteData:
         ax.add_feature(cartopy.feature.OCEAN)
         ax.stock_img()
 
-        cmap = plt.cm.Reds
-        cmap.set_over = "k"
+        cmap = plt.get_cmap("Reds")
         plot_params = {"transform":cartopy.crs.PlateCarree(), "cmap":cmap, "vmin":vmin_vmax[0], "vmax":vmin_vmax[1]}
         background_alpha=0.4
         if levels is None:
@@ -1390,27 +1389,33 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             add_cbar (bool, optional): If True, adds a colorbar to the plot.
                 Defaults to False.
             plot_wind (bool, optional): If True, overlays an arrow showing the wind
-                direction/speed at the domain centre (requires ``self.met`` to be
-                loaded). Defaults to False.
+                direction/speed at level 3 at the domain centre (requires the cropped
+                met ``self.met``, i.e. loading with ``crop_met=True``). Defaults to False.
             return_fig (bool, optional): If True, returns the fig and ax objects instead of showing the plot. Defaults to False.
+
+        Returns:
+            tuple or None: ``(fig, ax)`` if ``return_fig`` is True, otherwise None
+            (the plot is shown directly).
         """
         import matplotlib.pyplot as plt
 
+        if plot_wind and not hasattr(self, "met"):
+            raise ValueError("plot_wind=True needs the cropped met at self.met; load the data with crop_met=True")
+
         if timestamp is not None:
             fp_to_plot = self.fp_xr.sel(time=np.datetime64(timestamp)).copy()
-            if len(fp_to_plot.time.values)>1:
+            if "time" in fp_to_plot.dims:
                 print("there are multiple footprints for the timestamp you passed, check the timestamp and try again! plotting the first one")
                 fp_to_plot = fp_to_plot.isel(time=0)
-            
+
             idx = np.where(self.fp_xr.time.values == fp_to_plot.time.values)[0][0]
-        
+
         else:
             fp_to_plot = self.fp_xr.isel(time=idx).copy()
-            timestamp = fp_to_plot.time.values
 
         f = np.copy(fp_to_plot.fp.values)
-        fp_lats = self.fp_lats[idx]
-        fp_lons = self.fp_lons[idx]
+        fp_lats = fp_to_plot.lat_coords.values
+        fp_lons = fp_to_plot.lon_coords.values
 
         extent = (fp_lons[0], fp_lons[-1], fp_lats[0], fp_lats[-1])
 
@@ -1420,8 +1425,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
         ax.add_feature(cartopy.feature.LAND)
         ax.add_feature(cartopy.feature.OCEAN)
 
-        cmap = plt.cm.Reds
-        cmap.set_over = "k"
+        cmap = plt.get_cmap("Reds")
         plot_params = {"transform":cartopy.crs.PlateCarree(), "cmap":cmap, "vmin":vmin_vmax[0], "vmax":vmin_vmax[1]}
         background_alpha=0.4
         if levels is None:
@@ -1437,12 +1441,13 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             cbar = fig.colorbar(cb, ax=ax, location='bottom', extend="both").set_label(label=r'log$_{10}$ (mol mol$^{-1}$ (mol m$^{-2}$ s$^{-1}$)$^{-1}$)', size=12)
 
         if plot_wind:
-            u_arrow = -self.met.x_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).values
-            v_arrow = -self.met.y_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).values
+            # squeeze drops the length-1 time_delta dim of the cropped met
+            u_arrow = -self.met.x_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).squeeze().values
+            v_arrow = -self.met.y_wind.sel(levels=3, lat=self.size//2, lon=self.size//2).isel(time=idx).squeeze().values
 
             # Position arrow at centre of domain
-            arrow_lat = self.fp_xr.lat_coords.sel(lat=self.size//2, time=timestamp).values
-            arrow_lon = self.fp_xr.lon_coords.sel(lon=self.size//2, time=timestamp).values
+            arrow_lat = fp_to_plot.lat_coords.sel(lat=self.size//2).values
+            arrow_lon = fp_to_plot.lon_coords.sel(lon=self.size//2).values
             print(f"plotting wind arrow at lat {arrow_lat} and lon {arrow_lon} with u {u_arrow} and v {v_arrow}")
             ax.quiver(arrow_lon, arrow_lat, u_arrow, v_arrow,
                     transform=cartopy.crs.PlateCarree(),
@@ -1454,6 +1459,8 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
 
         if return_fig:
             return fig, ax
+        else:
+            plt.show()
 
     def plot_footprint_mean(self,levels = [-4, -3.5, -3,  -2.5, -2, -1.5], vmin_vmax=[-4,-2], add_cbar=False):
         """Plot the mean of the cropped and aligned footprints.
@@ -1474,8 +1481,7 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
 
         fig, ax = plt.subplots(1,1)
 
-        cmap = plt.cm.Reds
-        cmap.set_over = "k"
+        cmap = plt.get_cmap("Reds")
         plot_params = {"cmap":cmap, "vmin":vmin, "vmax":vmax}
         alpha =0.4
         cb = ax.contourf(np.log10(f), **plot_params, levels=levels, alpha=0.6, extend="both")
@@ -1900,7 +1906,7 @@ def _interp_met_to_fp_times(met, fp, time_delta, interp_method, closest_toleranc
         nearest_timestamps_full = pd.DatetimeIndex(
             np.where(nearest != -1, nearest_timestamps, pd.NaT)
         )
-        print(met)
+        #print(met)
         met["met_timestamps"] = ("time", nearest_timestamps_full)
         #v1 reindex
         #nearest_timestamps = pd.DatetimeIndex(
