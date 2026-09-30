@@ -37,6 +37,7 @@ jobs:
             pydata-sphinx-theme==0.22.0 \
             myst-parser==5.1.0 \
             sphinx-copybutton==0.5.2 \
+            sphinx-design==0.7.0 \
             sphinx-autodoc-typehints==3.13.7
           # Install gates itself without its heavy runtime deps (torch, xarray,
           # numpy, etc.). Those are mocked out in docs/source/conf.py.

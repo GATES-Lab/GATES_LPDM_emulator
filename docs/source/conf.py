@@ -35,6 +35,7 @@ extensions = [
     "sphinx_autodoc_typehints",
     "sphinx_copybutton",
     "myst_parser",
+    "sphinx_design",
 ]
 
 templates_path = ['_templates']
@@ -94,6 +95,9 @@ html_theme_options = {
 # Generate GitHub-style anchors for headings up to ###, so that links such as
 # HOW_TO_PARAMETER_FILE.md#variables have a target.
 myst_heading_anchors = 3
+
+# ::: fences, used by the sphinx-design grid and cards on the landing page.
+myst_enable_extensions = ["colon_fence"]
 
 # -- How_To link rewriting -------------------------------------------------------
 #

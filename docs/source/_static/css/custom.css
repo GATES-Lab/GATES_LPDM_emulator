@@ -5,10 +5,49 @@ html[data-theme="light"] {
     --pst-color-primary: #D57B67; /*#0B5FA5;   /* links, active nav items */
     --pst-color-secondary: #772014; /* #0B5FA5; /* hover states, secondary accents */
     --pst-color-accent: #D57B67;
+    --pst-color-primary-highlight: #772014; /* hover on primary buttons */
 }
 
 html[data-theme="dark"] {
     --pst-color-primary: #EAAF95;
     --pst-color-secondary: #D57B67;
     --pst-color-accent: #EAAF95;
+    --pst-color-primary-highlight: #D57B67;
+}
+
+/* Landing page ---------------------------------------------------------------- */
+
+.gates-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 1.5rem 0 2rem;
+}
+
+.gates-buttons p {
+    margin: 0;
+}
+
+/* The architecture figure has a white background; frame it so it sits
+   cleanly in dark mode too. */
+img.gates-figure {
+    width: 100%;
+    background: #fff;
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    box-shadow: 0 0 0 1px var(--pst-color-border);
+}
+
+.gates-card {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.gates-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.12);
+    border-color: var(--pst-color-primary);
+}
+
+.gates-card .sd-card-title {
+    color: var(--pst-color-primary);
 }
