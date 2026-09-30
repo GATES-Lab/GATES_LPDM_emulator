@@ -10,6 +10,8 @@ __pycache__/
 *.eps
 *.pyc
 
+
+model_test_predictions/
 # Keep docs static assets (the blanket *.png rule above would ignore the logo).
 !docs/source/_static/**
 
