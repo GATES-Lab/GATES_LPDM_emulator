@@ -4,6 +4,8 @@ This guide covers how to load, process, and prepare data for the LPDM emulator u
 
 The pipeline takes LPDM footprints + meteorology + static fields, cuts them to squares around each satellite measurement release point, scales them, and produces a PyTorch DataLoader for training.
 
+For a hands-on walkthrough of each step on a small data subset, see the [data tutorial notebook](../notebooks/data_tutorial.ipynb).
+
 ---
 
 ## Required Data
