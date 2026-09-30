@@ -15,7 +15,7 @@ The tracked templates in `parameter_files/` are a good starting point:
 
 | Template | Use |
 |----------|-----|
-| `NEW_parameter_template.json` | Single region. Start here. |
+| [`NEW_parameter_template.json`](../parameter_files/NEW_parameter_template.json) | Single region. Start here. |
 | `NEW_parameter_template_multiregion.json` | Two regions (see [HOW_TO_MULTIREGION.md](HOW_TO_MULTIREGION.md)). |
 | `NEW_parameter_template_sweep.json` | The template plus a `__sweep__` block (see [Launching a Sweep](HOW_TO_LAUNCH.md#launching-a-sweep)). |
 | `NEW_parameter_template_terminal.json`, `NEW_parameter_template_terminal_multiregion.json` | Tiny smoke tests that run in a terminal or on a single CPU node. |
@@ -485,7 +485,7 @@ For `PixelWeightedMSELoss`:
 | `criterion_params.weight_label` | The data field used to derive per-pixel loss weights (e.g. the original unscaled footprint). |
 | `criterion_params.transform_fn` | The transform function to apply to the `weight_label`. The function `scale_and_shift` scales the data by parameter `w` and shifts it (adds) parameter `a`. |
 
-See [HOW_TO_evaluation.md](HOW_TO_evaluation.md) for the other loss functions.
+See the [loss functions guide](HOW_TO_LOSSES.md) for the other loss functions, their parameters, and how this block is turned into a loss. Don't set `fp_labels` or `nan_mask_label` in `criterion_params`: the training script sets them.
 
 ---
 

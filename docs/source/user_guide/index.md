@@ -9,4 +9,7 @@ data_format
 main_functions
 parameter_file
 evaluation
+loss_functions
+predict
+multiregion
 ```
