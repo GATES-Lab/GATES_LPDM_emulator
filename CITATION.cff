@@ -9,6 +9,6 @@ authors:
 - family-names: Keshtmand
   given-names: Nawid
 title: "GATES: A Graph-Neural-Network Atmospheric Transport Emulation System"
-version: v0.1.0-beta
-date-released: 2025-07-31
+version: v0.3.0
+date-released: 2026-09-30
 url: "https://github.com/elenafillo/GATES_LPDM_emulator"

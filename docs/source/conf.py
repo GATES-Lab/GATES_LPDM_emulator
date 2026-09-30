@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 project = 'GATES'
 copyright = '2026, Elena Fillola'
 author = 'Elena Fillola'
-release = 'v1.0.0'
+release = 'v0.3.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
