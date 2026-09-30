@@ -501,7 +501,7 @@ def setup_input_dataset(parameters, train_inputs):
         else:
             inputs_scaler = None
 
-    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params, verbose=parameters.get("verbose", False), seed=parameters.get("seed", 34))
+    input_dataset = gates_datasets.InputsDataset(train_inputs, inputs_scaler, **input_scaler_params, verbose=parameters.get("verbose", True), seed=parameters.get("seed", 34))
     input_dataset.fit()
 
     return input_dataset
@@ -557,7 +557,7 @@ def setup_GATES_dataloaders(parameters, train_inputs, train_fps, test_inputs, te
     Raises:
         ValueError: If the footprint labels differ between the train and test sets.
     """
-    if parameters.get("verbose", False):
+    if parameters.get("verbose", True):
         print(parameters.get("input_scaler"))
     input_dataset = setup_input_dataset(parameters, train_inputs)
 
@@ -786,7 +786,7 @@ def setup_GATES_model(parameters, training_ctx, paths_ctx):
 
     optimizer = optim.AdamW(model.parameters(), lr=lr)
 
-    early_stopping = EarlyStopping(patience=parameters["epochs"]["patience"], verbose=parameters["verbose"], path=paths_ctx.model_path/f"{paths_ctx.model_name}_best.pt", use_wandb=parameters["use_wandb"], model_name=paths_ctx.model_name)
+    early_stopping = EarlyStopping(patience=parameters["epochs"]["patience"], verbose=parameters.get("verbose", True), path=paths_ctx.model_path/f"{paths_ctx.model_name}_best.pt", use_wandb=parameters["use_wandb"], model_name=paths_ctx.model_name)
 
     if torch.cuda.is_available():
         model.cuda()
