@@ -369,6 +369,7 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
         num_classes=4, decoder_type: str = "conv", input_height=100, input_width=100,
         fp_output_dim: Optional[int] = None, bg_output_dim: Optional[int] = None,
         wind_mesh_edges: bool = False, wind_indices=None,
+        decoder_skip=False,
     ):
         """
         Args:
@@ -380,6 +381,12 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
 
             fp_output_dim: Per-node output dimension of the footprint head. Defaults to 1
                 (a single footprint value per node), matching the GATES footprint setup.
+            decoder_skip: grid-level skip connection into the FOOTPRINT head. False (default) =
+                off; "encoded" (or True) / "inputs" = every lat/lon cell's own met / static input
+                features (the first ``feature_dim`` channels; the auxiliary boundary channels are
+                the same for every cell of a sample and are left out) are joined to the blend of
+                its mesh nodes before the decoder MLP, through an MLP ("encoded") or as they are
+                ("inputs"). The background head is unchanged.
             wind_mesh_edges / wind_indices: wind-aware mesh edges (the mean over an edge's two
                 endpoint mesh nodes of the input channels ``wind_indices`` is appended to the edge
                 attributes per sample); resolved by the trainers from the ``dynamic_edges`` block.
@@ -443,6 +450,16 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
         # matched by a concatenation in the decoders and made residuals=True fail (2026-09-26).
         decoder_input_dim = node_dim
 
+        # grid-level skip into the footprint head (see the docstring): off unless requested
+        if decoder_skip in (False, None):
+            skip_kwargs = {}
+        elif decoder_skip is True or decoder_skip in ("encoded", "inputs"):
+            skip_kwargs = {"skip_dim": feature_dim,
+                           "skip_mode": "encoded" if decoder_skip is True else decoder_skip}
+        else:
+            raise ValueError(f"decoder_skip must be false, true, 'encoded' or 'inputs', got {decoder_skip!r}")
+        self.decoder_skip = skip_kwargs.get("skip_mode", False)
+
         print("set up footprint decoder head")
         # ---- Head 1: per-node footprint decoder (as in GraphSatelliteForecaster) ----
         self.fp_decoder = SatelliteDecoder(
@@ -456,7 +473,8 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
             hidden_dim_decoder=hidden_dim_decoder,
             residuals=residuals,
             hidden_layers_decoder=hidden_layers_decoder,
-            use_checkpointing=use_checkpointing, dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours, concat_neighbours_2=concat_decoder_neighbours_2, idx_latlon=idx_latlon, append_latlon=decoder_append_latlon
+            use_checkpointing=use_checkpointing, dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours, concat_neighbours_2=concat_decoder_neighbours_2, idx_latlon=idx_latlon, append_latlon=decoder_append_latlon,
+            **skip_kwargs
         )
 
         print("set up background decoder head")

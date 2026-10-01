@@ -34,7 +34,8 @@ class SatelliteDecoder(torch.nn.Module):
         use_checkpointing: bool = False,
         dropout=0,
         n_neighbours=3,
-        final_activation=None, concat_neighbours=False, idx_latlon=None, append_latlon=False, concat_neighbours_2=False
+        final_activation=None, concat_neighbours=False, idx_latlon=None, append_latlon=False, concat_neighbours_2=False,
+        skip_dim: int = 0, skip_mode: str = "encoded",
     ):
         """
         Decoder from latent graph to lat/lon graph
@@ -54,6 +55,14 @@ class SatelliteDecoder(torch.nn.Module):
             mlp_norm_type: Type of norm for the MLPs
                 one of 'LayerNorm', 'GraphNorm', 'InstanceNorm', 'BatchNorm', 'MessageNorm', or None
             use_checkpointing: Whether to use gradient checkpointing or not
+            skip_dim: Grid-level skip connection. 0 (default) = off: every lat/lon cell is decoded
+                from the blend of its nearest mesh nodes alone. > 0: the first ``skip_dim`` input
+                features of the cell itself (``start_features[..., :skip_dim]``) are joined to that
+                blend before the decoder MLP, so the decoder sees the cell at the resolution of the
+                lat/lon grid (the mesh is coarser than the grid).
+            skip_mode: "encoded" (default) passes the cell's features through an MLP of the
+                decoder's width first (``skip_dim -> input_dim``, with the decoder's norm);
+                "inputs" joins them as they are.
 
 
 
@@ -67,6 +76,18 @@ class SatelliteDecoder(torch.nn.Module):
         self.concat_neighbours_2 = concat_neighbours_2
         self.n_neighbours = n_neighbours
         self.append_latlon = append_latlon
+
+        self.skip_dim = int(skip_dim)
+        self.skip_mode = skip_mode
+        self.skip_encoder = None
+        if self.skip_dim < 0:
+            raise ValueError(f"skip_dim must be >= 0, got {skip_dim}")
+        if self.skip_dim:
+            if skip_mode not in ("encoded", "inputs"):
+                raise ValueError(f"skip_mode must be 'encoded' or 'inputs', got {skip_mode!r}")
+            if concat_neighbours or concat_neighbours_2:
+                raise ValueError("the grid-level skip (skip_dim > 0) is implemented for the default "
+                                 "decoder only, not with concat_neighbours / concat_neighbours_2")
 
         if append_latlon:
             assert idx_latlon is not None, "pass idx latlon!"
@@ -204,14 +225,29 @@ class SatelliteDecoder(torch.nn.Module):
             print("MLP shape", 3*input_dim, hidden_dim_decoder)
 
         else:
+            # grid-level skip: width of what is joined to the blended mesh features (0 = off)
+            skip_width = 0
+            if self.skip_dim:
+                skip_width = input_dim if self.skip_mode == "encoded" else self.skip_dim
             self.node_decoder = MLP(
-            input_dim + 2*self.append_latlon,
+            input_dim + 2*self.append_latlon + skip_width,
             output_dim,
             hidden_dim_decoder,
             hidden_layers_decoder,
             None,
             self.use_checkpointing, dropout=dropout, final_activation=final_activation
         )          # no normalising here?
+            if self.skip_dim and self.skip_mode == "encoded":
+                # built AFTER the decoder MLP, and only when the skip is on, so a model without
+                # the skip draws the same initial weights as before the option existed
+                self.skip_encoder = MLP(
+                    self.skip_dim,
+                    input_dim,
+                    hidden_dim_decoder,
+                    hidden_layers_decoder,
+                    mlp_norm_type,
+                    self.use_checkpointing, dropout=dropout
+                )
 
     def forward(
         self, processor_features: torch.Tensor, start_features: torch.Tensor
@@ -270,16 +306,21 @@ class SatelliteDecoder(torch.nn.Module):
 
         processor_features = einops.rearrange(processor_features, "b f n -> (b n) f", b=batch_size)
 
-        
-    
+        if self.skip_dim:
+            # grid-level skip: the cell's own input features, next to the blend of its mesh nodes
+            skip = einops.rearrange(start_features[..., :self.skip_dim], "b n f -> (b n) f")
+            if self.skip_encoder is not None:
+                skip = self.skip_encoder(skip)
+            processor_features = torch.cat([processor_features, skip], dim=-1)
 
-        out = self.node_decoder(processor_features)  
+
+        out = self.node_decoder(processor_features)
         # Decode to output dim from hidden size
         out = einops.rearrange(out, "(b n) f -> b n f", b=batch_size)
-        
-        
+
+
         return out
-    
+
 
 class SatelliteDecoderPredictor(torch.nn.Module):
     """Decoder graph module"""

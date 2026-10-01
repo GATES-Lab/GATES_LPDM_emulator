@@ -9,7 +9,10 @@ state. This script regenerates them from any checkpoint:
 
 Each run's own ``training_outputs/training_settings_*.json`` supplies the parameters, so the data,
 scalers and model are rebuilt exactly as that run had them (principle 2). Several runs can be
-passed at once: they must share a data-loading configuration, and the (expensive) load and the
+passed at once: they must share a data-loading configuration AND the settings that decide the
+fitted scalers (``seed``, ``input_scaler``, ``fp_scaler``: the seed picks the random subsample the
+input scaler is fitted on, so a seed replicate has its own scaler and is predicted in its own
+call) and the grid (``grid_node_order``, ``grid_reference_fp``). The (expensive) load and the
 transforms are then done once and reused, which also guarantees every run is scored on identical
 inputs. The output NetCDF has the same variables as the one written during training.
 
@@ -47,7 +50,7 @@ import gates
 import gates.training.training as gates_training
 import gates.training.training_dual as gates_training_dual
 import gates.training.lean_dual_data as gates_lean
-from gates.data.load_data import get_grid
+from gates.data.grid import get_model_grid
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
 from gates.training.training_helperfuns import set_reproducibility, enable_deterministic_algorithms
@@ -130,6 +133,35 @@ def find_checkpoint(run_dir, name):
 
 
 DATA_KEYS = ("train_load_data", "test_load_data", "variables", "background_setup", "data_dirs", "data_cache")
+
+# Settings that decide the FITTED scalers. Runs predicted in one call are scored on one set of
+# transformed inputs (the first run's scalers), and the seed picks the random subsample the input
+# scaler is fitted on (input_scaler.fit_on_subsample), so these must agree as well.
+SCALER_KEYS = ("seed", "input_scaler", "fp_scaler")
+
+# Settings that decide the grid the model is built on (one grid is built per call).
+GRID_KEYS = ("grid_node_order", "grid_reference_fp")
+
+
+def check_runs_share_inputs(run_dirs, params):
+    """Stop unless every run can be scored on the data AND the scalers of the first run.
+
+    Raises ``SystemExit`` naming the first run and key that differ (principle 3: a model is
+    applied with the transform parameters it was trained with).
+    """
+    def value(p, key):
+        v = p.get(key)
+        if key == "seed" and v is None:
+            v = 34  # the trainers' default
+        if key == "grid_node_order" and v is None:
+            v = "legacy"
+        return json.dumps(v, sort_keys=True)
+
+    for r, p in zip(run_dirs[1:], params[1:]):
+        for k in DATA_KEYS + SCALER_KEYS + GRID_KEYS:
+            if value(p, k) != value(params[0], k):
+                raise SystemExit(f"{r} differs from {run_dirs[0]} in '{k}' — run it separately")
+
 
 # state-dict entries whose SHAPE follows the grid size; only these may be dropped by --allow-grid-mismatch
 GRID_TIED_STATE_KEYS = ("encoder.h3_nodes", "bg_decoder.linear_class.weight")
@@ -222,10 +254,7 @@ def main():
     run_dirs = [Path(r) for r in args.run_dir]
     params = [load_run_parameters(r) for r in run_dirs]
     saved_scalers = [restore_scaler_names(p, r) for p, r in zip(params, run_dirs)]
-    for r, p in zip(run_dirs[1:], params[1:]):
-        for k in DATA_KEYS:
-            if json.dumps(p.get(k), sort_keys=True) != json.dumps(params[0].get(k), sort_keys=True):
-                raise SystemExit(f"{r} differs from {run_dirs[0]} in '{k}' — run it separately")
+    check_runs_share_inputs(run_dirs, params)
     checkpoints = [find_checkpoint(r, args.checkpoint) for r in run_dirs]
     print("Regenerating test predictions for:")
     for r, c in zip(run_dirs, checkpoints):
@@ -291,7 +320,8 @@ def main():
             input_dataset=input_dataset)
         del train_loader
     check_refitted_scalers(scalers, saved_scalers[0], run_dirs[0])
-    grid, _ = get_grid(train_fp_data, base.get("grid_reference_fp"))
+    # node order of the run(s): "grid_node_order" of the saved settings (absent = "legacy")
+    grid, _ = get_model_grid(train_fp_data, base)
     window = len(train_fp_data.lat.values)
     print(f"window {window} x {len(train_fp_data.lon.values)} cells, grid of {len(grid)} nodes, "
           f"{len(test_fp_data.time)} test footprints")
@@ -304,6 +334,7 @@ def main():
         paths_ctx = PathContext(model_save_dir=str(run_dir.parent), model_name=run_dir.name, model_path=run_dir)
         p_infer = copy.deepcopy(p)
         p_infer["num_features"] = base["num_features"]
+        p_infer["grid_node_order_applied"] = base["grid_node_order_applied"]  # same for all runs (checked)
         model, model_ctx = build_model_and_context(p_infer, training_ctx, paths_ctx)
         state = torch.load(ckpt, map_location=device, weights_only=False)
         state = state.get("model_state_dict", state) if isinstance(state, dict) and "model_state_dict" in state else state

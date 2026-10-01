@@ -4,7 +4,10 @@
         [--file sample_predictions_test_best_fp.nc]
 
 A run can also be given as ``<label>=<run_dir>::<file.nc>`` to pick its prediction file explicitly
-(e.g. to compare an averaged checkpoint with ``best_fp`` of the same run).
+(e.g. to compare an averaged checkpoint with ``best_fp`` of the same run). With ``--common-times``
+the runs are compared on the test footprints they have in common (e.g. a run whose inputs use a
+longer met lag drops the footprints of the first hours of each month); without it, runs with
+different test times are refused.
 
 Each run directory must hold the ``sample_predictions_test.nc`` written at the end of training
 (variables fp_original / fp_pred in linear units, fp_transformed / fp_transformed_pred in the
@@ -47,6 +50,9 @@ def main():
         i = argv.index("--file")
         fname = argv[i + 1]
         argv = argv[:i] + argv[i + 2:]
+    common_times = "--common-times" in argv
+    if common_times:
+        argv.remove("--common-times")
     out_prefix = argv[0]
     # <label>=<run_dir> uses the --file name; <label>=<run_dir>::<file.nc> names the prediction file
     # of that run explicitly, so two checkpoints of ONE run can be compared with each other
@@ -55,6 +61,16 @@ def main():
         label, target = a.split("=", 1)
         run_dir, _, own_file = target.partition("::")
         runs.append((label, load(run_dir, own_file or fname)))
+    if common_times:
+        common = runs[0][1].time.values
+        for _, d in runs[1:]:
+            common = np.intersect1d(common, d.time.values)
+        for label, d in runs:
+            if len(d.time) != len(common):
+                print(f"{label}: {len(d.time) - len(common)} of {len(d.time)} test footprints have no counterpart "
+                      f"in the other run(s) and are left out")
+        runs = [(label, d.sel(time=common)) for label, d in runs]
+        print(f"compared on the {len(common)} test footprints common to all runs")
     ref = runs[0][1]
     for label, d in runs[1:]:
         if not np.array_equal(ref.time.values, d.time.values):

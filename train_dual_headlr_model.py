@@ -113,8 +113,9 @@ import gates.training.training as gates_training
 import gates.training.training_dual as gates_training_dual
 import gates.training.distributed as gates_distributed  # multi-GPU (no-ops on one GPU)
 import gates.training.lean_dual_data as gates_lean  # month cache / large training sets (opt-in)
+import gates.training.augmentation as gates_augmentation  # east-west mirror (opt-in)
 from gates.training.pretraining import load_pretrained_trunk  # optional trunk warm start
-from gates.data.load_data import get_grid
+from gates.data.grid import get_model_grid, resolve_grid_node_order
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
 from gates.training.training_helperfuns import (
@@ -482,10 +483,19 @@ def train_one_epoch(model, loader, model_ctx, sched, epoch, paths_ctx=None):
     running_bg = 0.0
     n_batches = 0
 
+    # Optional east-west mirror (gates/training/augmentation.py): inputs and targets of a random
+    # part of every batch are reflected together; None = the batches are used as they are.
+    mirror = getattr(model_ctx, "augmentation", None)
+    if mirror is not None:
+        mirror.start_epoch()
+
     for i, batch in enumerate(loader):
         features = batch[0].to(model_ctx.device)
         fp_batch = batch[1].to(model_ctx.device)
         bg_batch = batch[2].to(model_ctx.device)
+
+        if mirror is not None:
+            features, fp_batch, bg_batch, _ = mirror.mirror(features, fp_batch, bg_batch, epoch, i)
 
         true_values = _fp_true_values(fp_batch)
 
@@ -662,6 +672,10 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                 "lr/schedule_scale": lr_sched.scale,
                 **list_of_metrics,
             }
+            mirror = getattr(model_ctx, "augmentation", None)
+            if mirror is not None:
+                # share of this epoch's training samples that were mirrored (rank 0's shard)
+                logging_dict["augment/mirror_fraction"] = mirror.fraction
             if bg_mae_denorm is not None:
                 logging_dict["test/bg_mae_denorm"] = bg_mae_denorm
             if sched.refit_started_epoch is not None:
@@ -800,6 +814,9 @@ def build_model_and_context(parameters, training_ctx, paths_ctx):
     model_ctx.pretrained_trunk_meta = load_pretrained_trunk(model, parameters)
     model_ctx.optimizer = build_head_lr_optimizer(model, parameters, head_lrs)
     model_ctx.head_lrs = head_lrs
+    # Optional east-west mirror of the training batches ("augmentation" block); every rank draws
+    # its own samples, from (seed, rank, epoch, batch index). None when the block is absent.
+    model_ctx.augmentation = gates_augmentation.build_mirror(parameters, rank=gates_distributed.get_rank())
     return model, model_ctx
 
 
@@ -826,6 +843,8 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     head_lrs = resolve_head_learning_rates(parameters)
     parameters["head_learning_rates_resolved"] = dict(head_lrs)
     print(f"Per-head learning rates: {head_lrs}")
+    gates_augmentation.mirror_config(parameters)  # validates the optional "augmentation" block
+    resolve_grid_node_order(parameters)           # validates the optional "grid_node_order"
 
     # Validate the multi-GPU config up-front too, and record the resolved per-GPU / effective
     # batch sizes with the training settings.
@@ -898,6 +917,11 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     test_bgs = test_bgs.transpose("time", "variable")
 
     use_auxiliary_bc = background_params["use_auxiliary_bc"]
+    # which auxiliary channel is which boundary (needed by the east-west mirror only); read before
+    # format_aux_data, whose channel labels keep the height but not the boundary
+    aux_layout = None
+    if use_auxiliary_bc and gates_augmentation.mirror_config(parameters) is not None:
+        aux_layout = gates_augmentation.aux_direction_layout(train_aux_cams_data)
     if use_auxiliary_bc:
         train_aux_cams_data = format_aux_data(train_aux_cams_data, time_coord=train_fp_data.time)
         test_aux_cams_data = format_aux_data(test_aux_cams_data, time_coord=test_fp_data.time)
@@ -943,14 +967,25 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     # rebuild of the model (multi-GPU workers, predict_dual_model.py) uses the same indices.
     gates_training_dual.resolve_dual_dynamic_edges(parameters, train_inputs.variable_name.values)
 
+    # East-west mirror (optional "augmentation" block): channel positions and scaler constants are
+    # resolved ONCE, here, and saved with the training settings below (same reason as above).
+    gates_augmentation.resolve_mirror_augmentation(
+        parameters, train_inputs.variable_name.values, scalers["inputs_scaler"], fp_labels,
+        n_lat=len(train_fp_data.lat.values), n_lon=len(train_fp_data.lon.values),
+        aux_layout=aux_layout, num_classes=num_classes)
+
     image_plots = random.sample(list(range(len(test_inputs))), k=4)
     image_dates = np.datetime_as_string(test_fp_data.time.values[sorted(image_plots)])
     parameters["plotted_dates"] = image_dates.tolist()
 
+    # Grid handed to the model, in the node order of "grid_node_order" (gates/data/grid.py; default
+    # "legacy" = get_grid as it is). Built BEFORE the settings are saved: it records the order it
+    # applied in the parameters.
+    grid, _ = get_model_grid(train_fp_data, parameters)
+
     save_object(parameters, "training_settings", paths_ctx.training_outputs_path, model_name,
                 file_type="json", description=f"Training settings for model {model_name}", use_wandb=use_wandb)
 
-    grid, _ = get_grid(train_fp_data, parameters.get("grid_reference_fp"))
     save_object(grid, "grid", paths_ctx.training_outputs_path, model_name,
                 description="Grid object used during training", use_wandb=use_wandb)
 

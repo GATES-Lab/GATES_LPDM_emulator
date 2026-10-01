@@ -20,6 +20,8 @@ from .training import setup_input_dataset, setup_fp_dataset
 from .training_background import concat_auxiliary_to_inputs
 from .training_helperfuns import EarlyStopping
 from .training_dataclasses import DualModelContext
+from .augmentation import require_resolved as require_resolved_augmentation
+from gates.data.grid import require_applied as require_applied_grid_order
 
 from model.forecast import GraphSatelliteDualForecaster
 
@@ -258,6 +260,11 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
     Returns:
         model (nn.Module), model_ctx (DualModelContext).
     """
+    # an "augmentation" block that the calling trainer never resolved would be ignored silently;
+    # likewise a "grid_node_order" that the trainer did not build its grid with
+    require_resolved_augmentation(parameters)
+    require_applied_grid_order(parameters)
+
     lr = parameters["learning_rate"]
 
     model_parameters = copy.deepcopy(parameters["model_parameters"])
