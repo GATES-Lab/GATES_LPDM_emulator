@@ -1542,7 +1542,7 @@ def _cut_satellite_met_multi_delta(
             to that resolution and the met is linearly interpolated to that rounded
             time from the two bracketing met timestamps. fp times whose rounded target
             falls outside the met record are treated as NaN and dropped, same as the
-            nearest case. Defaults to None.
+            nearest case. Requires ``load_into_memory=True``. Defaults to None.
         chunk_size (int or None, optional): If set (and ``load_into_memory`` is
             False), the crop is done in blocks of this many samples: each block of met
             is read into memory first (a plain parallel zarr read), then cropped in
@@ -1569,6 +1569,10 @@ def _cut_satellite_met_multi_delta(
     """
     if metsize % 2 != 0:
         raise ValueError("metsize must be even")
+    if interp_to is not None and not load_into_memory:
+        # xarray's dask interp rechunks time into a single chunk, so every lazy
+        # block read recomputes the full interpolation and effectively hangs.
+        raise ValueError("interp_to requires load_into_memory=True")
     half = metsize // 2
 
     fp_times = fp.time.values
@@ -1701,10 +1705,9 @@ def _cut_satellite_met_multi_delta(
         n = len(pos)
         if bool(chunk_size) and not load_into_memory:
             # Met is lazy and chunk_size is set: read the met in chunk_size-sample
-            # blocks and crop each block in numpy. met_for_crop was rechunked to
-            # {time: chunk_size} above, so each block read pulls whole coalesced
-            # time chunks (a plain, parallel zarr read, no vindex) instead of many
-            # {time:1} chunks. Cropping the numpy block then builds no dask graph at
+            # blocks and crop each block in numpy. Each block read is a plain,
+            # parallel zarr read of that block's {time:1} chunks (no vindex).
+            # Cropping the numpy block then builds no dask graph at
             # all. This bounds peak memory to one block's read and avoids the
             # large-graph warnings entirely.
             print(f"Loading the met in chunks of size {chunk_size} along the time dimension")
@@ -1793,7 +1796,7 @@ def get_square_satellite_inputs_v2(
             matched to the nearest met timestamp. If a pandas offset string such as
             ``"1h"`` or ``"15min"``, each target time is rounded to that resolution
             and the met is linearly interpolated between the two bracketing met
-            timestamps. Defaults to None.
+            timestamps. Requires ``load_into_memory=True``. Defaults to None.
         chunk_size (int or None, optional): Only used when ``load_into_memory`` is
             False. If set, the spatial crop is done in blocks of this many samples and
             each block is computed into memory as it is produced (the met source stays
