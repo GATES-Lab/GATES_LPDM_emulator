@@ -10,6 +10,7 @@ backgrounds, and builds a combined dataloader that yields ``(inputs, fps, backgr
 
 import copy
 
+import numpy as np
 import torch
 import torch.optim as optim
 
@@ -22,6 +23,7 @@ from .training_helperfuns import EarlyStopping
 from .training_dataclasses import DualModelContext
 from .augmentation import require_resolved as require_resolved_augmentation
 from gates.data.grid import require_applied as require_applied_grid_order
+from gates.data.input_domain import require_resolved as require_resolved_input_domain
 
 from model.forecast import GraphSatelliteDualForecaster
 
@@ -228,6 +230,102 @@ def dual_dynamic_edge_kwargs(parameters):
     return {"wind_mesh_edges": bool(resolved["wind_mesh_edges"]), "wind_indices": list(resolved["wind_indices"])}
 
 
+def add_fp_mass_term(fp_criterion, loss_cfg, training_ctx, nan_mask_label):
+    """Add the optional per-footprint mass term to the footprint TRAINING criterion.
+
+    Read from ``loss_cfg["fp_mass_loss"]``; with no block ``fp_criterion`` is returned as it is::
+
+        "fp_mass_loss": {
+            "weight": 0.1,          # weight of the term (required); 0 = evaluate and log it only
+            "ring_edges": [5, 15]   # optional: the masses of the rings r <= 5, 5 < r <= 15, r > 15
+                                    # (grid cells from the release point) instead of the total mass
+        }
+
+    The footprint loss becomes ``fp_criterion + weight * FootprintMassLoss`` (see
+    ``gates/evaluation/loss_functions.py``). The mass is summed in linear units, so the term
+    needs the inverse of the footprint scaler: it is built for ``LogAndShiftFpScaler`` and
+    checked here against the fitted scaler's own ``inverse_transform`` (principle 3).
+
+    Args:
+        fp_criterion (nn.Module): The footprint training criterion.
+        loss_cfg (dict): ``parameters["loss_functions"]``.
+        training_ctx: Training context (``scalers``, ``size``, ``fp_labels``, ``device``).
+        nan_mask_label (str or None): As for the footprint criterion.
+
+    Returns:
+        nn.Module: ``fp_criterion``, or a ``WithMassTerm`` around it.
+
+    Raises:
+        ValueError: on unknown keys, a missing or negative weight, or a footprint scaler whose
+            inverse the term does not reproduce.
+    """
+    cfg = loss_cfg.get("fp_mass_loss")
+    if cfg is None:
+        return fp_criterion
+    unknown = set(cfg) - {"weight", "ring_edges"}
+    if unknown:
+        raise ValueError(f"loss_functions.fp_mass_loss: unknown keys {sorted(unknown)}; allowed: ['ring_edges', 'weight']")
+    weight = cfg.get("weight")
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or weight < 0:
+        raise ValueError(f"loss_functions.fp_mass_loss.weight is required and must be a number >= 0, got {weight!r}")
+
+    fp_scaler = training_ctx.scalers["fp_scaler"]
+    if not hasattr(fp_scaler, "minimum_oom"):
+        raise ValueError(f"loss_functions.fp_mass_loss needs LogAndShiftFpScaler, got {type(fp_scaler).__name__}")
+    regions, names = gates_losses.ring_regions(training_ctx.size, training_ctx.size, cfg.get("ring_edges"))
+    mass = gates_losses.FootprintMassLoss(regions, fp_scaler.minimum_oom, region_names=names,
+                                          fp_labels=training_ctx.fp_labels, nan_mask_label=nan_mask_label)
+    probe = np.linspace(-0.9, fp_scaler.minimum_oom + 1.1, 21).astype("float32")
+    if not np.allclose(mass.inverse_transform(torch.from_numpy(probe)).numpy(),
+                       fp_scaler.inverse_transform(probe), rtol=1e-5, atol=0.0):
+        raise ValueError("loss_functions.fp_mass_loss: its inverse transform does not reproduce "
+                         f"{type(fp_scaler).__name__}.inverse_transform (it is built for LogAndShiftFpScaler)")
+    print(f"Footprint mass term: weight {weight:g}" + (" (monitored only)" if weight == 0 else "")
+          + f", regions {names} of {[int(n) for n in regions.sum(dim=1)]} cells")
+    return gates_losses.WithMassTerm(fp_criterion, mass, weight).to(training_ctx.device)
+
+
+def fp_mass_test_targets(test_fp_dataset, device):
+    """Test targets of the mass term as tensors, built once per run (the test set does not change).
+
+    Args:
+        test_fp_dataset (xr.Dataset): Test footprints (``fp_transformed``, optional ``fp_nan_mask``).
+        device: Device of the mass criterion.
+
+    Returns:
+        tuple: ``(target, nan_mask)``, each of shape (n, n_nodes); ``nan_mask`` is None when the
+        dataset has no ``fp_nan_mask``.
+    """
+    def flat(values):
+        return torch.as_tensor(np.asarray(values).reshape(values.shape[0], -1), device=device)
+
+    nan_mask = flat(test_fp_dataset.fp_nan_mask.values) if "fp_nan_mask" in test_fp_dataset else None
+    return flat(test_fp_dataset.fp_transformed.values).float(), nan_mask
+
+
+def fp_mass_test_metrics(mass_criterion, fp_test_out, target, nan_mask=None):
+    """The mass term of the footprint loss on the whole test set, with its bias and scatter.
+
+    Args:
+        mass_criterion (FootprintMassLoss): The mass term of the training criterion.
+        fp_test_out (np.ndarray): Predicted test footprints in the scaler's space, (n, n_nodes).
+        target, nan_mask (torch.Tensor): From :func:`fp_mass_test_targets`, in the order of
+            ``fp_test_out``.
+
+    Returns:
+        dict: ``test_loss`` (mean squared log mass ratio) and, per region, ``test_bias_<region>`` /
+        ``test_sd_<region>``: mean and standard deviation of ln(predicted / true mass).
+    """
+    pred = torch.as_tensor(fp_test_out, dtype=target.dtype, device=target.device)
+    with torch.no_grad():
+        log_ratio = mass_criterion.log_ratio(pred, target, nan_mask=nan_mask)
+    metrics = {"test_loss": float((log_ratio ** 2).mean())}
+    for r, name in enumerate(mass_criterion.region_names):
+        metrics[f"test_bias_{name}"] = float(log_ratio[:, r].mean())
+        metrics[f"test_sd_{name}"] = float(log_ratio[:, r].std())
+    return metrics
+
+
 def setup_dual_model(parameters, training_ctx, paths_ctx):
     """Instantiate the dual-head model, optimizer, per-head criteria and early stopping.
 
@@ -243,6 +341,9 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
             "bg_criterion_params": {},
             "bg_loss_weight": 1.0
         }
+
+    An optional ``"fp_mass_loss"`` entry adds a per-footprint mass term to the footprint
+    training criterion (see :func:`add_fp_mass_term`).
 
     The background head converges (and starts overfitting) long before the footprint head,
     so it can optionally get its own training controls under ``parameters['bg_head']``
@@ -261,9 +362,11 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
         model (nn.Module), model_ctx (DualModelContext).
     """
     # an "augmentation" block that the calling trainer never resolved would be ignored silently;
-    # likewise a "grid_node_order" that the trainer did not build its grid with
+    # likewise a "grid_node_order" that the trainer did not build its grid with, or an input domain
+    # in mode "full" whose footprint window the trainer does not score
     require_resolved_augmentation(parameters)
     require_applied_grid_order(parameters)
+    require_resolved_input_domain(parameters)
 
     lr = parameters["learning_rate"]
 
@@ -299,6 +402,7 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
     # training loss's params, so allow its own params and fall back to fp_params if unset.
     fp_test_params = loss_cfg.get("fp_criterion_test_params", fp_params)
     fp_criterion = fp_loss_fn(fp_labels=training_ctx.fp_labels, nan_mask_label=nan_mask_label, **fp_params)
+    fp_criterion = add_fp_mass_term(fp_criterion, loss_cfg, training_ctx, nan_mask_label)
     fp_criterion_test = fp_loss_fn_test(fp_labels=training_ctx.fp_labels, nan_mask_label=nan_mask_label, **fp_test_params)
 
     bg_loss_fn = eval(loss_cfg["bg_criterion"])
@@ -400,6 +504,9 @@ def initialise_dual_losses():
         "train_bg": [],
         "test_bg": [],
         "test_bg_mae_denorm": [],
+        # optional mass term of the footprint loss ("loss_functions.fp_mass_loss"): one list per
+        # logged quantity (train_loss, test_loss, test_bias_<region>, test_sd_<region>)
+        "fp_mass": {},
         "metrics_transformed": metrics_dict(),
         "metrics_original": metrics_dict(),
         "metrics_fluxes_static": {

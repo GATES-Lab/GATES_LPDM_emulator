@@ -684,3 +684,216 @@ class MSEPlusSumLoss(nn.Module):
         integral_mse = torch.nanmean((integral_pred - integral_target) ** 2)
 
         return mse + self.alpha * integral_mse
+
+
+# ---------------------------------------------------------------------------
+# Per-footprint mass
+# ---------------------------------------------------------------------------
+
+def ring_regions(height, width, ring_edges=None):
+    """Membership of the window cells in concentric rings around the release point.
+
+    The release point is the cell ``(height // 2, width // 2)``; distances are in grid cells,
+    as in ``scripts/compare_footprints.py`` (its near / mid / far split is ``ring_edges=[5, 15]``).
+
+    Args:
+        height (int): Number of latitudes of the window.
+        width (int): Number of longitudes of the window.
+        ring_edges (list[float], optional): Increasing radii ``[r1, r2, ...]``; the rings are
+            ``r <= r1``, ``r1 < r <= r2``, ..., ``r > r_last``. None or empty gives one region,
+            the whole window. Defaults to None.
+
+    Returns:
+        tuple:
+            - regions (torch.Tensor): Shape (R, height * width), 1 where the cell belongs to
+              the region, cells flattened latitude-major as in the batches.
+            - names (list[str]): One label per region ("total", or e.g. "r0to5", "r5to15", "r15up").
+
+    Raises:
+        ValueError: If ``ring_edges`` is not increasing and positive, or a ring holds no cell.
+    """
+    edges = [float(e) for e in (ring_edges or [])]
+    if any(hi <= lo for lo, hi in zip([0.0] + edges, edges)):
+        raise ValueError(f"ring_edges must be increasing and > 0, got {ring_edges}")
+    yy, xx = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
+    radius = torch.sqrt((yy - height // 2) ** 2.0 + (xx - width // 2) ** 2.0).reshape(-1)
+    bounds = [-1.0] + edges + [float("inf")]
+    regions = torch.stack([((radius > lo) & (radius <= hi)).float()
+                           for lo, hi in zip(bounds[:-1], bounds[1:])])
+    if (regions.sum(dim=1) == 0).any():
+        raise ValueError(f"ring_edges {ring_edges} leave a ring without cells in a {height} x {width} window")
+    if not edges:
+        return regions, ["total"]
+    names = [f"r{lo:g}to{hi:g}" for lo, hi in zip([0.0] + edges[:-1], edges)] + [f"r{edges[-1]:g}up"]
+    return regions, names
+
+
+class FootprintMassLoss(nn.Module):
+    """Squared error of the log of the mass of each footprint.
+
+    The mass of a footprint is the spatial sum of its values in LINEAR units: the mole fraction
+    it gives for a uniform flux. Predictions and targets arrive in the space of
+    ``LogAndShiftFpScaler``, so both are mapped back to linear units before they are summed
+    (``MSEPlusSumLoss`` sums the transformed values, which is not a mass).
+
+    formula:
+    L = mean over footprints b and regions r of (ln(M_pred[b, r] + eps_r) - ln(M_true[b, r] + eps_r))^2
+
+    M[b, r] is the sum of footprint b over the valid cells of region r. With one region, the whole
+    window, this is the total mass; with rings (see ``ring_regions``) the mass at each distance from
+    the release point. eps_r is the scaler's floor times the number of cells of the region, i.e.
+    the mass the region holds with every cell at the floor: relative errors count the same for
+    small and large masses and fade out below eps_r, so an empty region is not a singularity.
+
+    A prediction equal to the target has zero loss; a footprint that is a factor k too large
+    everywhere costs ln(k)^2 (for masses well above eps).
+
+    Usage::
+        regions, names = ring_regions(50, 50)                   # total mass
+        criterion = FootprintMassLoss(regions, minimum_oom=5, region_names=names,
+                                      fp_labels=fp_labels, nan_mask_label='fp_nan_mask')
+        loss = criterion(pred, target, fp_batch)
+
+        regions, names = ring_regions(50, 50, [5, 15])          # near / mid / far masses
+        criterion = FootprintMassLoss(regions, minimum_oom=5, region_names=names)
+        loss = criterion(pred, target, nan_mask=nan_mask)
+    """
+
+    def __init__(self, regions, minimum_oom, region_names=None, fp_labels=None, nan_mask_label=None):
+        """Initialize the loss.
+
+        Args:
+            regions (torch.Tensor): Shape (R, N), 1 where cell n belongs to region r (see
+                ``ring_regions``).
+            minimum_oom (int): ``minimum_oom`` of the fitted ``LogAndShiftFpScaler``.
+            region_names (list[str], optional): One label per region, for logging.
+                Defaults to None ("region0", "region1", ...).
+            fp_labels (list[str], optional): Variable names along the last dim of
+                ``fp_batch``; only required when ``nan_mask_label`` is set.
+                Defaults to None.
+            nan_mask_label (str, optional): Extract nan_mask from this ``fp_batch``
+                variable instead of passing it as a forward argument. Defaults to None.
+        """
+        super().__init__()
+        self.minimum_oom = minimum_oom
+        self.floor = 10 ** -int(minimum_oom)
+        self.register_buffer("regions", regions.float())
+        self.register_buffer("eps", self.floor * self.regions.sum(dim=1))
+        self.region_names = list(region_names) if region_names is not None \
+            else [f"region{r}" for r in range(regions.shape[0])]
+        self.nan_mask_idx = _label_index(fp_labels, nan_mask_label, 'nan_mask_label') \
+            if nan_mask_label else None
+
+    def inverse_transform(self, transformed):
+        """``LogAndShiftFpScaler.inverse_transform`` for tensors, differentiable.
+
+        Args:
+            transformed (torch.Tensor): Footprint values in the scaler's space.
+
+        Returns:
+            torch.Tensor: ``10 ** (transformed - minimum_oom)``, and zero where that is at or
+            below the floor ``10 ** -minimum_oom`` (no gradient there), as the scaler does.
+        """
+        fp = 10 ** (transformed - self.minimum_oom)
+        return torch.where(fp > self.floor, fp, torch.zeros_like(fp))
+
+    def log_ratio(self, pred, target, fp_batch=None, nan_mask=None):
+        """ln(predicted mass / true mass), each mass + eps, per footprint and region.
+
+        Args:
+            pred (torch.Tensor): Model output in the scaler's space, shape (B, N) or (B, N, 1).
+            target (torch.Tensor): Ground truth footprint, same shape as ``pred``.
+            fp_batch (torch.Tensor, optional): Supporting data, shape (B, N, V); used to
+                extract the nan mask if ``nan_mask_label`` was set. Defaults to None.
+            nan_mask (torch.Tensor, optional): 1=invalid pixel, shape matching ``pred``.
+                Defaults to None.
+
+        Returns:
+            torch.Tensor: Shape (B, R).
+        """
+        invalid = torch.isnan(target)
+        nan_mask = _resolve_nan_mask(self.nan_mask_idx, nan_mask, fp_batch, dims=pred.shape)
+        if nan_mask is not None:
+            invalid = invalid | nan_mask.bool()
+
+        def masses(transformed):
+            fp = self.inverse_transform(transformed).masked_fill(invalid, 0.0)
+            # (B, R); the targets of the dual loaders are float64, the predictions float32
+            return fp.reshape(fp.shape[0], -1) @ self.regions.T.to(fp.dtype)
+
+        return torch.log(masses(pred) + self.eps) - torch.log(masses(target) + self.eps)
+
+    def forward(self, pred, target, fp_batch=None, nan_mask=None):
+        """Compute the mass loss.
+
+        Args:
+            pred, target, fp_batch, nan_mask: As in ``log_ratio``.
+
+        Returns:
+            torch.Tensor: Scalar, mean squared log mass ratio.
+        """
+        return (self.log_ratio(pred, target, fp_batch, nan_mask) ** 2).mean()
+
+
+class WithMassTerm(nn.Module):
+    """A footprint criterion plus ``weight`` times a ``FootprintMassLoss``.
+
+    formula:
+    L = base(pred, target, fp_batch) + weight * mass(pred, target, fp_batch)
+
+    With ``weight=0`` the mass term is monitored only: it is evaluated without a graph and the
+    value returned is the base criterion's own, so training is exactly that of the base criterion.
+
+    For logging, ``last_base`` holds the base criterion's value of the last call, and the mean of
+    the mass term over the calls since the last ``pop_mass_mean`` is kept.
+
+    Usage::
+        criterion = WithMassTerm(PixelWeightedMSELoss(fp_labels, transform_fn=scale, w=500),
+                                 FootprintMassLoss(regions, minimum_oom=5), weight=1.0)
+        loss = criterion(pred, target, fp_batch)
+    """
+
+    def __init__(self, base, mass, weight=1.0):
+        """Initialize the loss.
+
+        Args:
+            base (nn.Module): The footprint criterion the term is added to.
+            mass (FootprintMassLoss): The mass term.
+            weight (float, optional): Weight of the mass term; 0 = monitor only. Defaults to 1.0.
+        """
+        super().__init__()
+        self.base = base
+        self.mass = mass
+        self.weight = float(weight)
+        self.last_base = None
+        self._mass_sum = 0.0
+        self._n_calls = 0
+
+    def forward(self, pred, target, fp_batch=None, nan_mask=None):
+        """Compute the base criterion plus the weighted mass term.
+
+        Args:
+            pred, target, fp_batch, nan_mask: Passed to both criteria.
+
+        Returns:
+            torch.Tensor: Scalar loss, ``base + weight * mass`` (``base`` when ``weight`` is 0).
+        """
+        loss = self.base(pred, target, fp_batch, nan_mask=nan_mask)
+        with torch.set_grad_enabled(self.weight > 0 and torch.is_grad_enabled()):
+            mass = self.mass(pred, target, fp_batch, nan_mask=nan_mask)
+        self.last_base = loss.detach()
+        self._mass_sum = self._mass_sum + mass.detach()
+        self._n_calls += 1
+        if self.weight > 0:
+            loss = loss + self.weight * mass
+        return loss
+
+    def pop_mass_mean(self):
+        """Mean of the mass term over the calls since the last pop (0.0 if none), then reset.
+
+        Returns:
+            float: The mean.
+        """
+        mean = float(self._mass_sum) / max(self._n_calls, 1)
+        self._mass_sum, self._n_calls = 0.0, 0
+        return mean

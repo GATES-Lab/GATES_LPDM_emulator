@@ -50,6 +50,7 @@ import gates
 import gates.training.training as gates_training
 import gates.training.training_dual as gates_training_dual
 import gates.training.lean_dual_data as gates_lean
+import gates.data.input_domain as gates_input_domain
 from gates.data.grid import get_model_grid
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
@@ -320,11 +321,16 @@ def main():
             input_dataset=input_dataset)
         del train_loader
     check_refitted_scalers(scalers, saved_scalers[0], run_dirs[0])
+    # larger input domain (train_load_data.input_domain) in mode "full": the model's grid is the input
+    # window, the footprint is scored and written on its own central window, as during training
+    test_scaled_fp = gates_input_domain.crop_fp_dataset(
+        test_scaled_fp, gates_input_domain.resolve_fp_window(base, train_fp_data))
     # node order of the run(s): "grid_node_order" of the saved settings (absent = "legacy")
     grid, _ = get_model_grid(train_fp_data, base)
     window = len(train_fp_data.lat.values)
     print(f"window {window} x {len(train_fp_data.lon.values)} cells, grid of {len(grid)} nodes, "
-          f"{len(test_fp_data.time)} test footprints")
+          f"{len(test_fp_data.time)} test footprints, scored on {test_scaled_fp.sizes['lat']} x "
+          f"{test_scaled_fp.sizes['lon']} cells")
     training_ctx = BoundaryTrainingContext(
         base, device, False, [], [], grid, fp_labels, scalers, feature_dim,
         len(train_fp_data.lat.values), aux_dim)
@@ -335,6 +341,8 @@ def main():
         p_infer = copy.deepcopy(p)
         p_infer["num_features"] = base["num_features"]
         p_infer["grid_node_order_applied"] = base["grid_node_order_applied"]  # same for all runs (checked)
+        if "input_domain_resolved" in base:
+            p_infer["input_domain_resolved"] = base["input_domain_resolved"]  # same data for all runs (checked)
         model, model_ctx = build_model_and_context(p_infer, training_ctx, paths_ctx)
         state = torch.load(ckpt, map_location=device, weights_only=False)
         state = state.get("model_state_dict", state) if isinstance(state, dict) and "model_state_dict" in state else state
@@ -358,6 +366,7 @@ def main():
               f"bg {avg_bg:.4f}, bg MAE {bg_mae:.4g}")
 
         ds = test_scaled_fp.copy(deep=True)
+        fp_out = gates_input_domain.crop_fp_predictions(fp_out, base)  # mode "full" only (no-op otherwise)
         original_space = scalers["fp_scaler"].inverse_transform(fp_out)
         ds["fp_transformed_pred"] = (("time", "lat", "lon"), fp_out.reshape(*ds.fp_original.shape))
         ds["fp_pred"] = (("time", "lat", "lon"), original_space.reshape(*ds.fp_original.shape))
@@ -367,7 +376,8 @@ def main():
         ds["bg_pred_ppb"] = (("time",), bg_pred_ppb if bg_valid else np.full_like(bg_pred_ppb, np.nan))
         ds.attrs.update({"model_name": run_dir.name, "checkpoint": ckpt.name,
                          "test_fp_loss": float(avg_fp), "test_bg_loss": float(avg_bg) if bg_valid else float("nan"),
-                         "window_size": int(window), "overrides": json.dumps(args.override),
+                         "window_size": int(ds.sizes["lat"]), "input_window_size": int(window),
+                         "overrides": json.dumps(args.override),
                          "scalers": "saved" if args.use_saved_scalers else "refitted",
                          "dropped_state": json.dumps(dropped)})
         out_path = run_dir / out_name

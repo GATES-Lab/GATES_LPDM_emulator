@@ -89,6 +89,22 @@ Extra checkpoints/metrics on top of the usual ones: ``*_best_bg_refit.pt`` (best
 loss WITHIN the refit phase, even if it never beats the pre-freeze best) and, under
 ``refit/`` in W&B: the refit-phase bg best and the fp drift since the refit started.
 
+An optional ``loss_functions.fp_mass_loss`` block adds a per-footprint mass term to the footprint
+training criterion (``gates.training.training_dual.add_fp_mass_term``), so the loss has three
+terms: ``total = (1 - w) * (fp + weight * fp_mass) + w * bg``. Each is logged on its own:
+``train/loss_fp`` stays the footprint criterion alone (as in a run without the term),
+``train/loss_bg`` the background loss, and the mass term goes under ``fp_mass/``: ``train_loss``
+(epoch mean), ``test_loss`` and, per region, ``test_bias_<region>`` / ``test_sd_<region>`` (mean
+and standard deviation of ln(predicted / true mass) over the test set). ``test/loss_fp`` is
+unchanged. (The three runs of 2026-10-02, experiment summary section 29, were logged before this
+separation: their ``train/loss_fp`` includes ``weight`` times the term.)
+
+An optional ``train_load_data.input_domain`` block (``gates/data/input_domain.py``) gives the model
+the meteorology of a larger window than the footprint it predicts (month cache only). In mode
+``"full"`` the model's grid is the input window and this trainer scores, plots and exports the
+footprint on its own central window (``input_domain_resolved`` in the saved settings); the
+"coarse" modes keep the footprint grid and need nothing from the trainer.
+
 Data loading, validation and the footprint metric pipeline are imported unchanged from
 ``train_dual_model``; the shared-data driver runs this script's ``train_and_save_model``
 via ``run_dual_experiments_shared_data.py --trainer train_dual_headlr_model`` (the
@@ -114,6 +130,7 @@ import gates.training.training_dual as gates_training_dual
 import gates.training.distributed as gates_distributed  # multi-GPU (no-ops on one GPU)
 import gates.training.lean_dual_data as gates_lean  # month cache / large training sets (opt-in)
 import gates.training.augmentation as gates_augmentation  # east-west mirror (opt-in)
+import gates.data.input_domain as gates_input_domain  # larger input window than the footprint (opt-in)
 from gates.training.pretraining import load_pretrained_trunk  # optional trunk warm start
 from gates.data.grid import get_model_grid, resolve_grid_node_order
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
@@ -543,7 +560,8 @@ def train_one_epoch(model, loader, model_ctx, sched, epoch, paths_ctx=None):
 
         with torch.no_grad():
             running_total += loss.item()
-            running_fp += fp_loss.item()
+            # with a mass term ("loss_functions.fp_mass_loss") fp is the footprint criterion alone
+            running_fp += getattr(model_ctx.fp_criterion, "last_base", fp_loss).item()
             running_bg += bg_loss.item()
         n_batches += 1
 
@@ -555,9 +573,16 @@ def train_one_epoch(model, loader, model_ctx, sched, epoch, paths_ctx=None):
                               f"fp {running_fp/(i+1):.4f} bg {running_bg/(i+1):.4f}", paths_ctx.updates_path)
 
     denom = max(n_batches, 1)
+    means = [running_total / denom, running_fp / denom, running_bg / denom]
+    # Optional mass term of the footprint loss ("loss_functions.fp_mass_loss"): its epoch mean
+    # reaches the log through the context; the returned fp loss does not include it.
+    has_mass = hasattr(model_ctx.fp_criterion, "pop_mass_mean")
+    if has_mass:
+        means.append(model_ctx.fp_criterion.pop_mass_mean())
     # multi-GPU: epoch means over all ranks' shards (the progress lines above are rank 0 only)
-    return gates_distributed.all_reduce_mean(
-        (running_total / denom, running_fp / denom, running_bg / denom), model_ctx.device)
+    means = gates_distributed.all_reduce_mean(means, model_ctx.device)
+    model_ctx.train_fp_mass = means[3] if has_mass else None
+    return tuple(means[:3])
 
 
 def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, test_loader,
@@ -599,6 +624,7 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                              verbose=verbose)
     bg_ckpt = HeadCheckpoint("bg", paths_ctx.model_path / f"{paths_ctx.model_name}_best_bg.pt",
                              delta=model_ctx.bg_freeze_min_delta, verbose=verbose)
+    fp_mass_targets = None  # test targets of the optional mass term, built at the first evaluation
 
     for epoch_idx in range(model_ctx.epochs_num):
         epoch = epoch_idx + epoch_so_far
@@ -633,8 +659,12 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             losses["test_bg_mae_denorm"].append(bg_mae_denorm)
 
         list_of_metrics = {}
+        fp_mass = None  # mass term of the footprint loss ("loss_functions.fp_mass_loss"), if set
         if is_main:
             # --- Footprint-head evaluation (standard GATES metric pipeline) ---
+            # input domain in mode "full": the model's grid is the larger input window; the metrics,
+            # plots and exports are those of the footprint window (no-op otherwise)
+            fp_test_out = gates_input_domain.crop_fp_predictions(fp_test_out, training_ctx.parameters)
             outputs_original_space = training_ctx.scalers["fp_scaler"].inverse_transform(fp_test_out)
             test_fp_dataset["fp_transformed_pred"] = (
                 ("time", "lat", "lon"), fp_test_out.reshape(*test_fp_dataset.fp_original.shape))
@@ -647,6 +677,17 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
             list_of_metrics.update({f"metrics_original-{k}": v for k, v in computed_metrics["eval_metrics"].items()})
             for flux_mode, metrics in computed_metrics["static_mf_eval_metrics"].items():
                 list_of_metrics.update({f"metrics_fluxes_static/{flux_mode}/{k}": v for k, v in metrics.items()})
+
+            # --- Mass term: epoch mean over the training batches, and the whole test set ---
+            if getattr(model_ctx, "train_fp_mass", None) is not None:
+                if fp_mass_targets is None:
+                    fp_mass_targets = gates_training_dual.fp_mass_test_targets(test_fp_dataset, model_ctx.device)
+                fp_mass = {"train_loss": model_ctx.train_fp_mass,
+                           **gates_training_dual.fp_mass_test_metrics(
+                               model_ctx.fp_criterion.mass, fp_test_out, *fp_mass_targets)}
+                for k, v in fp_mass.items():
+                    losses["fp_mass"].setdefault(k, []).append(v)
+                list_of_metrics.update({f"fp_mass/{k}": v for k, v in fp_mass.items()})
 
         if model_ctx.use_wandb:
             logging_dict = {
@@ -704,6 +745,8 @@ def run_full_training(model, model_ctx, training_ctx, paths_ctx, train_loader, t
                     f"fp {avg_train_fp:.4f}/{avg_test_fp:.4f}, bg {avg_train_bg:.4f}/{avg_test_bg:.4f}")
         if bg_mae_denorm is not None:
             log_text += f", bg MAE(denorm) {bg_mae_denorm:.4e}"
+        if fp_mass is not None:
+            log_text += f", fp mass {fp_mass['train_loss']:.4f}/{fp_mass['test_loss']:.4f}"
         write_to_file(log_text, paths_ctx.updates_path)
 
         if output_norm is not None and bg_test_out.shape[1] == 1:
@@ -845,6 +888,7 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
     print(f"Per-head learning rates: {head_lrs}")
     gates_augmentation.mirror_config(parameters)  # validates the optional "augmentation" block
     resolve_grid_node_order(parameters)           # validates the optional "grid_node_order"
+    gates_input_domain.check_compatible(parameters)  # validates the optional train_load_data.input_domain
 
     # Validate the multi-GPU config up-front too, and record the resolved per-GPU / effective
     # batch sizes with the training settings.
@@ -961,6 +1005,12 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
 
     save_object(scalers, "scalers", paths_ctx.training_outputs_path, model_name,
                 description=f"Input and footprint scaler objects used in model {model_name}", use_wandb=use_wandb)
+
+    # Larger input domain (optional "input_domain" in train_load_data, gates/data/input_domain.py): in
+    # mode "full" the model works on the input window and the footprint is scored, plotted and exported
+    # on its own (central) window. Recorded in the training settings saved below; no-op otherwise.
+    test_scaled_fp = gates_input_domain.crop_fp_dataset(
+        test_scaled_fp, gates_input_domain.resolve_fp_window(parameters, train_fp_data))
 
     # Wind-aware mesh edges (optional "dynamic_edges" block): resolve the wind channels' positions in
     # the model input ONCE, here, and record them in the training settings saved below, so every

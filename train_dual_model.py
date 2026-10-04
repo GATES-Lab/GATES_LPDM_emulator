@@ -43,6 +43,7 @@ import gates.training.training_dual as gates_training_dual
 import gates.training.dual_analysis as dual_analysis  # ANALYSIS-ONLY diagnostics (opt-in)
 import gates.training.distributed as gates_distributed  # multi-GPU (no-ops on one GPU)
 import gates.training.lean_dual_data as gates_lean  # month cache / large training sets (opt-in)
+from gates.data.input_domain import require_data_cache as require_data_cache_for_input_domain
 from gates.data.load_data import get_grid
 from gates.training.training_background import format_aux_data, normalize_boundary_data, denormalize
 from gates.training.training_dataclasses import PathContext, BoundaryTrainingContext
@@ -499,6 +500,8 @@ def load_dual_data(parameters, verbose=True, return_summary=False):
         bundle = DualDataBundle(*bundle)
         return (bundle, summary) if return_summary else bundle
 
+    # a larger input domain ("input_domain" in train_load_data) is applied by the month-cache pipeline only
+    require_data_cache_for_input_domain(parameters)
     print("Loading shared met, fp AND BACKGROUND data (train + test)...")
     client, cluster = gates_training.make_cluster()
 

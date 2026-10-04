@@ -45,6 +45,7 @@ import xarray as xr
 import gates
 import gates.data.datasets as gates_datasets
 from gates.data.month_cache import MonthCache, loading_config, rebuild_inputs
+from gates.data.input_domain import input_domain_settings, loader_parameters, apply_input_domain
 
 from .training import build_input_dataset, setup_fp_dataset, make_cluster
 from .training_background import (
@@ -144,6 +145,11 @@ def ensure_months_cached(data_parameters, input_variables, datapath_args, backgr
     """
     months, resolved = list_months(data_parameters, input_variables, datapath_args, background_params, cache_dir)
     regions, _, _, base_params, input_vars, far_field_cfg, dp_args = resolved
+    # Optional larger input domain ("input_domain" in train_load_data, gates/data/input_domain.py): the
+    # month is loaded on the input window and reduced to what the model trains on before it is cached
+    # (the option is part of base_params, so such months have a cache key of their own).
+    input_domain = input_domain_settings(base_params)
+    base_params = loader_parameters(base_params)
     entries, failed = [], []
     for position, (cache, region, year, month) in enumerate(months):
         key = month_key_for(region, year, month, regions)
@@ -167,6 +173,8 @@ def ensure_months_cached(data_parameters, input_variables, datapath_args, backgr
                 print(f"FLAG: {key} could not be loaded and is SKIPPED (not part of the data set)")
                 failed.append(key)
                 continue
+            if input_domain is not None:
+                inputs, fp_xr = apply_input_domain(inputs, fp_xr, input_domain)
             minutes = (time.perf_counter() - start) / 60
             cache.write(year, month, inputs, fp_xr, background, aux_data, info, load_minutes=minutes)
             if loading_times_out is not None:
