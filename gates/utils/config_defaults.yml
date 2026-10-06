@@ -21,7 +21,7 @@ data_paths:
     landcover_datadir: "LPDM/topog_NAME/land_cover.nc"
     flux_datadir: "/fluxes_archive"
   isambard_ai:
-    base_data_path: "/projects/b5bn/data"
+    base_data_path: "/projects/u6za/data"
     fp_datadir: "/fp_archive"
     met_datadir: "/met_archive_zarr"
     topog_datadir: "LPDM/topog_NAME/TopogUMG_Mk8_global.nc"
@@ -29,8 +29,8 @@ data_paths:
     flux_datadir: "/fluxes_archive"
 
 user_paths:
-  save_models_dir: "path/to/folder/where/models/should/be/saved"
-  parameter_files_dir: "path/to/folder/with/parameter_files"
+  save_models_dir: trained_models
+  parameter_files_dir: parameter_files
   
 domains:
   BRAZIL:
@@ -59,7 +59,6 @@ domains:
   INDIA:
     domain_name: "INDIA"
     fp_domain: "SOUTHASIA"
-    met_domain: "SOUTHASIA"
     footprint: "GOSAT-INDIA-SAM-column_SOUTHASIA_201503.nc"
 
 bad_fp_files:

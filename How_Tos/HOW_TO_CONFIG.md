@@ -20,6 +20,13 @@ python gates/config.py --platform bp
 ```
 
 Available platforms: `local` (default), `bp` (University of Bristol BluePebble), `oracle`, and `isambard-ai`. The names `bluepebble` and `isambard-ai` are accepted as aliases for `bp` and `isambard_ai`. Only the `data_paths` section differs between platforms — `domains` and `bad_fp_files` are shared.
+Note: you may need to run a command to enable python to be found first. On Isambard-AI this is:
+```bash
+apptainer shell --nv \
+  --bind /lus,/lus/lfs1aip2/projects:/projects \
+  --bind "$PWD:$PWD" \
+  /projects/u6za/data/env/gates_env_v2.sif
+```
 
 Once generated, open `config.yml` and edit the paths to match your system.
 

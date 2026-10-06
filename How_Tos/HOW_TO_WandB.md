@@ -42,12 +42,12 @@ srun --gpus=1 --reservation=interactive --pty bash -i
 Then on the interative node, activate the Apptainer shell:
 
 ```bash
-cd /home/b5bn/{user_name}/GATES_LPDM_emulator
+cd /home/u6za/{user_name}/GATES_LPDM_emulator
 
 apptainer shell --nv \
   --bind /lus,/lus/lfs1aip2/projects:/projects \
   --bind "$PWD:$PWD" \
-  /projects/b5bn/data/env/gates_env_v2.sif
+  /projects/u6za/data/env/gates_env_v2.sif
 ```
 ---
 
