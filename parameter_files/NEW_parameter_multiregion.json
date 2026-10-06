@@ -14,7 +14,8 @@
                 ],
                 "months": [],
                 "freq": 3,
-                "region": "SAHARA"
+                "region": "SAHARA",
+                "crop_met": false
             },
             "test_load_data": {
                 "years": [
@@ -40,7 +41,8 @@
                 ],
                 "months": [],
                 "freq": 2,
-                "region": "INDIA"
+                "region": "INDIA",
+                "crop_met": false
             },
             "test_load_data": {
                 "years": [
@@ -66,7 +68,8 @@
                 ],
                 "months": [],
                 "freq": 3,
-                "region": "CHINA"
+                "region": "CHINA",
+                "crop_met": false
             },
             "test_load_data": {
                 "years": [
@@ -92,7 +95,8 @@
                 ],
                 "months": [],
                 "freq": 3,
-                "region": "SOUTHAMERICA"
+                "region": "SOUTHAMERICA",
+                "crop_met": false
             },
             "test_load_data": {
                 "years": [
@@ -174,8 +178,7 @@
         ],
         "add_wind_direction": true,
         "load_into_memory": false,
-        "chunk_size": 64,
-        "interp_to": "3h"
+        "chunk_size": 64
     },
     "input_scaler": {
         "scaler": "DefaultInputsScaler",

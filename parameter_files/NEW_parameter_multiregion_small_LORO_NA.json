@@ -147,8 +147,7 @@
             12
         ],
         "add_wind_direction": true,
-        "load_into_memory": true,
-        "interp_to": "3h"
+        "load_into_memory": true
     },
     "input_scaler": {
         "scaler": "DefaultInputsScaler",
