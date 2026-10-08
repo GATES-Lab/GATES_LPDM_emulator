@@ -226,6 +226,37 @@ def preprocess_met_data(ds, duplicate_dim="longitude"):
     return ds
 
 
+
+# ---------------------------------------------------------------
+# The met of one month, with a margin for the lagged inputs
+# ---------------------------------------------------------------
+
+def month_met_time_window(year, month, lag_margin_hours):
+    """``[start, end)`` of the meteorology to load for ``year``-``month``: the month itself plus
+    ``lag_margin_hours`` before its first time stamp."""
+    start = pd.Timestamp(year=int(year), month=int(month), day=1)
+    end = start + pd.offsets.MonthBegin(1)
+    return start - pd.Timedelta(hours=float(lag_margin_hours)), end
+
+
+def select_month_met(met_file, year, month, lag_margin_hours=0):
+    """The meteorology of one month.
+
+    Without a margin: the time stamps whose calendar month is ``month`` (the behaviour of every
+    run before 2026-10-06, on a single yearly store). With a margin: the stamps from
+    ``lag_margin_hours`` before the first of the month up to the end of the month, so that the
+    meteorology at ``t - delta`` exists for the footprints of the first hours of the month
+    (``variables.time_deltas``; without the margin those footprints were dropped, 2 % of a month
+    at t-18 h, every day-1 footprint at t-24 h). With a margin ``met_file`` may hold two years
+    (December of the previous year comes from its own store), which is why the month is
+    selected by its dates and not by its calendar month alone.
+    """
+    if not lag_margin_hours:
+        return met_file.sel(time=met_file.time.dt.month == int(month))
+    start, end = month_met_time_window(year, month, lag_margin_hours)
+    times = met_file.time
+    return met_file.sel(time=(times >= np.datetime64(start)) & (times < np.datetime64(end)))
+
 class LoadBaseSatelliteData:
     """Parent class for loading satellite data.
 
@@ -426,10 +457,8 @@ class LoadBaseSatelliteData:
         # month load still points at the whole-year store; the month slice happens
         # in _get_meteorology_file. A glob pattern is kept so a year pattern like
         # "201[4-5]" resolves to multiple stores opened together.
-        if met_args.get("met_datadir", None) is None:
-            self.met_datadir = Path(cfg.met_datadir) / self.domain / (self.domain + "_Met_" + str(self.year) + "*.zarr")
-        else:
-            self.met_datadir = Path(str(met_args["met_datadir"])+ f"*{str(self.year)}*.zarr")
+        self._met_prefix = met_args.get("met_datadir", None)
+        self.met_datadir = self._met_store_pattern(self.year)
 
         self.met_args = met_args.copy()
         self.met_args["met_datadir"] = self.met_datadir
@@ -446,7 +475,14 @@ class LoadBaseSatelliteData:
     
 
 
-    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True):
+    def _met_store_pattern(self, year):
+        """Glob pattern of the yearly meteorology store(s) of ``year`` (``DOMAIN_Met_<year>*.zarr`` under
+        the configured met directory, or ``<met_datadir prefix>*<year>*.zarr`` when a prefix was passed)."""
+        if self._met_prefix is None:
+            return Path(self.cfg.met_datadir) / self.domain / (self.domain + "_Met_" + str(year) + "*.zarr")
+        return Path(str(self._met_prefix) + f"*{str(year)}*.zarr")
+
+    def load_meteorology(self, met_datadir=None, met_levels = [], met_variables= [], lazy_load=True, lag_margin_hours=0):
         """Load zarr meteorology and select the met levels and variables if required.
         
         Args:
@@ -462,6 +498,10 @@ class LoadBaseSatelliteData:
             lazy_load (bool, optional): If True, does not load the met data into
                 memory (lazy array); if False, loads the met data into memory.
                 Defaults to True.
+            lag_margin_hours (float, optional): For a single-month load, hours of meteorology
+                to include BEFORE the first of the month, so that the lagged inputs
+                (``time_deltas``) of the month's first footprints exist (see
+                :func:`select_month_met`). 0 (default) = the month's own time stamps only.
 
         Returns:
             xr.Dataset: The meteorology as an xarray Dataset, assigned to ``self.met_file``.
@@ -473,7 +513,7 @@ class LoadBaseSatelliteData:
         #    tolerant select_met_* helpers.
         self.met_file = self._get_meteorology_file(
             met_datadir,
-             met_levels=met_levels, met_variables=met_variables,
+             met_levels=met_levels, met_variables=met_variables, lag_margin_hours=lag_margin_hours,
         )
 
         # 2) check domain overlap
@@ -551,14 +591,17 @@ class LoadBaseSatelliteData:
 
         return topog_file, landcover_file
 
-    def _get_meteorology_file(self, met_datadir, met_levels=[], met_variables=[]):
+    def _get_meteorology_file(self, met_datadir, met_levels=[], met_variables=[], lag_margin_hours=0):
         """Load the meteorology from one or more yearly Zarr stores, concatenating along time.
 
         ``met_datadir`` is a glob pattern (e.g. ``DOMAIN_Met_2016*.zarr``) resolved
         to a sorted list of stores. Usually this is a single year, but a year
         pattern such as "201[4-5]" resolves to several stores opened together. If
         a single month was requested (``self.month`` is set), the loaded met is
-        sliced to that month; whole-year loads keep every timestamp. Level and
+        sliced to that month, plus ``lag_margin_hours`` of meteorology before its
+        first day when a margin is asked for (the lagged inputs of the first
+        footprints of the month; for January the previous year's store is opened
+        as well); whole-year loads keep every timestamp. Level and
         variable selection is delegated to the tolerant ``select_met_levels`` /
         ``select_met_variables`` helpers, which skip missing levels and the
         derived variables (wind_speed / wind_angle) that are computed later
@@ -571,6 +614,8 @@ class LoadBaseSatelliteData:
                 skipped. Defaults to [].
             met_variables (list, optional): Met variables to select. Missing
                 variables and derived wind_speed/wind_angle are skipped. Defaults to [].
+            lag_margin_hours (float, optional): Hours of meteorology before the first
+                of the requested month to keep (single-month loads only). Defaults to 0.
 
         Returns:
             xr.Dataset: The loaded meteorology, assigned to ``self.met_file``.
@@ -583,6 +628,19 @@ class LoadBaseSatelliteData:
         if self.verbose: print("Loading meteorology from " + str(met_datadir))
 
         met_stores = sorted(glob.glob(str(met_datadir)))
+        month = getattr(self, "month", None)
+        if month is not None and lag_margin_hours and not isinstance(self.year, int):
+            print(f"FLAG: lag margin of {lag_margin_hours} h ignored: the year {self.year!r} is a pattern, not a single year")
+            lag_margin_hours = 0
+        if month is not None and lag_margin_hours and int(month) == 1:
+            # the margin before 1 January lies in December of the previous year's store
+            previous = sorted(glob.glob(str(self._met_store_pattern(self.year - 1))))
+            if previous:
+                met_stores = previous + met_stores
+                if self.verbose: print(f"Lag margin of January: also opening {previous}")
+            else:
+                print(f"FLAG: no meteorology store for {self.year - 1}: the lag margin of January {self.year} "
+                      "is missing, its first footprints lose their lagged inputs")
         if len(met_stores) == 0:
             raise ValueError(
                 f"No meteorology Zarr stores found matching:\n {met_datadir}"
@@ -603,9 +661,12 @@ class LoadBaseSatelliteData:
         # Slice to a single month when one was requested (whole-year loads leave
         # self.month unset). The whole-year store means cross-month-boundary
         # time_deltas resolve for the year path; a single-month load keeps the
-        # month's own timestamps only.
-        if getattr(self, "month", None) is not None:
-            met_file = met_file.sel(time=met_file.time.dt.month == int(self.month))
+        # month's own timestamps plus the lag margin, if any (select_month_met).
+        if month is not None:
+            met_file = select_month_met(met_file, self.year, month, lag_margin_hours)
+            if self.verbose and lag_margin_hours:
+                print(f"Met of {self.year}-{month} with a lag margin of {lag_margin_hours} h: "
+                      f"{str(met_file.time.values[0])[:16]} .. {str(met_file.time.values[-1])[:16]} ({met_file.sizes['time']} stamps)")
 
         # Tolerant selection: skips missing levels and derived variables
         # (wind_speed / wind_angle), which are computed later downstream. Copy the

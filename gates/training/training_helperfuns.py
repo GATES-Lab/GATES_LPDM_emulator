@@ -1,5 +1,6 @@
 
 from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
 import random
@@ -64,11 +65,40 @@ def load_parameter_file(file_path):
         print(f"An error occurred while loading the file: {str(e)}")
         return None
     
+# W&B refuses artifact names longer than this (wandb.sdk.artifacts._validators.validate_artifact_name)
+WANDB_ARTIFACT_NAME_MAX = 128
+_shortened_artifact_prefixes = set()
+
+
+def wandb_artifact_name(model_name, name, max_length=WANDB_ARTIFACT_NAME_MAX):
+    """The W&B artifact name ``<model_name>-<name>`` (underscores of ``name`` as hyphens), within W&B's
+    length limit.
+
+    Model names carry the base name, the experiment name and a timestamp and can exceed the limit
+    (a run of summary section 36 failed on its first artifact with 133 characters). An over-long name
+    keeps its full type suffix (``-training-settings``, ``-checkpoint-epoch-300``, ...), so that every
+    artifact of a run stays distinguishable, and cuts the model-name part, appending the first eight
+    hex digits of the SHA-1 of the full model name so that different runs keep different names.
+    Names within the limit are unchanged (every earlier run's artifact names are untouched).
+    """
+    suffix = "-" + name.replace("_", "-")
+    full = model_name + suffix
+    if len(full) <= max_length:
+        return full
+    digest = hashlib.sha1(model_name.encode()).hexdigest()[:8]
+    keep = max_length - len(suffix) - len(digest) - 1
+    if keep < 1:
+        raise ValueError(f"artifact suffix {suffix!r} leaves no room for the model name within "
+                         f"W&B's {max_length}-character limit")
+    return f"{model_name[:keep].rstrip('-_.')}-{digest}{suffix}"
+
+
 def save_wandb_artifact(model_name, name, file_type, description, path):
     """Log a file to Weights & Biases as a versioned artifact.
 
     Args:
-        model_name (str): Model name, used as a prefix for the artifact name.
+        model_name (str): Model name, used as a prefix for the artifact name (shortened to W&B's
+            128-character limit if needed, see :func:`wandb_artifact_name`).
         name (str): Descriptive name for the artifact (underscores are replaced with
             hyphens in the final artifact name).
         file_type (str): W&B artifact "type" to tag the artifact with (e.g. "model",
@@ -79,8 +109,13 @@ def save_wandb_artifact(model_name, name, file_type, description, path):
     Returns:
         wandb.Artifact: The logged artifact.
     """
+    artifact_name = wandb_artifact_name(model_name, name)
+    if not artifact_name.startswith(model_name) and model_name not in _shortened_artifact_prefixes:
+        _shortened_artifact_prefixes.add(model_name)
+        print(f"W&B artifact names of {model_name!r} are shortened to {WANDB_ARTIFACT_NAME_MAX} characters, "
+              f"e.g. {artifact_name!r}")
     artifact = wandb.Artifact(
-        name=f"{model_name}-{name.replace('_', '-')}",
+        name=artifact_name,
         type=file_type,
         description=description
     )

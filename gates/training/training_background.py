@@ -132,6 +132,21 @@ def resolve_month_loading(data_parameters, input_variables, datapath_args={}):
     return regions, years, months, base_params, input_variables, far_field_cfg, datapath_args
 
 
+# hours of meteorology to load before the first of a month on top of the largest lag: the lagged
+# time is rounded to the met grid (interp_to, 3 h) and bracketed by two time stamps
+LAG_MARGIN_SLACK_HOURS = 6
+
+
+def lag_margin_hours(input_variables):
+    """Hours of meteorology to load before the first of a month so that the lagged inputs
+    (``variables.time_deltas``, hours before the footprint time) exist for the month's first
+    footprints: the largest lag plus :data:`LAG_MARGIN_SLACK_HOURS`; 0 without lags. Before
+    2026-10-06 a month was loaded with its own meteorology only and such footprints were dropped
+    (summary sections 24 and 37)."""
+    deltas = [int(d) for d in ((input_variables or {}).get("time_deltas", None) or [])]
+    return max(deltas) + LAG_MARGIN_SLACK_HOURS if deltas else 0
+
+
 def load_GATES_month_with_bg(region, year, month, base_params, input_variables, far_field_cfg=None,
                              datapath_args={}, detrend=True, verbose=True, load_into_memory=True,
                              use_aux_bc=True, aux_indeces=[4]):
@@ -149,6 +164,11 @@ def load_GATES_month_with_bg(region, year, month, base_params, input_variables, 
             "fp_pattern": glob pattern of the footprint files that were loaded}``.
     """
     month_params = {**base_params, "region": region, "year": year, "month": month}
+    margin = lag_margin_hours(input_variables)
+    if margin:
+        # the loader reads this margin of meteorology before the month (gates/data/load_data.py,
+        # select_month_met); not part of base_params, so the month-cache key is unchanged
+        month_params["met_args"] = {**(month_params.get("met_args", None) or {}), "lag_margin_hours": margin}
     try:
         data = LoadSquareSatelliteDataWithBCs(**month_params, **datapath_args, verbose=verbose)
     except Exception as e:

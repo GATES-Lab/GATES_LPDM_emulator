@@ -95,7 +95,7 @@ class SatelliteEncoder(torch.nn.Module):
         mlp_norm_type="LayerNorm",
         use_checkpointing: bool = False,
         dropout=0, v2_edges=False, input_names=None, higher_res=0, idx_latlon=None, better_meshnodes=True, attention=False, release_coords="default", release_edges=False, concat_enc_neighbours=False, initial_enc=False,
-        wind_mesh_edges=False, wind_indices=None
+        wind_mesh_edges=False, wind_indices=None, num_mesh_levels=1
 
     ):
         """
@@ -293,6 +293,17 @@ class SatelliteEncoder(torch.nn.Module):
             print(np.shape(both_features))
             self.improved_mesh_nodes = torch.tensor(both_features, dtype=torch.float32)
         
+        # GraphCast-style multi-mesh (optional, 2026-10-04): num_mesh_levels > 1 ADDS edges between
+        # the mesh nodes that stand for adjacent cells of the coarser H3 levels resolution-1, ...,
+        # resolution-(num_mesh_levels-1) (one representative fine node per coarse cell), so one
+        # processor block can pass information ~104 km (level 2) or ~274 km (level 3) at once
+        # instead of one fine hop (~39 km at resolution 4). The node set, the grid<->mesh edges and
+        # the edge-attribute layout are unchanged; num_mesh_levels=1 (default) is the original graph.
+        assert int(num_mesh_levels) >= 1, f"num_mesh_levels must be >= 1, got {num_mesh_levels}"
+        assert resolution - (int(num_mesh_levels) - 1) >= 0, (
+            f"num_mesh_levels={num_mesh_levels} needs H3 level {resolution - (int(num_mesh_levels) - 1)} < 0")
+        assert int(num_mesh_levels) == 1 or higher_res == 0, "num_mesh_levels > 1 needs a single-resolution mesh (higher_res=0)"
+        self.num_mesh_levels = int(num_mesh_levels)
         self.mesh_graph = self.create_mesh_graph()
 
         # wind-aware mesh edges (optional): the mean over the two endpoint mesh nodes of the input
@@ -514,6 +525,36 @@ class SatelliteEncoder(torch.nn.Module):
                         edge_sources.append(self.base_h3_map[h3_index])
                         edge_targets.append(self.base_h3_map[self.release_h3])
                         edge_attrs.append([dist_to_release, loc_point[0]-release_loc[0], loc_point[1]-release_loc[1], 0.0, 1.0])
+
+        # multi-mesh levels (see __init__): for each coarser H3 level, one representative fine node per
+        # coarse cell (the fine node nearest the coarse cell's centre; ties broken by the H3 index), and a
+        # directed edge between the representatives of every pair of adjacent coarse cells, with the
+        # regular attributes [distance, src-dst lat, src-dst lon] (+ zero release flags). Edges that already
+        # exist are not duplicated. Everything is iterated in sorted order (deterministic edge order).
+        for level in range(1, getattr(self, "num_mesh_levels", 1)):
+            coarse_res = h3.h3_get_resolution(self.base_h3_grid[0]) - level
+            representative = {}
+            for h3_index in self.base_h3_grid:
+                parent = h3.h3_to_parent(h3_index, coarse_res)
+                key = (h3.point_dist(h3.h3_to_geo(h3_index), h3.h3_to_geo(parent), unit="km"), h3_index)
+                if parent not in representative or key < representative[parent]:
+                    representative[parent] = key
+            existing = set(zip(edge_sources, edge_targets))
+            for parent in sorted(representative):
+                src = representative[parent][1]
+                loc_src = h3.h3_to_geo(src)
+                for neighbour in sorted(h3.k_ring(parent, 1)):
+                    if neighbour == parent or neighbour not in representative:
+                        continue
+                    dst = representative[neighbour][1]
+                    pair = (self.base_h3_map[src], self.base_h3_map[dst])
+                    if pair in existing:
+                        continue
+                    existing.add(pair)
+                    loc_dst = h3.h3_to_geo(dst)
+                    edge_sources.append(pair[0])
+                    edge_targets.append(pair[1])
+                    edge_attrs.append([h3.point_dist(loc_src, loc_dst, unit="km"), loc_src[0]-loc_dst[0], loc_src[1]-loc_dst[1]] + regular_flag)
 
         edge_index = torch.tensor([edge_sources, edge_targets], dtype=torch.long)
         edge_attrs = torch.tensor(edge_attrs, dtype=torch.float)

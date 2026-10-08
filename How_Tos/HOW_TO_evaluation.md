@@ -185,6 +185,13 @@ loss = criterion(pred, fp_batch[...,0], fp_batch=fp_batch)
 | `PixelWeightedMSELoss` | Penalise errors more in high-value pixels |
 | `SumWeightedMSELoss` | Penalise errors more in footprints with large total mass |
 | `MSEPlusSumLoss` | MSE + penalty on error in the spatial sum |
+| `FootprintMassLoss` | Error of the log of each footprint's mass (total, or by ring around the release point), summed in **linear** units through the inverse of `LogAndShiftFpScaler` |
+| `WithMassTerm` | Any of the above + `weight` x `FootprintMassLoss` (weight 0 = monitor the mass term only) |
+
+> `MSEPlusSumLoss` sums `pred` and `target` in the space they are given. With a log scaler
+> (`LogAndShiftFpScaler`) that sum is not the footprint mass; use `FootprintMassLoss` for a mass
+> term. In the dual trainers it is switched on with the `loss_functions.fp_mass_loss` block, see
+> [HOW_TO_DUAL_REFIT_TRAINING.md](HOW_TO_DUAL_REFIT_TRAINING.md) section 3b.
 
 **Helper transform/normalisation functions** (passed as `transform_fn` or `normalize_fn`):
 

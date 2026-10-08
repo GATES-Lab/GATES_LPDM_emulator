@@ -34,6 +34,7 @@ Please check the following HowTos for info on different aspects!
 - [HOW_TO_BOUNDARIES.md](How_Tos/HOW_TO_BOUNDARIES.md)
 - [HOW_TO_DUAL_REFIT_TRAINING.md](How_Tos/HOW_TO_DUAL_REFIT_TRAINING.md) for the dual-head (footprint + background) trainer, its joint loss and the bg-head freeze/refit schedule (section 4b: `train_dual_headlr_model.py`, the copy with per-head learning rates)
 - [HOW_TO_MULTI_GPU.md](How_Tos/HOW_TO_MULTI_GPU.md) for training the dual-head model on several GPUs of one node (`"distributed": {"num_gpus": N}`) — read its note on the effective batch size first
+- [HOW_TO_LARGE_DATASETS.md](How_Tos/HOW_TO_LARGE_DATASETS.md) for training the dual-head model on large data sets (`"data_cache": {"enabled": true}`): months are loaded once and kept on disk, the training batches are built with one copy of the data
 - [experiment_summaries/dual_head_experiments_summary.md](experiment_summaries/dual_head_experiments_summary.md) for the results of every dual-head experiment (schedules, weight sweeps, per-head learning rates) with their W&B run ids
 
 ## Setting up
@@ -125,6 +126,8 @@ Use the `train_GATES_model.py` file to train a model. Set up all your model para
     ├── model_name_100.pt
     └── ...
 ```
+
+A single-head variant that predicts where the particles leave the domain (the boundary exit curtains) instead of a footprint and a background value is `train_exit_model.py`, see [How_Tos/HOW_TO_EXIT_CURTAINS.md](How_Tos/HOW_TO_EXIT_CURTAINS.md).
 
 ### Predicting: same model and size
 

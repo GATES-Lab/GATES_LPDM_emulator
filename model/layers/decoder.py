@@ -914,3 +914,46 @@ def concat_group_by(x: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
     return x_
 
 
+
+
+class ExitCurtainHead(SatelliteDecoderConvPredictor):
+    """Whole-window head that predicts the particles' EXIT DISTRIBUTION over the domain boundary
+    (``gates/data/exit_curtains.py``): the processed mesh nodes are blended back onto the lat/lon
+    grid, reshaped to an image, passed through the two stride-2 convolutions of the background head
+    and a linear layer to ``n_outputs`` logits (one per pooled curtain bin plus the remainder bin). The
+    trainer applies a softmax, so the output is a probability vector.
+
+    This is the background head of the dual model (``SatelliteDecoderConvPredictor``) with a wide
+    output instead of one number, so a model with this head differs from the dual model's background
+    head in the TARGET only. Differences: the per-node MLP that ``SatelliteDecoderConvPredictor``
+    builds but never uses in ``forward`` is removed (it would only add untrained parameters to the
+    checkpoint), and ``hidden_dim > 0`` inserts a hidden layer between the flattened feature map and the
+    logits (``flattened -> hidden_dim -> n_outputs``; 0 = one linear layer, as in the background head).
+    """
+
+    def __init__(self, lat_lons, h_grid=None, whole_world=False, resolution=2, input_dim=256, n_outputs=1,
+                 mlp_norm_type="LayerNorm", hidden_dim_decoder=128, hidden_layers_decoder=2,
+                 use_checkpointing=False, dropout=0, n_neighbours=3, input_height=100, input_width=100,
+                 hidden_dim=0):
+        if int(n_outputs) < 1:
+            raise ValueError(f"n_outputs must be >= 1, got {n_outputs}")
+        if int(hidden_dim) < 0:
+            raise ValueError(f"hidden_dim must be >= 0, got {hidden_dim}")
+        super().__init__(
+            lat_lons=lat_lons, h_grid=h_grid, whole_world=whole_world, resolution=resolution,
+            input_dim=input_dim, output_dim=1, num_classes=int(n_outputs), mlp_norm_type=mlp_norm_type,
+            hidden_dim_decoder=hidden_dim_decoder, hidden_layers_decoder=hidden_layers_decoder,
+            use_checkpointing=use_checkpointing, dropout=dropout, n_neighbours=n_neighbours,
+            input_height=input_height, input_width=input_width,
+        )
+        # the parent's per-node MLP is not part of its forward pass: drop the dead parameters
+        del self.node_decoder
+        self.n_outputs = int(n_outputs)
+        self.hidden_dim = int(hidden_dim)
+        if self.hidden_dim:
+            flattened = self.linear_class.in_features
+            self.linear_class = torch.nn.Sequential(
+                torch.nn.Linear(flattened, self.hidden_dim),
+                torch.nn.ReLU(),
+                torch.nn.Linear(self.hidden_dim, self.n_outputs),
+            )

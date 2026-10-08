@@ -560,7 +560,7 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
                 bg_loss_weight = parameters.get("loss_functions", {}).get("bg_loss_weight")
                 suffix = f"bg{bg_loss_weight}"
             run_name = f"{job_id}_{job_name}_{suffix}"
-            wandb.init(entity=wandb_entity, project=wandb_project, config=parameters, tags=wandb_tags, name=run_name, group=wandb_group, notes=wandb_notes)
+            wandb.init(entity=wandb_entity, project=wandb_project, config=parameters, tags=wandb_tags, name=run_name, group=wandb_group, notes=wandb_notes, mode=parameters.get("wandb", {}).get("mode", None))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     write_to_file(f"using device {device}, starting at " + datetime.now().strftime("%d/%m/%y %H:%M:%S"), paths_ctx.updates_path)

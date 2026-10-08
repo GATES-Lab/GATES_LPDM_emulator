@@ -94,6 +94,7 @@ used by the dual scripts):
 | `fp_criterion_test` / `fp_criterion_test_params` | Test loss for the fp head; defaults to the training criterion / its params if unset. Usually plain MSE so test numbers are comparable across weightings. |
 | `bg_criterion` / `bg_criterion_test` / `bg_criterion_params` | Same for the background head, on the **normalised** background targets. |
 | `bg_loss_weight` (`w`) | The mixing weight. |
+| `fp_mass_loss` | Optional: a third term, the per-footprint mass (section 3b): `fp_loss` below then becomes `fp_loss + weight * mass_term`. Absent = no term. |
 
 During normal joint training each batch minimises
 
@@ -112,6 +113,69 @@ Two consequences of the `(1 - w) / w` scaling that matter for the schedule below
   loss is `(1 - w) * fp_loss`, which at `w = 1` is **exactly zero — nothing trains for the whole
   phase**. Never combine `w = 1` (or `w = 0`) with a schedule; if you want "fp first, then bg
   only", use `refit_mode: "bg_trunk"` (section 5).
+
+## 3b. Optional per-footprint mass term: `fp_mass_loss`
+
+The footprint criterion compares cells in the scaler's (log) space. The quantity an inversion
+uses is the footprint in linear units, and above all its **mass**: the sum of a footprint over
+the window is the mole fraction it gives for a uniform flux. The block adds that as a third
+term of the loss, next to the footprint and the background terms:
+
+```json
+"loss_functions": {
+  "fp_criterion": "gates_losses.PixelWeightedMSELoss",
+  "fp_mass_loss": {"weight": 0.1}
+}
+```
+
+```
+total     = (1 - w) * (fp_loss + weight * mass_term) + w * bg_loss
+mass_term = mean over footprints of ( ln(M_pred + eps) - ln(M_true + eps) )^2
+```
+
+`M` is the sum of the footprint over the valid cells after the scaler's own inverse transform
+(values at or below the scaler floor of 1e-5 count as zero, as in the exported predictions), and
+`eps` is the floor times the number of cells (0.025 for a 50 x 50 window; the mass of a test
+footprint is 0.04 – 3.0, median 0.49). A footprint that is a factor `k` too large costs
+`ln(k)^2` whatever its size, and a perfect prediction costs nothing in either term.
+
+| Key | Meaning |
+|-----|---------|
+| `weight` | Weight of the term (required, >= 0). `0` = **monitor only**: the term is evaluated and logged, the training is exactly that of `fp_criterion`. See "Which weight" below. |
+| `ring_edges` | Optional list of radii in grid cells from the release point, e.g. `[5, 15]`: the term is then the mean over the rings `r <= 5`, `5 < r <= 15`, `r > 15` of the same expression for the mass of each ring (the near / mid / far split of `scripts/compare_footprints.py`), instead of the total mass. |
+
+**Which weight** (experiment summary section 29; BRAZIL four years, test 2016, one seed per
+setting). On the test year the mass term of the baseline is 0.15 – 0.22 and its pixel term 0.24,
+so a weight of 1 makes the two terms the same size, and that is too much:
+
+| setting | what it does |
+|---|---|
+| `{"weight": 0.1}` | No cost in the footprint or background loss; uniform-flux and checkerboard correlations about 0.02 higher than the baseline. The mass level still drifts during training. The setting to use |
+| `{"weight": 1.0}` | Holds the mass level, but fits the masses of the training footprints (which does not carry over to a new year) and costs 0.04 of footprint loss and per-cell accuracy. Not recommended |
+| `{"weight": 1.0, "ring_edges": [5, 15]}` | Puts the right share of the mass in the near, mid and far field (far share 0.41, as in the truth), at the same cost as weight 1.0 and without a gain in the mole-fraction correlations. Not recommended |
+
+The mass *level* of a checkpoint (and its mean near / mid / far distribution) is the same on the
+training years and on the test year, so it is better corrected after training with a factor
+measured on the training set than held by a large weight (section 29).
+
+Notes:
+
+- Needs `LogAndShiftFpScaler`; the term's inverse transform is checked against the fitted scaler
+  when the model is built, and any other scaler is refused.
+- The gradient of the term reaches each cell in proportion to the mass it holds, so it rescales
+  the strong cells of a footprint; cells at or below the floor are not moved by it.
+- All three dual trainers apply the term (it is part of the criterion built by
+  `setup_dual_model`). `train_dual_headlr_model.py` logs the three terms separately:
+  `train/loss_fp` is the footprint criterion alone (as in a run without the term),
+  `train/loss_bg` the background loss, `fp_mass/train_loss` the mass term (epoch mean) and
+  `train/loss` the weighted total. On the test set: `test/loss_fp` (the plain test criterion,
+  which also selects the `best_fp` checkpoint; unchanged), `fp_mass/test_loss` and, per region,
+  `fp_mass/test_bias_<region>` and `fp_mass/test_sd_<region>` = mean and standard deviation of
+  `ln(M_pred / M_true)`. The `*_updates.txt` epoch line gains `fp mass train/test` and the
+  histories are saved in the periodic checkpoints (`loss["fp_mass"]`). The other two dual
+  trainers report the footprint criterion and the mass term together as `fp`, as did the three
+  runs of 2026-10-02 (section 29).
+- Results: experiment summary section 29. Tests: `tests/test_fp_mass_loss.py`.
 
 ## 4. Per-head optimizer controls: `bg_head`
 

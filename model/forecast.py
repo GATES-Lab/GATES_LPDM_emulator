@@ -13,7 +13,7 @@ from typing import Optional
 
 
 from model.layers.encoder import SatelliteEncoder
-from model.layers.decoder import SatelliteDecoder, SatelliteDecoderPredictor, SatelliteDecoderConvPredictor
+from model.layers.decoder import SatelliteDecoder, SatelliteDecoderPredictor, SatelliteDecoderConvPredictor, ExitCurtainHead
 from model.layers.processor import SatelliteProcessor
 import numpy as np
 
@@ -46,6 +46,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         n_decoder_neighbours=3,
         decoder_final_layer=None,
         higher_mesh_res=0,
+        num_mesh_levels=1,
         idx_latlon=None,
         concat_decoder_neighbours=False, concat_decoder_neighbours_2=False, better_meshnodes=False, scatter="mean",disaggregated=False, batchsize=5, attention=False, release_coords="default", release_edges=False, decoder_append_latlon=False, concat_enc_neighbours=False,initial_enc=False
     ):
@@ -94,7 +95,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
             mlp_norm_type=norm_type,
-            use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours,initial_enc=initial_enc
+            use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res, num_mesh_levels=num_mesh_levels,idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours,initial_enc=initial_enc
         )
         if not encode_edges:
             edge_dim=2
@@ -190,6 +191,7 @@ class GraphSatelliteBackgroundPredictor(torch.nn.Module): #, PyTorchModelHubMixi
         n_decoder_neighbours=3,
         decoder_final_layer=None,
         higher_mesh_res=0,
+        num_mesh_levels=1,
         idx_latlon=None,
         concat_decoder_neighbours=False, concat_decoder_neighbours_2=False, better_meshnodes=False, scatter="mean",disaggregated=False, batchsize=5, attention=False, release_coords="default", release_edges=False, decoder_append_latlon=False, concat_enc_neighbours=False,initial_enc=False, num_classes=4, decoder_type:str = "conv", input_height=100, input_width=100
     ):
@@ -239,7 +241,7 @@ class GraphSatelliteBackgroundPredictor(torch.nn.Module): #, PyTorchModelHubMixi
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
             mlp_norm_type=norm_type,
-            use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours,initial_enc=initial_enc
+            use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res, num_mesh_levels=num_mesh_levels,idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours,initial_enc=initial_enc
         )
         if not encode_edges:
             edge_dim=2
@@ -364,6 +366,7 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
         n_decoder_neighbours=3,
         decoder_final_layer=None,
         higher_mesh_res=0,
+        num_mesh_levels=1,
         idx_latlon=None,
         concat_decoder_neighbours=False, concat_decoder_neighbours_2=False, better_meshnodes=False, scatter="mean", disaggregated=False, batchsize=5, attention=False, release_coords="default", release_edges=False, decoder_append_latlon=False, concat_enc_neighbours=False, initial_enc=False,
         num_classes=4, decoder_type: str = "conv", input_height=100, input_width=100,
@@ -390,6 +393,9 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
             wind_mesh_edges / wind_indices: wind-aware mesh edges (the mean over an edge's two
                 endpoint mesh nodes of the input channels ``wind_indices`` is appended to the edge
                 attributes per sample); resolved by the trainers from the ``dynamic_edges`` block.
+            num_mesh_levels: 1 (default) = the single H3 mesh; k > 1 adds GraphCast-style edges between
+                the representatives of adjacent cells of the k-1 coarser H3 levels (longer reach per
+                processor block; node set unchanged). See SatelliteEncoder.
             release_edges: False, True / "out" (release node -> every mesh node) or "both"
                 (additionally every mesh node -> release node).
             bg_output_dim: Per-node intermediate output dimension of the background head
@@ -419,7 +425,7 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
             mlp_norm_type=norm_type,
-            use_checkpointing=use_checkpointing, dropout=dropout, higher_res=higher_mesh_res, idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours, initial_enc=initial_enc,
+            use_checkpointing=use_checkpointing, dropout=dropout, higher_res=higher_mesh_res, num_mesh_levels=num_mesh_levels, idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours, initial_enc=initial_enc,
             wind_mesh_edges=wind_mesh_edges, wind_indices=wind_indices,
         )
         if not encode_edges:
@@ -531,4 +537,109 @@ class GraphSatelliteDualForecaster(torch.nn.Module):  # , PyTorchModelHubMixin
 
         return {"footprint": footprint, "background": background}
 
+
+class GraphSatelliteExitForecaster(torch.nn.Module):
+    """GATES trunk (encoder + processor, built exactly as in ``GraphSatelliteDualForecaster``) with ONE
+    head: the exit distribution of the particles over the domain boundary (``ExitCurtainHead``,
+    ``gates/data/exit_curtains.py``). No footprint head and no scalar background head: the background
+    is implied by the predicted distribution (contracted with the CAMS curtain) outside the model.
+
+    ``forward`` returns the logits ``[B, n_outputs]``; the trainer applies ``log_softmax`` /
+    ``softmax``. The trunk keyword arguments have the meaning they have in the dual model (so a
+    ``model_parameters`` block of a dual run builds the same trunk); ``n_outputs`` is the length of the
+    target vector (pooled curtain bins + 1 remainder bin) and ``head_hidden_dim`` the optional hidden
+    layer of the head (0 = a single linear layer, as in the background head).
+    """
+
+    def __init__(
+        self,
+        lat_lons: list,
+        whole_world: bool = False,
+        resolution: int = 2,
+        feature_dim: int = 78,
+        aux_dim: int = 24,
+        node_dim: int = 256,
+        edge_dim: int = 256,
+        num_blocks: int = 9,
+        hidden_dim_processor_node: int = 256,
+        hidden_dim_processor_edge: int = 256,
+        hidden_layers_processor_node: int = 2,
+        hidden_layers_processor_edge: int = 2,
+        hidden_dim_decoder: int = 128,
+        hidden_layers_decoder: int = 2,
+        residuals: bool = False,
+        norm_type: str = "LayerNorm",
+        use_checkpointing: bool = False,
+        dropout: float = 0,
+        encode_edges=True,
+        encode_nodes=True,
+        n_decoder_neighbours=3,
+        higher_mesh_res=0,
+        num_mesh_levels=1,
+        idx_latlon=None,
+        better_meshnodes=False, scatter="mean", disaggregated=False, batchsize=5, attention=False,
+        release_coords="default", release_edges=False, concat_enc_neighbours=False, initial_enc=False,
+        n_outputs: int = 1, input_height=100, input_width=100, head_hidden_dim: int = 0,
+        wind_mesh_edges: bool = False, wind_indices=None,
+    ):
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.n_outputs = int(n_outputs)
+
+        # ---- Shared trunk: as GraphSatelliteDualForecaster builds it ----
+        self.encoder = SatelliteEncoder(
+            lat_lons=lat_lons,
+            whole_world=whole_world,
+            resolution=resolution,
+            input_dim=feature_dim + aux_dim,
+            output_dim=node_dim,
+            output_edge_dim=edge_dim,
+            hidden_dim_processor_edge=hidden_dim_processor_edge,
+            hidden_layers_processor_node=hidden_layers_processor_node,
+            hidden_dim_processor_node=hidden_dim_processor_node,
+            hidden_layers_processor_edge=hidden_layers_processor_edge,
+            mlp_norm_type=norm_type,
+            use_checkpointing=use_checkpointing, dropout=dropout, higher_res=higher_mesh_res, num_mesh_levels=num_mesh_levels, idx_latlon=idx_latlon, better_meshnodes=better_meshnodes, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours, initial_enc=initial_enc,
+            wind_mesh_edges=wind_mesh_edges, wind_indices=wind_indices,
+        )
+        if not encode_edges:
+            edge_dim = 2
+        if not encode_nodes:
+            node_dim = feature_dim + aux_dim
+        if better_meshnodes:
+            node_dim = node_dim + 2
+
+        print("set up processor")
+        self.processor = SatelliteProcessor(
+            input_dim=node_dim,
+            edge_dim=edge_dim,
+            num_blocks=num_blocks,
+            hidden_dim_processor_edge=hidden_dim_processor_edge,
+            hidden_layers_processor_node=hidden_layers_processor_node,
+            hidden_dim_processor_node=hidden_dim_processor_node,
+            hidden_layers_processor_edge=hidden_layers_processor_edge,
+            mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask,
+            residuals=residuals,
+        )
+
+        print("set up exit-curtain head")
+        self.exit_decoder = ExitCurtainHead(
+            lat_lons=lat_lons,
+            h_grid=self.encoder.h3_grid,
+            whole_world=whole_world,
+            resolution=resolution,
+            input_dim=node_dim,
+            n_outputs=self.n_outputs,
+            mlp_norm_type=norm_type,
+            hidden_dim_decoder=hidden_dim_decoder,
+            hidden_layers_decoder=hidden_layers_decoder,
+            use_checkpointing=use_checkpointing, dropout=dropout, n_neighbours=n_decoder_neighbours,
+            input_height=input_height, input_width=input_width, hidden_dim=head_hidden_dim,
+        )
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Logits ``[B, n_outputs]`` of the exit distribution for inputs ``[B, num_nodes, feature_dim + aux_dim]``."""
+        x, edge_idx, edge_attr = self.encoder(features)
+        x = self.processor(x, edge_idx, edge_attr, batch=self.encoder.batch_size)
+        return self.exit_decoder(x, features)
 

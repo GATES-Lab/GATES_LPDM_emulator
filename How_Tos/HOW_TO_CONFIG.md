@@ -59,6 +59,7 @@ Paths specific to your working setup, used verbatim (not joined onto `base_data_
 |-----|---------|
 | `save_models_dir` | where trained models are written |
 | `parameter_files_dir` | where training parameter JSONs live |
+| `data_cache_dir` | **optional**: root of the on-disk month cache used when a parameter file sets `"data_cache": {"enabled": true}` (see [HOW_TO_LARGE_DATASETS.md](HOW_TO_LARGE_DATASETS.md)). Needs roughly 1.6 GB per 1,000 footprints at a 50 x 50 window; holds derived data only and can be deleted at any time. Exposed as `cfg.data_cache_dir` (`None` when absent). |
 
 ### `domains`
 Maps a **region** (e.g. `BRAZIL`) to the **domain** it sits in, plus reference metadata. Each region entry looks like:
