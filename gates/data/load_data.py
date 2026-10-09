@@ -14,6 +14,7 @@ import dask
 import sys
 import os
 import copy
+import re
 import warnings
 from pathlib import Path
 import time
@@ -1287,11 +1288,20 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             self.size, pad_mode="zeros")
         return self.topog
 
-    def get_flux(self, year=None, append_to_fp=True, search_others=True, convert_units=False, convert_units_args={}):
+    def get_flux(self, year=None, flux_time=None, append_to_fp=True, search_others=True, convert_units=False, convert_units_args={}):
         """Load flux/emissions data for this domain and year, and crop it to match the footprints.
 
+        Footprints with no matching flux are kept, with NaN flux.
+
         Args:
-        year (int, optional): Year to load. If None, uses ``self.year``. Defaults to None.
+            year (int, optional): Year to load. If None, uses ``self.year``. Ignored if
+                ``flux_time`` is set. Defaults to None.
+            flux_time (str or int, optional): Fixed flux time to use for every
+                footprint, "YYYY" (annual mean) or "YYYY-MM" (that month); the file
+                for that year is loaded. If None, each footprint is matched to the
+                nearest flux snapshot. If the requested month is not in the file, a
+                warning is raised and the flux is NaN. See ``select_flux_time``.
+                Defaults to None.
             append_to_fp (bool, optional): If True, adds the cropped flux as a "flux"
                 variable on ``self.fp_xr``. Defaults to True.
             search_others (bool, optional): If True, searches for flux data in other
@@ -1301,20 +1311,33 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
 
         Returns:
             xr.Dataset: The cropped flux data, also stored in ``self.fluxes``.
+
+        Raises:
+            FileNotFoundError: If no flux file is found (see ``load_flux_data``).
         """
-        if year is None:
+        if flux_time is not None:
+            year = str(flux_time)[:4]
+        elif year is None:
             year = self.year
         ems = load_flux_data(self.domain, year=year, search_others=search_others)
+
+        ems = select_flux_time(ems)  # only standardises coord names and dim order
+        ems_selected = select_flux_time(ems, flux_time)
+        if ems_selected is None:
+            # requested month not in the file (already warned): NaN flux on the file's grid
+            ems_selected = xr.full_like(ems.isel(time=0, drop=True), np.nan)
+        ems = ems_selected
+
         if convert_units:
             if len(convert_units_args) == 0:
                 warnings.warn("convert_units is True but no convert_units_args were passed!")
             ems = transform_flux(ems, **convert_units_args)
 
-
-
-        cropped_flux, nan_idxs = cut_flux_data(ems, self.fp_data_full, size=self.size)
+        cropped_flux, nan_idxs = cut_flux_data(ems, self.fp_data_full, size=self.size, verbose=self.verbose)
+        if len(nan_idxs):
+            warnings.warn(f"{len(nan_idxs)} of {self.fp_data_full.time.size} footprints have no flux "
+                          f"snapshot in their month. Their flux is NaN; they are kept.")
         self.fluxes = cropped_flux
-        self.remove_indeces(nan_idxs)
         if append_to_fp:
             self.fp_xr["flux"] = self.fluxes.flux
         return self.fluxes
@@ -1535,6 +1558,66 @@ def _get_release_idxs(fp, domain_lats=None, domain_lons=None):
 
 
 
+def select_flux_time(flux, flux_time=None):
+    """Reduce a flux field to a single fixed time, to apply to every footprint.
+
+    Args:
+        flux (xr.DataArray): Flux field, dims (time, lat, lon) or (lat, lon) (e.g.
+            from ``load_flux_data``).
+        flux_time (str or int, optional): Which time to use:
+
+            - None: return ``flux`` unchanged (footprints are matched to the nearest
+              snapshot later, in ``cut_flux_data``).
+            - "YYYY" (e.g. "2016" or 2016): the mean over ``time``, if there is a
+              ``time`` dimension.
+            - "YYYY-MM" (e.g. "2016-01"): that month. If the file has several
+              snapshots in that month, their mean is used.
+
+            Defaults to None.
+
+    ``latitude``/``longitude`` coordinates are renamed to ``lat``/``lon`` if needed,
+    and the dims are ordered (time, lat, lon).
+
+    Returns:
+        xr.DataArray or None: The flux without a ``time`` dimension (or ``flux``
+        with only the coordinate rename if ``flux_time`` is None). None if the
+        requested month is not in ``flux``, after warning.
+
+    Raises:
+        ValueError: If ``flux_time`` is not None, "YYYY" or "YYYY-MM".
+    """
+    renames = {old: new for old, new in {"latitude": "lat", "longitude": "lon"}.items() if old in flux.coords or old in flux.dims}
+    if renames:
+        flux = flux.rename(renames)
+    flux = flux.transpose(*[d for d in ("time", "lat", "lon") if d in flux.dims], ...)
+
+    if flux_time is None:
+        return flux
+
+    flux_time = str(flux_time)
+    is_year = re.fullmatch(r"\d{4}", flux_time) is not None
+    is_month = re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", flux_time) is not None
+    if not (is_year or is_month):
+        raise ValueError(f"flux_time should be None, 'YYYY' or 'YYYY-MM', got '{flux_time}'")
+
+    if "time" not in flux.dims:
+        if is_month:
+            warnings.warn(f"flux_time='{flux_time}' requested, but the flux file has no time dimension. Using its single field.")
+        return flux
+
+    if is_month:
+        try:
+            flux = flux.sel(time=flux_time)
+        except KeyError:
+            warnings.warn(f"flux_time='{flux_time}' not found in the flux file. Available times: "
+                          f"{[str(t)[:10] for t in flux.time.values]}. Continuing without flux.")
+            return None
+        if "time" not in flux.dims:
+            return flux
+
+    return flux.mean("time", keep_attrs=True)
+
+
 def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, search_others=False):
     """Load emissions for the given domain and year.
 
@@ -1565,14 +1648,15 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, s
         xr.DataArray: Lazy DataArray (time, lat, lon) with all months in the file.
 
     Raises:
-        ValueError: If ``flux_path`` is given but does not exist, if ``cfg`` is
-            neither None nor a ``gates.config.Config`` instance, if ``domain`` is not
-            recognized, or if no matching flux file is found.
+        FileNotFoundError: If ``flux_path`` is given but does not exist, or if no
+            matching flux file is found.
+        ValueError: If ``cfg`` is neither None nor a ``gates.config.Config``
+            instance, or if ``domain`` is not recognized.
     """
     if flux_path is not None:
         # assert that there is a file at flux path
         if not os.path.isfile(flux_path):
-            raise ValueError(f"flux_path {flux_path} does not exist or is not a file")
+            raise FileNotFoundError(f"flux_path {flux_path} does not exist or is not a file")
         return xr.open_dataset(flux_path).flux
     
     if cfg is None:
@@ -1617,10 +1701,10 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, s
                 print(f"Using another file for this domain and species: \n{other_files[0]}")
                 path = other_files[0]
             else:
-                raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f'{species}_{resolved_domain_name}_{year}_*.nc'))}")
+                raise FileNotFoundError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f'{species}_{resolved_domain_name}_{year}_*.nc'))}")
         else:
         
-            raise ValueError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_{year}_*.nc"))}")
+            raise FileNotFoundError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_{year}_*.nc"))}")
     else:
         print(f"Loading flux data from {path}")
     return xr.open_dataset(path).flux
@@ -1644,20 +1728,21 @@ def load_default_sahara_emissions(year=2016):
     print("Obsolete: use load_emissions(domain='sahara', year=2016) instead")
 
 
-def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
+def cut_flux_data(flux, fp, size, verbose=True):
     """Crop flux data to a size x size square centred on each footprint's release point.
 
-    Each footprint is first matched to the nearest monthly flux snapshot.
+    If ``flux`` has a ``time`` dimension, each footprint is first matched to the
+    flux snapshot from the same calendar month (year and month), regardless of
+    the snapshot's day. If it has no ``time`` dimension (a fixed flux, e.g. from
+    ``select_flux_time``), the same field is used for every footprint.
 
     Args:
-        flux (xr.DataArray): Monthly flux snapshots, dims (time, lat, lon) (e.g. from
-            ``load_flux_data``).
+        flux (xr.DataArray): Monthly flux snapshots, dims (time, lat, lon), or a
+            single fixed field, dims (lat, lon) (e.g. from ``load_flux_data`` or
+            ``select_flux_time``).
         fp (xr.Dataset): Footprint dataset with ``release_lat``, ``release_lon``, and
             ``time`` coordinates.
         size (int): Side length of crop square. Must be even.
-        tolerance (str, optional): Maximum time distance for matching a footprint to
-            a flux snapshot. Defaults to "32D" (32 days), which ensures each
-            footprint matches at most one month.
         verbose (bool, optional): Whether to print progress messages. Defaults to True.
 
     Returns:
@@ -1666,29 +1751,41 @@ def cut_flux_data(flux, fp, size, tolerance="32D", verbose=True):
               (time, lat, lon)), ``lat_coords`` (actual latitudes, (time, lat)), and
               ``lon_coords`` (actual longitudes, (time, lon)). ``lat``/``lon`` are
               artificial 0..size coordinates; the release point is at size//2.
-            - pd.DatetimeIndex: fp timestamps that had no flux match within ``tolerance``.
+            - pd.DatetimeIndex: fp timestamps with no flux snapshot in their
+              month. Always empty for a fixed (lat, lon) flux.
 
     Raises:
-        ValueError: If ``size`` is not even.
+        ValueError: If ``size`` is not even, or if ``flux`` has more than one
+            snapshot in the same month.
     """
     if size % 2 != 0:
         raise ValueError(f"size must be even, got {size}")
     half = size // 2
 
+    flux = flux.transpose(*[d for d in ("time", "lat", "lon") if d in flux.dims], ...)
+
     # --- 1. Time matching ---
-    tol = pd.Timedelta(tolerance)
-    nearest = flux.indexes["time"].get_indexer(
-        pd.DatetimeIndex(fp.time.values), method="nearest", tolerance=tol)
-    nan_idxs = pd.DatetimeIndex(fp.time.values)[nearest == -1]
-    if verbose and len(nan_idxs):
-        print(f"cut_flux_data: {len(nan_idxs)} footprint timestamps had no "
-              f"flux snapshot within {tolerance}. These will be NaN in the output.")
-    nearest_safe = np.where(nearest != -1, nearest, 0)
-    flux_matched = flux.isel(time=xr.DataArray(nearest_safe, dims="time"))
-    flux_matched["time"] = fp.time.values
-    if len(nan_idxs):
-        flux_matched = flux_matched.where(
-            xr.DataArray(nearest != -1, dims="time"), np.nan)
+    if "time" not in flux.dims:
+        # Fixed flux: use the same field for every footprint.
+        flux_matched = flux.expand_dims(time=fp.time.values)
+        nan_idxs = pd.DatetimeIndex([])
+    else:
+        # Match each footprint to the snapshot from its own year and month
+        flux_months = flux.indexes["time"].to_period("M")
+        if not flux_months.is_unique:
+            raise ValueError("flux has more than one snapshot in the same month; expected monthly flux.")
+        fp_times = pd.DatetimeIndex(fp.time.values)
+        nearest = flux_months.get_indexer(fp_times.to_period("M"))
+        nan_idxs = fp_times[nearest == -1]
+        if verbose and len(nan_idxs):
+            print(f"cut_flux_data: {len(nan_idxs)} footprint timestamps had no "
+                  f"flux snapshot in their month. These will be NaN in the output.")
+        nearest_safe = np.where(nearest != -1, nearest, 0)
+        flux_matched = flux.isel(time=xr.DataArray(nearest_safe, dims="time"))
+        flux_matched["time"] = fp.time.values
+        if len(nan_idxs):
+            flux_matched = flux_matched.where(
+                xr.DataArray(nearest != -1, dims="time"), np.nan)
 
     # --- 2. Resolution check ---
     domain_lats = flux_matched.lat.values
