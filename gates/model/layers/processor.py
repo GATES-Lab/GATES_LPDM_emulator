@@ -29,7 +29,8 @@ class SatelliteProcessor(torch.nn.Module):
         hidden_layers_processor_edge: int = 2,
         mlp_norm_type: str = "LayerNorm",
         dropout: float=0,
-        scatter: str="mean",disaggregated=False, attention=False,attention_mask=None, residuals: bool = False
+        scatter: str="mean",disaggregated=False, attention=False,attention_mask=None, residuals: bool = False,
+        residual_edges: bool = False
     ):
         """Initialize the latent graph processor.
 
@@ -54,7 +55,8 @@ class SatelliteProcessor(torch.nn.Module):
             disaggregated (bool, optional): <FILL IN>. Defaults to False.
             attention (bool, optional): <FILL IN>. Defaults to False.
             attention_mask (optional): <FILL IN>. Defaults to None.
-            residuals (bool, optional): Whether to have the mesh update with residuals (change from the previous state) or not (replace the previous state). Defaults to False.
+            residuals (bool, optional): Whether to have the mesh-node update with residuals (change from the previous state) or not (replace the previous state). Applies to nodes only; see ``residual_edges``. Defaults to False.
+            residual_edges (bool, optional): Whether to have the mesh-edge update with residuals (add the edge MLP output to the previous edge features) or not (replace them). Defaults to False.
         """
         super().__init__()
         # Build the default graph
@@ -69,7 +71,8 @@ class SatelliteProcessor(torch.nn.Module):
             hidden_dim_processor_edge,
             hidden_layers_processor_node,
             hidden_layers_processor_edge,
-            mlp_norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention,attention_mask=attention_mask, residuals=residuals
+            mlp_norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention,attention_mask=attention_mask, residuals=residuals,
+            residual_edges=residual_edges
         )
 
     def forward(self, x: torch.Tensor, edge_index, edge_attr, batch=None) -> torch.Tensor:

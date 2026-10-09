@@ -39,6 +39,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         hidden_dim_decoder: int = 128,
         hidden_layers_decoder: int = 2,
         residuals: bool = False,
+        residual_edges: bool = False,
         norm_type: str = "LayerNorm",
         use_checkpointing: bool = False,
         dropout: float=0,
@@ -93,7 +94,12 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             residuals (bool, optional): If True, the processor's node update is a
                 residual one (each mesh-node message-passing block adds its output to
                 the previous node state rather than replacing it); forwarded to
-                ``SatelliteProcessor``. Defaults to False.
+                ``SatelliteProcessor``. Applies to nodes only; see ``residual_edges``.
+                Defaults to False.
+            residual_edges (bool, optional): If True, the processor's edge update is a
+                residual one (each block adds the edge MLP output to the previous edge
+                features rather than replacing them), as in GraphCast; forwarded to
+                ``SatelliteProcessor``. Works with every node-model variant. Defaults to False.
             norm_type (str, optional): Type of norm for the MLPs, one of
                 "LayerNorm", "GraphNorm", "InstanceNorm", "BatchNorm", "MessageNorm",
                 or None. Defaults to "LayerNorm".
@@ -112,8 +118,9 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             higher_mesh_res (int, optional): Forwarded to the encoder as ``higher_res``. Defaults to 0.
             idx_latlon (list, optional): Grid (row, col) index for each entry in
                 ``lat_lons``; forwarded to the encoder and decoder. Defaults to None.
-            concat_decoder_neighbours (bool, optional): Forwarded to
-                ``SatelliteDecoder`` as ``concat_neighbours``. Defaults to False.
+            concat_decoder_neighbours (bool, optional): Not supported; raises
+                ``NotImplementedError`` if True (the decoder MLP is not sized for the
+                concatenated neighbours). Defaults to False.
             concat_decoder_neighbours_2 (bool, optional): Forwarded to
                 ``SatelliteDecoder`` as ``concat_neighbours_2``. Defaults to False.
             scatter (str, optional): Scatter reduction forwarded to
@@ -147,6 +154,11 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         """
         
         super().__init__()
+        if concat_decoder_neighbours:
+            raise NotImplementedError(
+                "concat_decoder_neighbours=True is not supported: the decoder MLP is not "
+                "sized for the concatenated neighbours. Leave it False."
+            )
         #print(f"forecast - dropout {dropout}")
         self.feature_dim = feature_dim
         if output_dim is None:
@@ -211,7 +223,8 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_layers_processor_node=hidden_layers_processor_node,
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
-            mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask, residuals=residuals
+            mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask, residuals=residuals,
+            residual_edges=residual_edges
         )
         print("set up decoder")
 
