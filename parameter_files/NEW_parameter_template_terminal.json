@@ -36,7 +36,6 @@
         "time_deltas":[3],
         "chunk_size":3,
         "load_into_memory":false,
-        "interp_to": "3h"
     },
 
     "input_scaler" : {
