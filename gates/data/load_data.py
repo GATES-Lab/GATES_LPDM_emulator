@@ -1299,8 +1299,9 @@ class LoadSquareSatelliteData(LoadBaseSatelliteData):
             flux_time (str or int, optional): Fixed flux time to use for every
                 footprint, "YYYY" (annual mean) or "YYYY-MM" (that month); the file
                 for that year is loaded. If None, each footprint is matched to the
-                nearest flux snapshot. If the requested month is not in the file, a
-                warning is raised and the flux is NaN. See ``select_flux_time``.
+                flux snapshot from its own calendar month. If the requested month is
+                not in the file, a warning is raised and the flux is NaN. See
+                ``select_flux_time``.
                 Defaults to None.
             append_to_fp (bool, optional): If True, adds the cropped flux as a "flux"
                 variable on ``self.fp_xr``. Defaults to True.
@@ -1566,8 +1567,8 @@ def select_flux_time(flux, flux_time=None):
             from ``load_flux_data``).
         flux_time (str or int, optional): Which time to use:
 
-            - None: return ``flux`` unchanged (footprints are matched to the nearest
-              snapshot later, in ``cut_flux_data``).
+            - None: return ``flux`` unchanged (footprints are matched to the
+              snapshot from their own calendar month later, in ``cut_flux_data``).
             - "YYYY" (e.g. "2016" or 2016): the mean over ``time``, if there is a
               ``time`` dimension.
             - "YYYY-MM" (e.g. "2016-01"): that month. If the file has several
@@ -1606,12 +1607,17 @@ def select_flux_time(flux, flux_time=None):
         return flux
 
     if is_month:
+        # A month outside the file's time range raises KeyError; a month missing
+        # from inside the range gives an empty selection instead.
         try:
-            flux = flux.sel(time=flux_time)
+            selected = flux.sel(time=flux_time)
         except KeyError:
+            selected = None
+        if selected is None or ("time" in selected.dims and selected.sizes["time"] == 0):
             warnings.warn(f"flux_time='{flux_time}' not found in the flux file. Available times: "
                           f"{[str(t)[:10] for t in flux.time.values]}. Continuing without flux.")
             return None
+        flux = selected
         if "time" not in flux.dims:
             return flux
 
@@ -1703,8 +1709,8 @@ def load_flux_data(domain, year=2016, species="ch4", flux_path=None, cfg=None, s
             else:
                 raise FileNotFoundError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f'{species}_{resolved_domain_name}_{year}_*.nc'))}")
         else:
-        
-            raise FileNotFoundError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f"{species}_{resolved_domain_name}_{year}_*.nc"))}")
+
+            raise FileNotFoundError(f"Flux file not found for domain '{domain}', species '{species}' and year '{year}' \nat {path}. \nThe existing files are: {sorted(str(f) for f in path.parent.glob(f'{species}_{resolved_domain_name}_{year}_*.nc'))}")
     else:
         print(f"Loading flux data from {path}")
     return xr.open_dataset(path).flux
