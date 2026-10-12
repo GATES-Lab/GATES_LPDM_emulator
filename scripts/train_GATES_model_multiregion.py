@@ -94,11 +94,12 @@ def validate_and_predict(model, model_ctx, loader):
     return test_error / len(loader), all_preds
 
 
-def build_region_configs(regions_dict, shared_load_parameters):
+def build_region_configs(regions_dict, shared_load_parameters, global_flux_args=None):
     """
     Convert the parameter-file regions dict to the list format expected by
     load_multiregion_data, merging shared_load_parameters into each region's
-    train_load_data (region-specific keys override shared ones).
+    train_load_data (region-specific keys override shared ones), and resolving
+    each region's flux settings.
 
     Keys in regions_dict are integer strings optionally followed by a label
     ("0", "1", or "0-SAHARA", "1-BRAZIL"). The integer prefix determines sort
@@ -106,27 +107,54 @@ def build_region_configs(regions_dict, shared_load_parameters):
     the integer prefix and the resolved 'region' field, so that two entries for
     the same physical region (e.g. "0-SAHARA" and "1-SAHARA") remain distinct.
 
+    Flux: global_flux_args (the top-level "flux" block) is the default for every
+    region. A region can override it with its own "flux" block, placed next to
+    'train_load_data' (not inside it, since every train_load_data key is passed to
+    LoadSquareSatelliteData). The merge is one level deep: region keys replace
+    global keys, so a region that sets 'convert_units_args' replaces the whole
+    sub-dict. A region with "get_flux": false loads no flux.
+
     Args:
         regions_dict (dict): Keyed by strings like "0" or "0-SAHARA". Each value
-            has 'train_load_data' and 'test_load_data' sub-dicts.
+            has 'train_load_data' and 'test_load_data' sub-dicts, and optionally a
+            'flux' dict.
         shared_load_parameters (dict): Parameters common to all regions (e.g. 'size',
             'met_args'). Merged as base values; per-region keys take precedence.
+        global_flux_args (dict, optional): The top-level "flux" block, used as the
+            default flux settings for every region. Defaults to None.
 
     Returns:
-        list of dict: Each entry has 'name', 'train_load_data', and 'test_load_data'.
+        list of dict: Each entry has 'name', 'train_load_data', 'test_load_data',
+        and 'flux' (the region's resolved flux settings, or None if neither the
+        global block nor the region sets any).
+
+    Raises:
+        ValueError: If a region's 'flux' is not a dict, or if 'flux' is placed
+            inside 'train_load_data' or 'test_load_data'.
     """
     region_configs = []
     for key in sorted(regions_dict.keys(), key=lambda k: int(k.split("-")[0])):
         region_entry = regions_dict[key]
+        for load_key in ("train_load_data", "test_load_data"):
+            if "flux" in region_entry.get(load_key, {}):
+                raise ValueError(f"Region '{key}': 'flux' is inside '{load_key}'. Put the region's "
+                                 f"'flux' block next to 'train_load_data', not inside it.")
+        region_flux_override = region_entry.get("flux", {})
+        if not isinstance(region_flux_override, dict):
+            raise ValueError(f"Region '{key}': 'flux' should be a dict, got {type(region_flux_override).__name__}.")
+
         train_load = copy.deepcopy(shared_load_parameters)
         train_load.update(region_entry["train_load_data"])
         test_load = copy.deepcopy(region_entry.get("test_load_data", {}))
+        # deepcopy so regions don't share nested dicts (e.g. convert_units_args)
+        region_flux = {**copy.deepcopy(global_flux_args or {}), **copy.deepcopy(region_flux_override)}
         index = key.split("-")[0]
         region_label = train_load.get("region", key)
         region_configs.append({
             "name": f"{index}-{region_label}",
             "train_load_data": train_load,
             "test_load_data": test_load,
+            "flux": region_flux or None,
         })
     return region_configs
 
@@ -550,7 +578,12 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
         paths_ctx.updates_path)
 
     shared_load_params = parameters.get("shared_load_parameters", {})
-    region_configs = build_region_configs(parameters["regions"], shared_load_params)
+    region_configs = build_region_configs(parameters["regions"], shared_load_params,
+                                          global_flux_args=parameters.get("flux"))
+    # record each region's effective flux settings (global block + region override)
+    parameters["resolved_region_flux"] = {cfg["name"]: cfg["flux"] for cfg in region_configs}
+    if use_wandb:
+        wandb.config.update({"resolved_region_flux": parameters["resolved_region_flux"]})
     input_variables = parameters["variables"]
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
     flux_args = parameters.get("flux", None)
