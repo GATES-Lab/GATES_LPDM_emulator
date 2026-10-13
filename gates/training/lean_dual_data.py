@@ -382,6 +382,22 @@ def batch_order(times, batch_size, seed=_SHUFFLE_SEED):
     return n_used, sorted_to_slot
 
 
+def populate_index_engine(header):
+    """Build the lookup engine of the header's ``variable_name`` MultiIndex in the calling thread.
+
+    The scaling threads of :func:`_build_training_tensors` each select the channels by name on the
+    header's pandas MultiIndex, which they share. pandas builds the index's lookup engine on first
+    use and releases the GIL while it fills the hash table: a thread whose first lookup lands in that
+    window reads the index as non-unique, takes the slow path and gets an array indexer instead of a
+    position, and the scaler's concat then fails on mixed indexes (production job 7170277,
+    2026-10-08; 4.7 % of synchronised first lookups in a stress test, none once the engine exists).
+    """
+    mindex = header.indexes["variable_name"]
+    if not mindex.is_unique:
+        raise ValueError("the input channel names are not unique")
+    mindex.get_loc(tuple(mindex[0]))
+
+
 def _run_threaded(fn, items, threads):
     items = list(items)
     if threads <= 1 or len(items) <= 1:
@@ -600,6 +616,7 @@ def _build_training_tensors(parameters, settings, train_inputs, train_fps, train
     # --- 3. scale in place with the scaler's own transform ---
     start = time.perf_counter()
     step = max(1, int(0.75 * GIB / (n_nodes * n_var * 4)))
+    populate_index_engine(header)
 
     def scale(a):
         b = min(a + step, n_all)

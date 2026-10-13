@@ -1083,6 +1083,7 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
 
     if use_wandb:
         wandb.finish()
+    return paths_ctx.model_path
 
 
 # ---------------------------------------------------------------
