@@ -1,21 +1,21 @@
 #!/bin/bash
-#SBATCH --job-name=is_MRM_big_chunk_size_64_SA
+#SBATCH --job-name=is_MRM_big_new_project_test
 #SBATCH --partition=workq
-#SBATCH --account=brics.b5bn
+#SBATCH --account=brics.u6za
 #SBATCH --qos=normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=449G
 #SBATCH --gres=gpu:1
-#SBATCH --time=24:00:00
-#SBATCH --output=output_logs/%j_is_multi_region_big_chunk_size_64_SA.out
+#SBATCH --time=12:00:00
+#SBATCH --output=output_logs/%j_is_multi_region_big_new_project_test.out
 
 # Runs inside the apptainer container; no conda/module environment is used. Submit with:
 #   sbatch launch_isambard_CHINA.sh
 
-REPO=/home/b5bn/jeffc.b5bn/GATES_LPDM_emulator
-SIF=/projects/b5bn/data/env/gates_env_v2.sif
+REPO=/home/u6za/jeffc.u6za/GATES_LPDM_emulator
+SIF=/projects/u6za/data/env/gates_env_v2.sif
 # Parameter file name; resolved under config.yml's parameter_files_dir by the runner
 # (i.e. ${REPO}/parameter_files/<name>). Must contain a "__sweep__" section.
 # Overridable at submit time:  PARAM_FILE=<name>.json sbatch launch_dual_sweep_shared_data.sh
@@ -35,7 +35,7 @@ nvidia-smi -L || true
 export WANDB_MODE="${WANDB_MODE:-online}"
 export WANDB_DIR="${REPO}/wandb"
 export WANDB_NAME="${SLURM_JOB_ID}_${SLURM_JOB_NAME}"
-export WANDB_NOTES="Trying to fit SA loading into memory. Using Elena's new chunk size parameter to manage peak memory"
+export WANDB_NOTES="Test on new project"
 
 
 export PYTHONUNBUFFERED=1

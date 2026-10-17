@@ -226,11 +226,12 @@
             "gpu",
             "PixelWeightedMSELoss",
             "loss_a1",
-            "zarr"
+            "zarr",
+            "u6za"
         ]
     },
     "epochs": {
-        "training": 250,
+        "training": 50,
         "visualize": 10,
         "patience": 1000,
         "model_save": 50
