@@ -190,12 +190,12 @@
         "scaler_params": {}
     },
     "dataloader": {
-        "batch_size": 5,
-        "test_batch_size": 5,
+        "batch_size": 20,
+        "test_batch_size": 20,
         "nans_to_zeros": true,
         "dataloader_params": {
             "prefetch_factor": 3,
-            "num_workers": 2,
+            "num_workers": 6,
             "pin_memory": true,
             "persistent_workers": true,
             "multiprocessing_context": "forkserver",
@@ -217,7 +217,7 @@
         "residuals": false,
         "attention": false
     },
-    "learning_rate": 5e-5,
+    "learning_rate": 1e-4,
     "use_wandb": true,
     "wandb": {
         "project": "gates-tests-multiregion",
@@ -231,7 +231,7 @@
         ]
     },
     "epochs": {
-        "training": 50,
+        "training": 1500,
         "visualize": 10,
         "patience": 1000,
         "model_save": 50

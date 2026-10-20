@@ -489,6 +489,31 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
     print("Finished Training.")
 
 
+def apply_holdout(parameters, holdout_region):
+    """
+    Leave-one-region-out: remove every entry of parameters["regions"] whose
+    train_load_data region matches holdout_region (case-insensitive), renumber the
+    remaining keys from 0, and append "_LORO_<REGION>" to model_name. Modifies
+    parameters in place so the saved training settings reflect what was trained.
+
+    Raises:
+        ValueError: if no region matches, or if every region would be removed.
+    """
+    regions = parameters["regions"]
+    ordered = [regions[k] for k in sorted(regions, key=lambda k: int(k.split("-")[0]))]
+    names = [r["train_load_data"].get("region") for r in ordered]
+    kept = [r for r, n in zip(ordered, names)
+            if str(n).upper() != holdout_region.upper()]
+    if len(kept) == len(ordered):
+        raise ValueError(f"--holdout {holdout_region!r} matches no region; available: {names}")
+    if not kept:
+        raise ValueError(f"--holdout {holdout_region!r} would remove all regions.")
+    parameters["regions"] = {str(i): r for i, r in enumerate(kept)}
+    parameters["model_name"] = f"{parameters['model_name']}_LORO_{holdout_region.upper()}"
+    parameters["holdout_region"] = holdout_region.upper()
+    return parameters
+
+
 def train_and_save_model_multiregion(parameters, model_save_dir):
     """
     Top-level entry point for multiregion training. Handles all setup, data loading,
@@ -714,6 +739,16 @@ if __name__ == "__main__":
                         help="Parameter file path. By default, the path in config.yml is used.",
                         default=None)
 
+    parser.add_argument("--holdout",
+                        help="Region (train_load_data 'region', e.g. INDIA) to leave out of "
+                             "training and testing (leave-one-region-out).",
+                        default=None)
+
+    parser.add_argument("--model_name",
+                        help="Overrides 'model_name' in the parameter file (e.g. set from the job script). "
+                             "Applied before the --holdout suffix.",
+                        default=None)
+
     args = parser.parse_args()
     cfg = gates.config.get_config()
 
@@ -725,6 +760,16 @@ if __name__ == "__main__":
     if parameters is None:
         print("Error loading parameters. Exiting.")
         sys.exit(1)
+
+    if args.model_name:
+        parameters["model_name"] = args.model_name
+
+    if args.holdout:
+        try:
+            apply_holdout(parameters, args.holdout)
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
 
     print("PARAMETERS:")
     print(parameters)
