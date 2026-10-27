@@ -16,6 +16,7 @@ from typing import Optional
 from .layers.encoder import SatelliteEncoder, SatelliteDynamicEncoder
 from .layers.decoder import SatelliteDecoder
 from .layers.processor import SatelliteProcessor
+from .layers.graph_net_block import MLP
 import numpy as np
 
 
@@ -55,7 +56,10 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         latlon_mesh_edges=False,
         latlon_indices=None,
         dynamic_earthdistance=False,
-        use_dynamic_encoder=True
+        use_dynamic_encoder=True,
+        grid_skip_dim=None,
+        grid_skip_hidden_dim=None,
+        verbose=False
     ):
         """Initialize GATES.
 
@@ -151,6 +155,21 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
                 dynamic edges; forwarded to the encoder. Defaults to None.
             dynamic_earthdistance (bool, optional): Whether to compute dynamic earth
                 distance edges; forwarded to the encoder. Defaults to False.
+            use_dynamic_encoder (bool, optional): If True, uses ``SatelliteDynamicEncoder``;
+                otherwise the static ``SatelliteEncoder``. Defaults to True.
+            grid_skip_dim (int, optional): If set, a node-wise MLP (one hidden layer)
+                condenses each grid node's full input vector to ``grid_skip_dim``
+                features, which bypass the encoder and processor and are concatenated
+                to that node's decoder input. Defaults to None (no grid skip).
+            grid_skip_hidden_dim (int, optional): Hidden dimension of the grid-skip
+                MLP. If None, defaults to ``hidden_dim_processor_node``. Defaults to None.
+            verbose (bool, optional): If True, prints a summary of the optional skip
+                connections during setup. Defaults to False.
+
+        Raises:
+            NotImplementedError: If ``concat_decoder_neighbours`` is True.
+            ValueError: If ``grid_skip_dim`` is not a positive int, or the static
+                encoder is combined with dynamic edges.
         """
         
         super().__init__()
@@ -159,6 +178,8 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
                 "concat_decoder_neighbours=True is not supported: the decoder MLP is not "
                 "sized for the concatenated neighbours. Leave it False."
             )
+        if grid_skip_dim is not None and (isinstance(grid_skip_dim, bool) or not isinstance(grid_skip_dim, int) or grid_skip_dim <= 0):
+            raise ValueError(f"grid_skip_dim must be a positive int or None, got {grid_skip_dim!r}.")
         #print(f"forecast - dropout {dropout}")
         self.feature_dim = feature_dim
         if output_dim is None:
@@ -238,8 +259,23 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             mlp_norm_type=norm_type,
             hidden_dim_decoder=hidden_dim_decoder,
             hidden_layers_decoder=hidden_layers_decoder,
-            use_checkpointing=use_checkpointing , dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours, concat_neighbours_2=concat_decoder_neighbours_2,idx_latlon=idx_latlon, append_latlon=decoder_append_latlon
+            use_checkpointing=use_checkpointing , dropout=dropout, final_activation=decoder_final_layer, n_neighbours=n_decoder_neighbours, concat_neighbours=concat_decoder_neighbours, concat_neighbours_2=concat_decoder_neighbours_2,idx_latlon=idx_latlon, append_latlon=decoder_append_latlon,
+            grid_skip_dim=grid_skip_dim
         )
+
+        # grid skip: node-wise embedding of each grid node's full input, bypassing the mesh
+        self.grid_skip_encoder = None
+        if grid_skip_dim is not None:
+            if grid_skip_hidden_dim is None:
+                grid_skip_hidden_dim = hidden_dim_processor_node
+            self.grid_skip_encoder = MLP(
+                feature_dim, grid_skip_dim, grid_skip_hidden_dim, 1, norm_type,
+                use_checkpointing, dropout=dropout
+            )
+            if verbose:
+                print(f"set up grid skip: node-wise MLP {feature_dim} -> {grid_skip_hidden_dim} -> {grid_skip_dim} "
+                      f"(input_features -> grid_skip_hidden_dim -> grid_skip_dim), concatenated to the decoder input "
+                      f"({node_dim} features from the mesh + {grid_skip_dim} grid features)")
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """Run the encode-process-decode pipeline to compute the forecast.
@@ -261,6 +297,11 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         #print("processed", x.size())
         #print("run decoder")
         #print(x.size())
-        x = self.decoder(x, features)
+        grid_features = None
+        if self.grid_skip_encoder is not None:
+            # (B, n_grid, feature_dim) -> (B, n_grid, grid_skip_dim)
+            grid_features = self.grid_skip_encoder(features.reshape(-1, features.shape[-1]))
+            grid_features = grid_features.reshape(features.shape[0], features.shape[1], -1)
+        x = self.decoder(x, features, grid_features=grid_features)
 
         return x

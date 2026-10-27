@@ -769,7 +769,7 @@ def setup_GATES_model(parameters, training_ctx, paths_ctx):
     """
     lr = parameters["learning_rate"]
 
-    model = GraphSatelliteForecaster(training_ctx.grid, whole_world=False, feature_dim=training_ctx.n_variables, **parameters["model_parameters"], **training_ctx.dynamic_edges_params)
+    model = GraphSatelliteForecaster(training_ctx.grid, whole_world=False, feature_dim=training_ctx.n_variables, **parameters["model_parameters"], **training_ctx.dynamic_edges_params, verbose=parameters.get("verbose", False))
 
     loss_fn = eval(parameters["loss_functions"]["criterion"])
 
