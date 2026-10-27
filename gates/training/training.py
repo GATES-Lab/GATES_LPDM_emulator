@@ -767,6 +767,55 @@ def evaluate_outputs(test_outpts, true_fp, fp_mask):
     nonzero=False,
 )"""
 
+def loss_uses_flux(parameters):
+    """Check whether the training or test loss is weighted by flux.
+
+    Args:
+        parameters (dict): Training parameters; uses ``loss_functions.criterion_params``
+            and ``loss_functions.criterion_test_params``.
+
+    Returns:
+        bool: True if either has ``weight_label == "flux"``.
+    """
+    loss_cfg = parameters.get("loss_functions", {})
+    return any((loss_cfg.get(k) or {}).get("weight_label") == "flux"
+               for k in ("criterion_params", "criterion_test_params"))
+
+
+def check_train_flux_for_loss(parameters, train_fps):
+    """Raise if the loss is flux-weighted but some training footprints have no flux.
+
+    A missing flux is only a warning for metrics, but a flux-weighted loss needs flux
+    for every training sample. A footprint counts as having no flux when its flux is
+    NaN everywhere (missing file or month, see ``load_GATES_data_v2``); NaNs in only
+    some cells (e.g. out-of-domain padding) are allowed.
+
+    Args:
+        parameters (dict): Training parameters (see ``loss_uses_flux``).
+        train_fps (xr.Dataset): Training footprints, dims (time, lat, lon).
+
+    Raises:
+        ValueError: If ``loss_uses_flux(parameters)`` and ``train_fps`` has no "flux"
+            variable, or some timestamps have all-NaN flux.
+    """
+    if not loss_uses_flux(parameters):
+        return
+    if not isinstance(train_fps, xr.Dataset) or "flux" not in train_fps:
+        raise ValueError("The loss is flux-weighted (weight_label='flux'), but the training data has no "
+                         "'flux' variable. Set \"get_flux\": true in the \"flux\" block (for every region, "
+                         "in multiregion training).")
+    flux = train_fps["flux"]
+    no_flux = flux.isnull().all([d for d in flux.dims if d != "time"])
+    n_missing = int(no_flux.sum())
+    if n_missing > 0:
+        missing_times = train_fps.time.values[no_flux.values]
+        raise ValueError(f"The loss is flux-weighted (weight_label='flux'), but {n_missing} of "
+                         f"{flux.sizes['time']} training footprints have no flux (all NaN), e.g. "
+                         f"{[str(t)[:10] for t in missing_times[:5]]}. Flux-weighted losses need flux "
+                         f"for every training sample: check the flux files for the training years, or "
+                         f"use a fixed \"flux_time\".")
+
+
 def setup_GATES_model(parameters, training_ctx, paths_ctx):
     """Build the GraphSatelliteForecaster model, losses, optimizer, and early stopping for training.
 
