@@ -44,8 +44,6 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         norm_type: str = "LayerNorm",
         use_checkpointing: bool = False,
         dropout: float=0,
-        encode_edges=True,
-        encode_nodes=True,
         n_decoder_neighbours=3,
         decoder_final_layer=None,
         higher_mesh_res=0,
@@ -110,10 +108,6 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             use_checkpointing (bool, optional): Use gradient checkpointing to reduce
                 model memory. Defaults to False.
             dropout (float, optional): Dropout probability. Defaults to 0.
-            encode_edges (bool, optional): If False, skips the edge encoder and uses
-                a fixed edge dimension of 2 for the processor instead. Defaults to True.
-            encode_nodes (bool, optional): If False, skips the node encoder and uses
-                ``feature_dim`` as the processor's node dimension instead. Defaults to True.
             n_decoder_neighbours (int, optional): Number of closest mesh nodes each
                 latlon point is connected to in the decoder; forwarded to
                 ``SatelliteDecoder`` as ``n_neighbours``. Defaults to 3.
@@ -230,11 +224,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
                 use_checkpointing=use_checkpointing, dropout=dropout,higher_res=higher_mesh_res,idx_latlon=idx_latlon, attention=attention, release_coords=release_coords, release_edges=release_edges, concat_enc_neighbours=concat_enc_neighbours,initial_enc=initial_enc, initial_enc_dim=initial_enc_dim,
                 better_meshnodes=False
             )
-        if not encode_edges:
-            edge_dim=2
-        if not encode_nodes:
-            node_dim=feature_dim
-        
+
         print("set up processor")
         self.processor = SatelliteProcessor(
             input_dim=node_dim,

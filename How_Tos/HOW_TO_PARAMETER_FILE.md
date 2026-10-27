@@ -522,8 +522,6 @@ These keys are also accepted into the model parameters section. Most are experim
 | `norm_type` | `"LayerNorm"` | Normalisation in the MLPs: `"LayerNorm"`, `"GraphNorm"`, `"InstanceNorm"`, `"BatchNorm"`, `"MessageNorm"` or `null`. |
 | `dropout` | 0 | Dropout probability. |
 | `use_checkpointing` | `false` | Gradient checkpointing, to reduce GPU memory at the cost of speed. |
-| `encode_edges` | `true` | If `false`, skips the edge encoder. |
-| `encode_nodes` | `true` | If `false`, skips the node encoder. |
 | `scatter` | `"mean"` | How the Processor aggregates the messages arriving at each node. |
 | `disaggregated` | `false` | Experimental Processor variant that keeps each incoming edge separate. |
 | `use_dynamic_encoder` | `true` | Uses `SatelliteDynamicEncoder`, which supports `dynamic_edges`. `false` uses the older `SatelliteEncoder`. |
