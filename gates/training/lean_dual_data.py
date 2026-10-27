@@ -30,15 +30,18 @@ Enable it in the parameter file (off by default, the standard pipeline is then u
 Limits: ``DefaultInputsScaler`` only; the loader must return float32 inputs (it does).
 """
 
+import copy
 import gc
 import hashlib
 import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
+import pandas as pd
 import torch
 import xarray as xr
 
@@ -52,6 +55,7 @@ from .training_background import (
     MonthLoadError, resolve_month_loading, load_GATES_month_with_bg, month_key_for, concat_months,
     check_unique_times,
 )
+from .training_dataclasses import PathContext
 from .training_dual import setup_dual_eval_loader, _dual_dataloader_settings
 
 GIB = 2 ** 30
@@ -96,6 +100,96 @@ def data_cache_enabled(parameters):
 # ---------------------------------------------------------------
 # Months on disk
 # ---------------------------------------------------------------
+
+# ---------------------------------------------------------------
+# Several training sources (regions, possibly of different domains); per-block data directories
+# ---------------------------------------------------------------
+
+# keys an entry of ``train_load_data.extra_sources`` may set; everything else is inherited
+_SOURCE_KEYS = {"region", "years", "year", "months", "month", "freq", "data_dirs"}
+_DATA_DIR_KEYS = {"fp_datadir", "met_datadir", "topog_datadir", "landcover_datadir"}
+
+
+def datapath_args_for(block, datapath_args):
+    """Apply a load-data block's own ``data_dirs`` (optional) to the loader's path arguments.
+
+    ``train_load_data``, ``test_load_data`` and every entry of ``train_load_data.extra_sources``
+    may carry a ``data_dirs`` dict with the keys of the top-level ``data_dirs`` block
+    (``met_datadir``, ...). It overrides the top-level paths for that block only, e.g. for a test
+    region of another domain, whose meteorology is stored elsewhere, without touching the paths
+    (and so the cache keys) of the training months.
+
+    Returns:
+        tuple: ``(block without "data_dirs", datapath_args with the overrides)``, both copies.
+    """
+    block = dict(block)
+    own = block.pop("data_dirs", None) or {}
+    unknown = set(own) - _DATA_DIR_KEYS
+    if unknown:
+        raise ValueError(f"data_dirs: unknown keys {sorted(unknown)}; allowed: {sorted(_DATA_DIR_KEYS)}")
+    args = copy.deepcopy(datapath_args)
+    if own:
+        # the same mapping as the top-level block (resolve_datapath_args only reads its argument)
+        resolved = PathContext(model_save_dir=".", model_name="_dataload", model_path=Path(".")
+                               ).resolve_datapath_args({"data_dirs": own})
+        if "fp_datadir" in resolved:
+            args["fp_datadir"] = resolved["fp_datadir"]
+        args.setdefault("met_args", {}).update(resolved["met_args"])
+        args.setdefault("topog_args", {}).update(resolved["topog_args"])
+    return block, args
+
+
+def training_sources(train_load_data_params, datapath_args):
+    """The training set as ``[(load_data_params, datapath_args), ...]``, one entry per source.
+
+    The first source is ``train_load_data`` itself (without ``extra_sources``). Each entry of the
+    optional list ``train_load_data.extra_sources`` adds one: a dict with a ``region`` and,
+    optionally, its own ``years`` / ``months`` / ``freq`` and ``data_dirs`` (see
+    :func:`datapath_args_for`); every other loading key (``size``, ``met_args``, ...) is inherited
+    from ``train_load_data``, so a source is cached under the key of a single-region run with that
+    configuration and reuses its months. The sources may belong to DIFFERENT domains (e.g. SAHARA
+    and SOUTHAMERICA): each sample then gets the auxiliary CAMS data of its own domain
+    (:func:`bundle_from_entries`); the samples are identified by their time, so the sources must
+    not share time stamps. The test set never uses the extra sources, and the standard (uncached)
+    pipeline does not support them (:func:`require_data_cache_for_sources`).
+    """
+    primary, primary_args = datapath_args_for(
+        {k: v for k, v in train_load_data_params.items() if k != "extra_sources"}, datapath_args)
+    sources = [(primary, primary_args)]
+    for i, extra in enumerate(train_load_data_params.get("extra_sources", None) or []):
+        where = f"train_load_data.extra_sources[{i}]"
+        if not isinstance(extra, dict) or not extra.get("region"):
+            raise ValueError(f"{where} must be a dict with a 'region'")
+        unknown = set(extra) - _SOURCE_KEYS
+        if unknown:
+            raise ValueError(f"{where}: unknown keys {sorted(unknown)}; allowed: {sorted(_SOURCE_KEYS)}")
+        params = dict(primary)
+        for own, inherited in (("years", "year"), ("year", "years"), ("months", "month"), ("month", "months")):
+            if own in extra:
+                params.pop(inherited, None)
+        params.update({k: v for k, v in extra.items() if k != "data_dirs"})
+        # the source's data_dirs apply on top of the TOP-LEVEL paths, not on the primary block's own
+        sources.append(datapath_args_for({**params, "data_dirs": extra.get("data_dirs", None)}, datapath_args))
+    return sources
+
+
+def require_data_cache_for_sources(parameters):
+    """Fail loudly when ``extra_sources`` or a per-block ``data_dirs`` is used without the month cache."""
+    if data_cache_enabled(parameters):
+        return
+    train, test = parameters.get("train_load_data", {}) or {}, parameters.get("test_load_data", {}) or {}
+    if train.get("extra_sources"):
+        raise ValueError('train_load_data.extra_sources (several training regions / domains) needs the '
+                         'month-cache pipeline: set "data_cache": {"enabled": true}')
+    if "data_dirs" in train or "data_dirs" in test:
+        raise ValueError('a data_dirs block inside train_load_data / test_load_data needs the month-cache '
+                         'pipeline: set "data_cache": {"enabled": true} (or use the top-level data_dirs)')
+
+
+def _source_label(params):
+    region = params.get("region", "BRAZIL")
+    return "+".join(region) if isinstance(region, (list, tuple)) else str(region)
+
 
 class MonthEntry(NamedTuple):
     cache: MonthCache
@@ -245,14 +339,32 @@ def load_lean_dual_data(parameters, train_load_data_params, test_load_data_param
     print(f"Month cache: {settings['dir']} (rebuild={settings['rebuild']})")
     cluster = {}
     train_month_mins, test_month_mins = {}, {}
+    # the training set: train_load_data plus its optional extra_sources (several regions / domains);
+    # the test set inherits train_load_data's keys but never its extra sources
+    sources = training_sources(train_load_data_params, datapath_args)
+    test_params, test_args = datapath_args_for(
+        {k: v for k, v in test_load_data_params.items() if k != "extra_sources"}, datapath_args)
     start = time.perf_counter()
-    train_entries, train_failed = ensure_months_cached(
-        train_load_data_params, input_variables, datapath_args, background_params, settings["dir"],
-        rebuild=settings["rebuild"], verbose=verbose, loading_times_out=train_month_mins, cluster=cluster)
+    train_entries, train_failed, train_sources = [], [], []
+    for params, source_args in sources:
+        prefix = f"{_source_label(params)}:" if len(sources) > 1 else ""
+        if prefix:
+            print(f"Month cache: training source {_source_label(params)}, years {params.get('years', params.get('year'))}")
+        mins = {}
+        entries, failed = ensure_months_cached(
+            params, input_variables, source_args, background_params, settings["dir"],
+            rebuild=settings["rebuild"], verbose=verbose, loading_times_out=mins, cluster=cluster)
+        train_month_mins.update({prefix + k: v for k, v in mins.items()})
+        train_entries.extend(entries)
+        train_failed.extend(prefix + f for f in failed)
+        train_sources.append({
+            "region": params.get("region", "BRAZIL"), "years": sorted({e.year for e in entries}),
+            "domain": entries[0].cache.read_meta(entries[0].year, entries[0].month)["domain"] if entries else None,
+            "n_months": len(entries), "n_samples": int(sum(e.n_samples for e in entries))})
     train_load_mins = (time.perf_counter() - start) / 60
     start = time.perf_counter()
     test_entries, test_failed = ensure_months_cached(
-        test_load_data_params, input_variables, datapath_args, background_params, settings["dir"],
+        test_params, input_variables, test_args, background_params, settings["dir"],
         rebuild=settings["rebuild"], verbose=verbose, loading_times_out=test_month_mins, cluster=cluster)
     test_load_mins = (time.perf_counter() - start) / 60
     if cluster.get("cluster") is not None:
@@ -265,6 +377,10 @@ def load_lean_dual_data(parameters, train_load_data_params, test_load_data_param
     print(f"Month cache: {len(train_entries)} training months = {len(train_inputs)} samples, "
           f"{len(test_entries)} test months = {test_inputs.sizes['fp_time']} samples "
           f"(read in {time.perf_counter() - start:.0f} s)")
+    if len(train_sources) > 1:
+        for s in train_sources:
+            print(f"  training source {s['region']} (domain {s['domain']}), years {s['years']}: "
+                  f"{s['n_months']} months, {s['n_samples']} samples")
     for name, failed in (("training", train_failed), ("test", test_failed)):
         if failed:
             print(f"FLAG: {len(failed)} {name} month(s) could not be loaded and are missing: {failed}")
@@ -281,6 +397,7 @@ def load_lean_dual_data(parameters, train_load_data_params, test_load_data_param
         "test_caches": sorted({str(e.cache.dir) for e in test_entries}),
         "n_train_months": len(train_entries), "n_test_months": len(test_entries),
         "failed_months": train_failed + test_failed,
+        "train_sources": train_sources,
     }
     summary = {
         "train_load_mins": train_load_mins, "test_load_mins": test_load_mins,
@@ -288,6 +405,10 @@ def load_lean_dual_data(parameters, train_load_data_params, test_load_data_param
         "n_train_samples": int(len(train_inputs)), "n_test_samples": int(len(test_fp_data.time)),
         "train_month_mins": train_month_mins, "test_month_mins": test_month_mins,
     }
+    if len(train_sources) > 1:
+        summary["train_sources"] = "; ".join(
+            f"{s['region']} ({s['domain']}) {'-'.join(s['years'][:1] + s['years'][-1:])}: {s['n_samples']} samples"
+            for s in train_sources)
     return bundle, summary
 
 
@@ -296,16 +417,25 @@ def bundle_from_entries(train_entries, test_entries, threads=1):
 
     Everything is built as the standard loader builds it (months concatenated and sorted by
     time), except ``train_inputs``, which is a :class:`LazyMonthInputs`.
+
+    The training months may come from regions of DIFFERENT domains (``train_load_data.extra_sources``):
+    the auxiliary CAMS data, which is per domain and month, is then attached per sample from the
+    sample's own domain (:func:`_aux_per_sample_by_domain`). The test months must be of one domain.
     """
-    for entries in (train_entries, test_entries):
-        domains = sorted({e.cache.read_meta(e.year, e.month)["domain"] for e in entries})
-        if len(domains) > 1:
-            raise ValueError(f"regions {sorted({e.region for e in entries})} belong to different domains "
-                             f"{domains}: the auxiliary CAMS data is per domain, load them separately")
+    test_domains = sorted({e.cache.read_meta(e.year, e.month)["domain"] for e in test_entries})
+    if len(test_domains) > 1:
+        raise ValueError(f"test regions {sorted({e.region for e in test_entries})} belong to different domains "
+                         f"{test_domains}: the test set must be of one domain (the auxiliary CAMS data is per domain)")
     train_small = _read_small(train_entries, threads)
+    train_domains = [e.cache.read_meta(e.year, e.month)["domain"] for e in train_entries]
+    if len(set(train_domains)) > 1:
+        print(f"Month cache: the training regions {sorted({e.region for e in train_entries})} span the domains "
+              f"{sorted(set(train_domains))}: each sample gets the auxiliary CAMS data of its own domain")
+        train_aux = _aux_per_sample_by_domain(train_entries, train_small, train_domains)
+    else:
+        train_aux = _aux_once(train_entries, train_small)
     train_fp_data, _, train_bgs, train_aux = concat_months(
-        None, [s["fp_xr"] for s in train_small], [s["background"] for s in train_small],
-        _aux_once(train_entries, train_small))
+        None, [s["fp_xr"] for s in train_small], [s["background"] for s in train_small], train_aux)
     train_inputs = LazyMonthInputs(train_entries, [s["inputs_header"] for s in train_small],
                                    [s["fp_time"] for s in train_small])
     if not np.array_equal(train_fp_data.time.values, train_inputs.fp_time):
@@ -329,13 +459,40 @@ def _read_small(entries, threads):
 
 
 def _aux_once(entries, small):
-    """The auxiliary CAMS data is per (domain, month): one entry per month, whatever the regions."""
+    """The auxiliary CAMS data is per (domain, month): one entry per month, whatever the regions
+    (the entries must be of ONE domain)."""
     seen, out = set(), []
     for entry, s in zip(entries, small):
         if (entry.year, entry.month) not in seen:
             seen.add((entry.year, entry.month))
             out.append(s["aux_data"])
     return out
+
+
+def _aux_per_sample_by_domain(entries, small, domains):
+    """Auxiliary CAMS data of a training set whose months come from several domains: ONE entry per
+    sample, each sample carrying the data of its own domain and month.
+
+    Per domain, the months' data (one entry per month, :func:`_aux_once`) is reindexed to the times
+    of that domain's samples exactly as ``format_aux_data`` does afterwards for a single domain
+    (forward fill within 32 days); the per-domain results are combined along time. ``format_aux_data``
+    on the sample times is then the identity, so every sample's auxiliary channels are what a
+    single-domain run of its domain would give it. The scalar ``lat`` / ``lon`` coordinates (the
+    midpoints of the curtains) differ between domains; the first domain's are kept.
+
+    Returns:
+        list: ``[per-sample Dataset]`` (or ``[None]`` without auxiliary data), for ``concat_months``.
+    """
+    parts = []
+    for domain in sorted(set(domains)):
+        index = [i for i, d in enumerate(domains) if d == domain]
+        monthly = _aux_once([entries[i] for i in index], [small[i] for i in index])
+        if monthly[0] is None:
+            return [None]
+        times = np.sort(np.concatenate([small[i]["fp_time"] for i in index]))
+        monthly = xr.concat(monthly, dim="time").sortby("time")
+        parts.append(monthly.reindex(time=times, method="ffill", tolerance=pd.Timedelta("32D")))
+    return [xr.concat(parts, dim="time", coords="minimal", compat="override").sortby("time")]
 
 
 # ---------------------------------------------------------------

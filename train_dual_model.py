@@ -502,6 +502,8 @@ def load_dual_data(parameters, verbose=True, return_summary=False):
 
     # a larger input domain ("input_domain" in train_load_data) is applied by the month-cache pipeline only
     require_data_cache_for_input_domain(parameters)
+    # several training regions / domains (train_load_data.extra_sources) and per-block data_dirs: month cache only
+    gates_lean.require_data_cache_for_sources(parameters)
     print("Loading shared met, fp AND BACKGROUND data (train + test)...")
     client, cluster = gates_training.make_cluster()
 
