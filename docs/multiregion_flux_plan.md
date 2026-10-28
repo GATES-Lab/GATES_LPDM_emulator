@@ -208,6 +208,14 @@ Checked in `/projects/b5bn/data/fluxes_archive`:
 - [x] Step 8: per-region flux config in `build_region_configs`
 - [x] Step 9: test-only flux loading in `load_multiregion_data`
 - [x] Step 10: `transform_test_region` attaches `flux` for metrics, not the loader
-- [ ] Step 11: per-region flux metrics, no aggregate
-- [ ] Step 12: loading summary of regions with flux
+- [x] Step 11: per-region flux metrics, no aggregate
+- [x] Step 12: loading summary of regions with flux
 - [ ] Step 13: templates and docs
+
+## Decisions log
+
+- Step 10: test flux goes into the loader only when the loss is flux-weighted. Otherwise it is attached to `test_fp_ds` after the loader is built; the loader stacks its variables at build time, so this can't change the batches. Test loader labels must equal the training labels.
+- Step 10, not handled: with a flux-weighted *test* loss, a test region with missing flux (e.g. CHINA outside 2016) feeds NaN flux into the test loss. Only training flux is checked. The thresholded MSE drops NaN pixels; a loss that multiplies by flux would give NaN.
+- Step 11: per-region flux metrics are logged as `metrics_fluxes/{region}/{metric}`, only for regions with valid flux. `flux` is dropped before the aggregate concat, so the aggregate never gets flux metrics and regions with and without flux concat cleanly. The per-region `write_to_file` line includes flux metrics when present.
+- Step 11: `define_metric` for `metrics_fluxes/{region}/{metric}` uses the keys of `losses["metrics_fluxes"]`, matching the existing `metrics_fluxes_static` definitions. `compute_mfs_metrics` also returns `true_mean` and `predicted_mean`, which are logged but rely on the `metrics_*` wildcard, the same as for the static metrics.
+- Step 12: the summary is built and written by the caller (`train_and_save_model_multiregion`, right after the "Successfully loaded all region data" line), not inside `load_multiregion_data`, which has no `paths_ctx` and writes nothing to file (neither does the single-region loading). One short line per region from the new `summarise_region_flux`: `test flux yes`, `NO (all NaN)` or `off`, plus `flux_time`. The full resolved settings are already saved as `resolved_region_flux` (Step 8), so they aren't repeated.

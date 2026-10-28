@@ -301,6 +301,33 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, train_
     return all_train_inputs, all_train_fps, test_regions
 
 
+def summarise_region_flux(test_regions, resolved_region_flux):
+    """
+    One summary line per region saying whether its test set has any non-NaN flux,
+    i.e. whether the region will get flux metrics.
+
+    Args:
+        test_regions (list of dict): From load_multiregion_data; each has 'name' and 'fp_xr'.
+        resolved_region_flux (dict): Region name -> resolved flux settings (or None),
+            from build_region_configs.
+
+    Returns:
+        list of str: e.g. "  0-SAHARA: test flux yes (flux_time=2016)".
+    """
+    lines = []
+    for region in test_regions:
+        name, test_fps = region["name"], region["fp_xr"]
+        flux_cfg = resolved_region_flux.get(name) or {}
+        if not flux_cfg or not flux_cfg.get("get_flux", True):
+            lines.append(f"  {name}: test flux off")
+            continue
+        has_flux = (isinstance(test_fps, xr.Dataset) and "flux" in test_fps
+                    and bool(test_fps["flux"].notnull().any()))
+        lines.append(f"  {name}: test flux {'yes' if has_flux else 'NO (all NaN)'} "
+                     f"(flux_time={flux_cfg.get('flux_time')})")
+    return lines
+
+
 def transform_test_region(test_inputs, test_fps, scalers, add_nan_mask, batch_size, fp_labels=None):
     """
     Transform a single test region's inputs and footprints using already-fitted scalers
@@ -447,11 +474,16 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
                 "eval": computed_metrics_r["eval_metrics"],
                 "trans_eval": computed_metrics_r["transformed_eval_metrics"],
                 "static_mf_eval": computed_metrics_r["static_mf_eval_metrics"],
+                # None if the region has no valid flux
+                "flux_eval": computed_metrics_r.get("flux_eval_metrics"),
             }
             all_test_fp_datasets.append(fp_ds_r)
 
         # --- Aggregate metrics ---
-        fp_ds_all = xr.concat(all_test_fp_datasets, dim="time")
+        # flux metrics are per region only: drop flux so the aggregate never computes them
+        # (this also lets regions with and without flux be concatenated)
+        fp_ds_all = xr.concat(
+            [ds.drop_vars("flux", errors="ignore") for ds in all_test_fp_datasets], dim="time")
         avg_test_loss_agg = float(np.mean([v["test_loss"] for v in region_log.values()]))
 
         losses["train"].append(avg_train_loss)
@@ -496,6 +528,11 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
                     logging_dict.update({
                         f"metrics_fluxes_static/{region_name}/{flux_mode}/{k}": v
                         for k, v in metrics.items()})
+                # metrics against the region's loaded flux, e.g. "metrics_fluxes/1-BRAZIL/mae"
+                if rd["flux_eval"] is not None:
+                    logging_dict.update({
+                        f"metrics_fluxes/{region_name}/{k}": v
+                        for k, v in rd["flux_eval"].items()})
                 logging_dict[f"test_loss/{region_name}"] = rd["test_loss"]
 
             wandb.log(logging_dict, step=epoch)
@@ -509,9 +546,10 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
                     f"Aggregate Test Loss: {avg_test_loss_agg:.4f}")
         write_to_file(log_text, paths_ctx.updates_path)
         for region_name, rd in region_log.items():
+            flux_text = f", metrics_fluxes={rd['flux_eval']}" if rd["flux_eval"] is not None else ""
             write_to_file(
                 f"  {region_name}: test_loss={rd['test_loss']:.4f}, "
-                f"metrics_original={rd['eval']}", paths_ctx.updates_path)
+                f"metrics_original={rd['eval']}{flux_text}", paths_ctx.updates_path)
 
         # Periodic plotting — from the first test region
         if epoch % model_ctx.epochs_visualise == 0:
@@ -659,6 +697,12 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
         paths_ctx.updates_path)
     print(f"Train samples: {num_train_samples}, total test samples: {num_test_samples_total}")
 
+    # which regions will get flux metrics (missing flux files only warn while loading)
+    flux_summary = "Flux per region:\n" + "\n".join(
+        summarise_region_flux(test_regions, parameters["resolved_region_flux"]))
+    write_to_file(flux_summary, paths_ctx.updates_path)
+    print(flux_summary)
+
     if use_wandb:
         wandb.summary.update({
             "num_training_samples": num_train_samples,
@@ -786,6 +830,10 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
                     wandb.define_metric(f"metrics_fluxes_static/aggregate/{flux_mode}/{metric_name}", step_metric="epoch")
                     for region_name in region_names:
                         wandb.define_metric(f"metrics_fluxes_static/{region_name}/{flux_mode}/{metric_name}", step_metric="epoch")
+        # Real-flux metrics: per region only, no aggregate ({region}/{metric})
+        for metric_name in losses["metrics_fluxes"]:
+            for region_name in region_names:
+                wandb.define_metric(f"metrics_fluxes/{region_name}/{metric_name}", step_metric="epoch")
 
     print("Successfully set up model. Starting multiregion training loop.")
 
