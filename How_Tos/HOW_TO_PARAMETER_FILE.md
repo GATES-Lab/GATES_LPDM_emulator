@@ -221,6 +221,7 @@ Both scalers take the log₁₀ of the non-zero footprint values and leave zeros
 ```json
 "flux": {
     "get_flux": true,
+    "flux_time": null,
     "convert_units": true,
     "convert_units_args": {"unit_multiplier": 1e9}
 }
@@ -229,13 +230,32 @@ Both scalers take the log₁₀ of the non-zero footprint values and leave zeros
 | Field | Description |
 |-------|-------------|
 | `get_flux` | If `true`, loads the flux/emissions data for the domain and years, crops it to match each footprint, and appends it as a `"flux"` variable on the footprint dataset. Defaults to `true` when the `flux` section is present. |
+| `flux_time` | (optional) Which flux each footprint gets (table below). Defaults to `null`. |
 | `convert_units` | If `true`, rescales the flux field via `transform_flux` so its units match the footprint units. If `true` but no `convert_units_args` are passed, a warning is raised and no conversion occurs. Defaults to `false`. |
 | `convert_units_args.unit_multiplier` | Constant multiplier applied to the flux field when `convert_units` is `true` (e.g. `1e9`). Defaults to `1` (no change). |
-| `year` | (optional) Load the flux for this year instead of the footprint year. Useful when there is no flux file for a footprint year. |
+| `year` | (optional) Load the flux for this year instead of the footprint year. Useful when there is no flux file for a footprint year. Ignored if `flux_time` is set. |
 | `append_to_fp` | (optional) If `false`, the flux is loaded but not added to the footprint dataset, so the flux losses and metrics don't see it. Defaults to `true`. |
 | `search_others` | (optional) If `true`, looks for the flux in other directories when it isn't in the default one. Defaults to `true`. |
 
-> **Note:** The same `flux` block is reused for both the train and test data loads. A `"flux"` variable on the test outputs is what triggers the extra flux-weighted evaluation metrics. Footprints with no matching flux are dropped.
+`flux_time` values:
+
+| `flux_time` | Flux used |
+|---|---|
+| `null` (default) | The footprint year's file. Each footprint gets the flux snapshot from its own calendar month. |
+| `"2016"` | The 2016 file, averaged over time (a file with no time dimension is used as is). The same field is used for every footprint, whatever its year. |
+| `"2016-01"` | January 2016 from the 2016 file, used for every footprint. A file with no time dimension is used as is, with a warning. |
+
+A fixed `flux_time` makes flux metrics comparable across months and years, and lets years with no flux file use another year's flux. Anything other than `"YYYY"` or `"YYYY-MM"` raises an error.
+
+**Missing flux.** Missing flux never stops training and never removes footprints: they are kept with NaN flux, and a warning is raised. This happens when:
+
+- there is no flux file for the year,
+- the `flux_time` month is not in the file,
+- a footprint's month has no snapshot in its year's file (`flux_time: null`).
+
+Flux metrics are computed only on footprints with flux, and are skipped if none have any. A flux-weighted loss (`weight_label: "flux"`) is different: it needs flux for every training footprint, so training stops with an error if any training footprint has no flux.
+
+> **Note:** In single-region training the same `flux` block is used for both the train and test loads. A `"flux"` variable on the test outputs is what triggers the flux evaluation metrics (`metrics_fluxes/...` in W&B). For multi-region training (per-region overrides, test-only loading) see [HOW_TO_MULTIREGION.md](HOW_TO_MULTIREGION.md#flux).
 
 ---
 
