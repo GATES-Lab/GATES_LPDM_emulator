@@ -680,6 +680,7 @@ class NodeSatelliteProcessor(nn.Module):
         dropout: float=0,
         scatter: str="mean",
         residuals: bool = False,
+        static_dim: int = 0,
     ):
         """Initialize the node processor.
 
@@ -695,8 +696,17 @@ class NodeSatelliteProcessor(nn.Module):
             scatter (str, optional): Aggregation to use for incoming edge messages,
                 "sum" or "mean". Defaults to "mean".
             residuals (bool, optional): If True, add x back to node_mlp_2 output (residual update). Defaults to False.
+            static_dim (int, optional): Number of trailing node channels that are passed
+                through unchanged. Both MLPs still read the full node vector, but
+                ``node_mlp_2`` outputs only the first ``in_dim_node - static_dim``
+                channels (and the residual, if set, applies only to those). Defaults to 0.
+
+        Raises:
+            ValueError: If ``static_dim`` is not in ``[0, in_dim_node)``.
         """
         super().__init__()
+        if not 0 <= static_dim < in_dim_node:
+            raise ValueError(f"static_dim must be in [0, in_dim_node={in_dim_node}), got {static_dim}.")
         #super(NodeProcessor, self).__init__()
         #super(nn.Module, self).__init__()
 
@@ -707,11 +717,12 @@ class NodeSatelliteProcessor(nn.Module):
         )
         # MLP 2 takes the aggregated outputs and the node features at destination node
         self.node_mlp_2 = MLP(
-            2*in_dim_node, in_dim_node, hidden_dim, hidden_layers, norm_type, dropout=dropout
+            2*in_dim_node, in_dim_node - static_dim, hidden_dim, hidden_layers, norm_type, dropout=dropout
         )
 
         self.scatter=scatter
         self.residuals=residuals
+        self.static_dim=static_dim
         print("hello")
 
 
@@ -748,6 +759,12 @@ class NodeSatelliteProcessor(nn.Module):
         #print(out.size(), x.size())
         #print("mlp 2")
         out = self.node_mlp_2(out)
+
+        if self.static_dim:
+            # only the first in_dim_node - static_dim channels are updated
+            if self.residuals:
+                out = out + x[:, :-self.static_dim]
+            return cat([out, x[:, -self.static_dim:]], dim=-1)
 
         if self.residuals:
             out += x  # residual connection
@@ -893,7 +910,7 @@ def build_satellite_graph_processor_block(
     norm_type: str = "LayerNorm",
     dropout: float=0,
     scatter: str="mean",disaggregated=False, attention=False,attention_mask=None, residuals=False,
-    residual_edges: bool = False
+    residual_edges: bool = False, static_dim: int = 0
 ) -> torch.nn.Module:
     """Build a satellite Graph Net Block (edge model + node model) as a ``MetaLayer``.
 
@@ -931,13 +948,19 @@ def build_satellite_graph_processor_block(
             input edge features back to the edge MLP output). The edge model is shared
             by every node-model variant, so this applies with ``disaggregated`` and
             ``attention`` too. Defaults to False.
+        static_dim (int, optional): Number of trailing node channels the node model
+            passes through unchanged (see ``NodeSatelliteProcessor``). Only supported by
+            the default ``NodeSatelliteProcessor``. Defaults to 0.
 
     Returns:
         torch.nn.Module: ``MetaLayer`` for the graph processing block.
 
     Raises:
         AssertionError: If ``attention`` is True but ``attention_mask`` is None.
+        ValueError: If ``static_dim > 0`` with ``disaggregated`` or ``attention``.
     """
+    if static_dim and (disaggregated or attention):
+        raise ValueError("static_dim > 0 is only supported by the default NodeSatelliteProcessor (not disaggregated or attention).")
     #print("build", batched_data)
     if disaggregated:
         return MetaLayer(
@@ -964,7 +987,8 @@ def build_satellite_graph_processor_block(
                 in_dim_node, in_dim_edge, hidden_dim_edge, hidden_layers_edge, norm_type, dropout=dropout, residuals=residual_edges
             ),
             node_model=NodeSatelliteProcessor(
-                in_dim_node, in_dim_edge, hidden_dim_node, hidden_layers_node, norm_type, dropout=dropout, scatter=scatter, residuals=residuals
+                in_dim_node, in_dim_edge, hidden_dim_node, hidden_layers_node, norm_type, dropout=dropout, scatter=scatter, residuals=residuals,
+                static_dim=static_dim
             ),
         )
             
@@ -1104,7 +1128,7 @@ class GraphSatelliteProcessor(nn.Module):
         norm_type: str = "LayerNorm",
         dropout: float = 0,
         scatter: str="mean", disaggregated=False, attention=False, attention_mask=None, residuals: bool = False,
-        residual_edges: bool = False
+        residual_edges: bool = False, static_dim: int = 0
     ):
         """Initialize the satellite graph processor.
 
@@ -1143,6 +1167,9 @@ class GraphSatelliteProcessor(nn.Module):
             residual_edges (bool, optional): If True, each block's edge update is
                 residual (adds the input edge features back to the edge MLP output).
                 Applies to every node-model variant. Defaults to False.
+            static_dim (int, optional): Number of trailing node channels that no block
+                updates (they still condition every message). Only supported by the
+                default ``NodeSatelliteProcessor``. Defaults to 0.
         """
         super().__init__()
         #super(GraphProcessor, self).__init__()
@@ -1161,7 +1188,7 @@ class GraphSatelliteProcessor(nn.Module):
                     hidden_layers_node,
                     hidden_layers_edge,
                     norm_type, dropout=dropout, scatter=scatter,disaggregated=disaggregated, attention=attention, attention_mask=attention_mask, residuals=residuals,
-                    residual_edges=residual_edges
+                    residual_edges=residual_edges, static_dim=static_dim
                 )
             )
 

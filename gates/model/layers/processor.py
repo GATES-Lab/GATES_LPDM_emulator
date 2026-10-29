@@ -30,7 +30,8 @@ class SatelliteProcessor(torch.nn.Module):
         mlp_norm_type: str = "LayerNorm",
         dropout: float=0,
         scatter: str="mean",disaggregated=False, attention=False,attention_mask=None, residuals: bool = False,
-        residual_edges: bool = False
+        residual_edges: bool = False,
+        mesh_static_dim: int = 0
     ):
         """Initialize the latent graph processor.
 
@@ -57,6 +58,7 @@ class SatelliteProcessor(torch.nn.Module):
             attention_mask (optional): <FILL IN>. Defaults to None.
             residuals (bool, optional): Whether to have the mesh-node update with residuals (change from the previous state) or not (replace the previous state). Applies to nodes only; see ``residual_edges``. Defaults to False.
             residual_edges (bool, optional): Whether to have the mesh-edge update with residuals (add the edge MLP output to the previous edge features) or not (replace them). Defaults to False.
+            mesh_static_dim (int, optional): Number of trailing mesh-node channels that the processor never updates; they still condition every message. Only supported by the default node model (not ``disaggregated`` or ``attention``). Defaults to 0.
         """
         super().__init__()
         # Build the default graph
@@ -72,7 +74,7 @@ class SatelliteProcessor(torch.nn.Module):
             hidden_layers_processor_node,
             hidden_layers_processor_edge,
             mlp_norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention,attention_mask=attention_mask, residuals=residuals,
-            residual_edges=residual_edges
+            residual_edges=residual_edges, static_dim=mesh_static_dim
         )
 
     def forward(self, x: torch.Tensor, edge_index, edge_attr, batch=None) -> torch.Tensor:

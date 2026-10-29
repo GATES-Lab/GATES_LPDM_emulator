@@ -57,6 +57,7 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
         use_dynamic_encoder=True,
         grid_skip_dim=None,
         grid_skip_hidden_dim=None,
+        mesh_static_dim=0,
         verbose=False
     ):
         """Initialize GATES.
@@ -157,13 +158,20 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
                 to that node's decoder input. Defaults to None (no grid skip).
             grid_skip_hidden_dim (int, optional): Hidden dimension of the grid-skip
                 MLP. If None, defaults to ``hidden_dim_processor_node``. Defaults to None.
+            mesh_static_dim (int, optional): Number of trailing mesh-node channels that
+                the processor never updates: they carry the encoder output straight to
+                the decoder, while still conditioning every processor message. Only
+                supported by the default node model (not ``attention`` or
+                ``disaggregated``). Defaults to 0.
             verbose (bool, optional): If True, prints a summary of the optional skip
                 connections during setup. Defaults to False.
 
         Raises:
             NotImplementedError: If ``concat_decoder_neighbours`` is True.
-            ValueError: If ``grid_skip_dim`` is not a positive int, or the static
-                encoder is combined with dynamic edges.
+            ValueError: If ``grid_skip_dim`` is not a positive int, if
+                ``mesh_static_dim`` is not an int in ``[0, node_dim)`` or is set with
+                ``attention`` or ``disaggregated``, or if the static encoder is combined
+                with dynamic edges.
         """
         
         super().__init__()
@@ -174,6 +182,10 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             )
         if grid_skip_dim is not None and (isinstance(grid_skip_dim, bool) or not isinstance(grid_skip_dim, int) or grid_skip_dim <= 0):
             raise ValueError(f"grid_skip_dim must be a positive int or None, got {grid_skip_dim!r}.")
+        if isinstance(mesh_static_dim, bool) or not isinstance(mesh_static_dim, int) or not 0 <= mesh_static_dim < node_dim:
+            raise ValueError(f"mesh_static_dim must be an int in [0, node_dim={node_dim}), got {mesh_static_dim!r}.")
+        if mesh_static_dim and (attention or disaggregated):
+            raise ValueError("mesh_static_dim > 0 is only supported by the default node model, not attention=True or disaggregated=True.")
         #print(f"forecast - dropout {dropout}")
         self.feature_dim = feature_dim
         if output_dim is None:
@@ -235,8 +247,11 @@ class GraphSatelliteForecaster(torch.nn.Module): #, PyTorchModelHubMixin
             hidden_dim_processor_node=hidden_dim_processor_node,
             hidden_layers_processor_edge=hidden_layers_processor_edge,
             mlp_norm_type=norm_type, dropout=dropout, scatter=scatter, disaggregated=disaggregated, attention=attention, attention_mask=self.encoder.attention_mask, residuals=residuals,
-            residual_edges=residual_edges
+            residual_edges=residual_edges, mesh_static_dim=mesh_static_dim
         )
+        if verbose and mesh_static_dim:
+            print(f"set up mesh static channels: the last {mesh_static_dim} of {node_dim} mesh-node channels "
+                  f"are not updated by the processor")
         print("set up decoder")
 
         self.decoder = SatelliteDecoder(
