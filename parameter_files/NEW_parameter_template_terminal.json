@@ -35,7 +35,7 @@
         "static_variables":["lat_coords", "lon_coords", "topog", "xy_distance_centre"],
         "time_deltas":[3],
         "chunk_size":3,
-        "load_into_memory":false,
+        "load_into_memory":false
     },
 
     "input_scaler" : {
