@@ -316,12 +316,16 @@ def nmae(true, pred, *, spatial_shape=None, ignore_mask=None,
             ``true``/``pred``. True means ignore. Defaults to None.
         nonzero (bool, optional): If True, exclude cells where either array is zero.
             Defaults to False.
-        reduce (str, optional): "mean" to return a scalar, None to return
-            per-sample (N,) array. Defaults to "mean".
+        reduce (str, optional): "mean" or "median" to return a scalar over samples,
+            None to return per-sample (N,) array. The mean is dominated by samples
+            whose true sum is near zero (e.g. a footprint with a handful of active
+            cells can score in the hundreds); the median is robust to them.
+            Defaults to "mean".
         threshold: Ignored. For compatibility with ``compute_metrics`` kwargs.
 
     Returns:
-        float or np.ndarray: Scalar if ``reduce="mean"``, else shape (N,) array.
+        float or np.ndarray: Scalar if ``reduce`` is "mean" or "median", else shape
+        (N,) array.
     """
     true_np, pred_np = _resolve_inputs(true, pred, spatial_shape)
     ignore_np = _normalize_ignore_mask(ignore_mask, spatial_shape) if ignore_mask is not None else None
@@ -337,10 +341,12 @@ def nmae(true, pred, *, spatial_shape=None, ignore_mask=None,
     
     scores = np.divide(ae_sum, true_sum, where=true_sum != 0, out=np.full_like(ae_sum, np.nan))
 
-    if reduce == "mean" and np.isnan(scores).all():
+    if reduce in ("mean", "median") and np.isnan(scores).all():
         return np.nan
     elif reduce == "mean":
         return float(np.nanmean(scores))
+    elif reduce == "median":
+        return float(np.nanmedian(scores))
     else:
         return scores
 
@@ -400,6 +406,7 @@ _all_metrics = {
         "mse": mse,
         "mae": mae,
         "nmae": nmae,
+        "nmae_median": nmae,
         "corrcoef": corrcoef,
         "corrcoef_log": corrcoef,
         "bias": bias,
@@ -414,8 +421,9 @@ def compute_footprint_metrics(true, pred, metrics=list(_all_metrics.keys()), spa
         pred (np.ndarray, torch.Tensor, or xr.DataArray): Predicted footprint array
             (as above).
         metrics (list[str], optional): List of metric names to compute. Supported:
-            "iou", "mse", "mae", "nmae", "corrcoef", "corrcoef_log", "bias".
-            Defaults to all keys in ``_all_metrics``.
+            "iou", "mse", "mae", "nmae", "nmae_median", "corrcoef", "corrcoef_log",
+            "bias". "nmae_median" is ``nmae`` with the per-sample scores reduced by
+            the median instead of the mean. Defaults to all keys in ``_all_metrics``.
         spatial_shape (tuple, optional): (H, W) tuple, required if true/pred are flat
             arrays that are not xarray DataArrays. Recommended when possible for
             better error checking, but will be inferred from dims if not provided.
@@ -448,6 +456,8 @@ def compute_footprint_metrics(true, pred, metrics=list(_all_metrics.keys()), spa
             metric_kwargs["log_transform"] = False
         elif metric == "corrcoef_log":
             metric_kwargs["log_transform"] = True
+        elif metric == "nmae_median":
+            metric_kwargs["reduce"] = "median"
         results[metric] = _all_metrics[metric](true_np, pred_np, spatial_shape=spatial_shape, ignore_mask=ignore_np, **metric_kwargs)
     return results
 

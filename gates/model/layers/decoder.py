@@ -86,7 +86,8 @@ class SatelliteDecoder(torch.nn.Module):
         use_checkpointing: bool = False,
         dropout=0,
         n_neighbours=3,
-        final_activation=None, concat_neighbours=False, idx_latlon=None, append_latlon=False, concat_neighbours_2=False
+        final_activation=None, concat_neighbours=False, idx_latlon=None, append_latlon=False, concat_neighbours_2=False,
+        grid_skip_dim=None
     ):
         """Initialize the decoder from latent graph to lat/lon graph.
 
@@ -133,6 +134,11 @@ class SatelliteDecoder(torch.nn.Module):
             concat_neighbours_2 (bool, optional): <FILL IN> — an alternative
                 neighbour-concatenation mode to ``concat_neighbours``, using
                 ``concat_group_by``. Defaults to False.
+            grid_skip_dim (int, optional): Number of extra per-grid-node features
+                passed to ``forward`` as ``grid_features``. They are concatenated to
+                each grid node's decoder input after the mesh-to-grid aggregation and
+                ``append_latlon``, and ``node_decoder`` is sized for them. Defaults to
+                None (no extra grid features).
 
         Raises:
             AssertionError: If ``append_latlon`` is True but ``idx_latlon`` is None.
@@ -150,6 +156,8 @@ class SatelliteDecoder(torch.nn.Module):
         self.concat_neighbours_2 = concat_neighbours_2
         self.n_neighbours = n_neighbours
         self.append_latlon = append_latlon
+        self.grid_skip_dim = grid_skip_dim
+        n_grid_skip = grid_skip_dim if grid_skip_dim is not None else 0
 
         if append_latlon:
             assert idx_latlon is not None, "pass idx latlon!"
@@ -289,7 +297,7 @@ class SatelliteDecoder(torch.nn.Module):
 
         else:
             self.node_decoder = MLP(
-            input_dim + 2*self.append_latlon,
+            input_dim + 2*self.append_latlon + n_grid_skip,
             output_dim,
             hidden_dim_decoder,
             hidden_layers_decoder,
@@ -298,7 +306,8 @@ class SatelliteDecoder(torch.nn.Module):
         )          # no normalising here?
 
     def forward(
-        self, processor_features: torch.Tensor, start_features: torch.Tensor
+        self, processor_features: torch.Tensor, start_features: torch.Tensor,
+        grid_features: torch.Tensor = None
     ) -> torch.Tensor:
         """Decode processed latent-graph features back onto the lat/lon graph.
 
@@ -306,10 +315,19 @@ class SatelliteDecoder(torch.nn.Module):
             processor_features (torch.Tensor): Processed features in shape [B*Nodes, Features].
             start_features (torch.Tensor): Original input features to the encoder,
                 with shape [B, Nodes, Features] (used only for ``batch_size`` and device).
+            grid_features (torch.Tensor, optional): Extra per-grid-node features, shape
+                [B, Nodes, grid_skip_dim], concatenated to the decoder input. Required
+                if and only if the decoder was built with ``grid_skip_dim``. Defaults to None.
 
         Returns:
             torch.Tensor: Decoded features, shape [B, Nodes, output_dim].
+
+        Raises:
+            ValueError: If ``grid_features`` is passed without ``grid_skip_dim`` set,
+                or missing when it is set.
         """
+        if (grid_features is None) != (self.grid_skip_dim is None):
+            raise ValueError("grid_features must be passed if and only if the decoder was built with grid_skip_dim.")
         #print("in satellite decoder forward")
         batch_size = start_features.shape[0]
 
@@ -375,6 +393,9 @@ class SatelliteDecoder(torch.nn.Module):
             normalised_idx_latlon = normalised_idx_latlon.to(start_features.device)
 
             processor_features = torch.cat([processor_features, normalised_idx_latlon], dim=1)
+
+        if grid_features is not None:
+            processor_features = torch.cat([processor_features, einops.rearrange(grid_features, "b n f -> b f n")], dim=1)
 
         #print(np.shape(processor_features))
 
