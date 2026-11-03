@@ -2,7 +2,7 @@
     "model_name" : "gates_template_multiregion",
     "verbose": true,
     "load_before_training": true,
-    "notes": "Template multi-region run (scripts/train_GATES_model_multiregion.py): SAHARA + BRAZIL, 50x50 domain, 2014-2015 train / 2016 test, fixed grid.",
+    "notes": "Template multi-region run (scripts/train_GATES_model_multiregion.py): SAHARA + BRAZIL (2014-2015 train / 2016 test) and CHINA + INDIA (2014 train / 2015 test, no later met), 50x50 domain, fixed grid. Flux for test metrics uses the 2016 flux for every region; INDIA (SOUTHASIA) has no flux files, so it sets get_flux false (per-region flux override).",
 
     "shared_load_parameters": {
         "size": 50,
@@ -19,7 +19,7 @@
             "test_load_data": {
                 "years": ["2016"],
                 "months": ["01", "02", "03"],
-                "freq": 100
+                "freq": 10
             }
         },
         "1-BRAZIL": {
@@ -30,8 +30,31 @@
             "test_load_data": {
                 "years": ["2016"],
                 "months": ["01", "02", "03"],
-                "freq": 100
+                "freq": 10
             }
+        },
+        "2-CHINA": {
+            "train_load_data": {
+                "years": ["2014"],
+                "region": "CHINA"
+            },
+            "test_load_data": {
+                "years": ["2015"],
+                "months": ["01", "02", "03"],
+                "freq": 10
+            }
+        },
+        "3-INDIA": {
+            "train_load_data": {
+                "years": ["2014"],
+                "region": "INDIA"
+            },
+            "test_load_data": {
+                "years": ["2015"],
+                "months": ["02", "03", "04"],
+                "freq": 10
+            },
+            "flux": {"get_flux": false}
         }
     },
 
@@ -41,6 +64,7 @@
 
     "flux":{
         "get_flux":true,
+        "flux_time":"2016",
         "convert_units":true,
         "convert_units_args":{"unit_multiplier":1e9}
     },
@@ -98,7 +122,7 @@
     "wandb": {
         "project": "gates-template-tests",
         "entity": "gates-lab",
-        "tags": ["SAHARA", "BRAZIL", "multiregion", "gpu", "template"]
+        "tags": ["SAHARA", "BRAZIL", "CHINA", "INDIA", "multiregion", "gpu", "template"]
     },
 
     "epochs" : {
