@@ -54,6 +54,7 @@ loss = criterion(pred, target, fp_batch=None, nan_mask=None)
 - `pred` and `target` are the model output and the true (transformed) footprint. In training they are flat, with shape `(B, H*W, 1)`; `(B, H, W)` and `(B, H*W)` also work.
 - `fp_batch` is the footprint batch from the dataloader, with shape `(B, H*W, V)` (or `(B, H, W, V)`). The `V` variables along the last axis are named by `fp_labels`, for example `["fp_transformed", "fp_original", "fp_nan_mask", "flux"]`. The first one is the target; the others are used by the losses for weighting and masking. See the [data guide](HOW_TO_DATA.md) for how the dataloader builds it.
 - Every loss accepts `fp_batch`, even the ones that don't use it, so the training loop can call them all the same way.
+- `"flux"` is only in `fp_labels` when flux is loaded for the training data (the [`flux` block](HOW_TO_PARAMETER_FILE.md#flux); in multi-region training, only when the loss is flux-weighted). A loss with `weight_label="flux"` needs flux for every training footprint: training stops with an error if any has none (a missing flux file or month).
 
 ### Ignoring pixels
 

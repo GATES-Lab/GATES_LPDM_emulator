@@ -94,11 +94,12 @@ def validate_and_predict(model, model_ctx, loader):
     return test_error / len(loader), all_preds
 
 
-def build_region_configs(regions_dict, shared_load_parameters):
+def build_region_configs(regions_dict, shared_load_parameters, global_flux_args=None):
     """
     Convert the parameter-file regions dict to the list format expected by
     load_multiregion_data, merging shared_load_parameters into each region's
-    train_load_data (region-specific keys override shared ones).
+    train_load_data (region-specific keys override shared ones), and resolving
+    each region's flux settings.
 
     Keys in regions_dict are integer strings optionally followed by a label
     ("0", "1", or "0-SAHARA", "1-BRAZIL"). The integer prefix determines sort
@@ -106,32 +107,59 @@ def build_region_configs(regions_dict, shared_load_parameters):
     the integer prefix and the resolved 'region' field, so that two entries for
     the same physical region (e.g. "0-SAHARA" and "1-SAHARA") remain distinct.
 
+    Flux: global_flux_args (the top-level "flux" block) is the default for every
+    region. A region can override it with its own "flux" block, placed next to
+    'train_load_data' (not inside it, since every train_load_data key is passed to
+    LoadSquareSatelliteData). The merge is one level deep: region keys replace
+    global keys, so a region that sets 'convert_units_args' replaces the whole
+    sub-dict. A region with "get_flux": false loads no flux.
+
     Args:
         regions_dict (dict): Keyed by strings like "0" or "0-SAHARA". Each value
-            has 'train_load_data' and 'test_load_data' sub-dicts.
+            has 'train_load_data' and 'test_load_data' sub-dicts, and optionally a
+            'flux' dict.
         shared_load_parameters (dict): Parameters common to all regions (e.g. 'size',
             'met_args'). Merged as base values; per-region keys take precedence.
+        global_flux_args (dict, optional): The top-level "flux" block, used as the
+            default flux settings for every region. Defaults to None.
 
     Returns:
-        list of dict: Each entry has 'name', 'train_load_data', and 'test_load_data'.
+        list of dict: Each entry has 'name', 'train_load_data', 'test_load_data',
+        and 'flux' (the region's resolved flux settings, or None if neither the
+        global block nor the region sets any).
+
+    Raises:
+        ValueError: If a region's 'flux' is not a dict, or if 'flux' is placed
+            inside 'train_load_data' or 'test_load_data'.
     """
     region_configs = []
     for key in sorted(regions_dict.keys(), key=lambda k: int(k.split("-")[0])):
         region_entry = regions_dict[key]
+        for load_key in ("train_load_data", "test_load_data"):
+            if "flux" in region_entry.get(load_key, {}):
+                raise ValueError(f"Region '{key}': 'flux' is inside '{load_key}'. Put the region's "
+                                 f"'flux' block next to 'train_load_data', not inside it.")
+        region_flux_override = region_entry.get("flux", {})
+        if not isinstance(region_flux_override, dict):
+            raise ValueError(f"Region '{key}': 'flux' should be a dict, got {type(region_flux_override).__name__}.")
+
         train_load = copy.deepcopy(shared_load_parameters)
         train_load.update(region_entry["train_load_data"])
         test_load = copy.deepcopy(region_entry.get("test_load_data", {}))
+        # deepcopy so regions don't share nested dicts (e.g. convert_units_args)
+        region_flux = {**copy.deepcopy(global_flux_args or {}), **copy.deepcopy(region_flux_override)}
         index = key.split("-")[0]
         region_label = train_load.get("region", key)
         region_configs.append({
             "name": f"{index}-{region_label}",
             "train_load_data": train_load,
             "test_load_data": test_load,
+            "flux": region_flux or None,
         })
     return region_configs
 
 
-def load_multiregion_data(region_configs, input_variables, datapath_args, flux_args=None, verbose=True, load_into_memory=True, use_wandb=False):
+def load_multiregion_data(region_configs, input_variables, datapath_args, train_flux=False, verbose=True, load_into_memory=True, use_wandb=False):
     """
     Loads each region's train and test data sequentially, then returns concatenated train data
     and a per-region list of test data.
@@ -144,13 +172,19 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, flux_a
     coordinates to keep every sample instead is left as a future improvement (see the
     commented-out lines).
 
+    Flux is loaded per region with that region's resolved settings (region_config['flux'],
+    see build_region_configs). Flux metrics only use the test set, so test data always
+    loads flux (if the region's 'get_flux' is on), while train data loads it only if
+    train_flux is True (i.e. the loss is flux-weighted).
+
     Args:
         region_configs (list of dict): Each entry must have 'train_load_data' and 'test_load_data'
-            keys, matching the structure expected by load_GATES_data_v2.
+            keys, matching the structure expected by load_GATES_data_v2, and optionally
+            'flux' (the region's flux settings; None for no flux).
         input_variables (dict): Variable extraction settings forwarded to each data loader.
         datapath_args (dict): Path overrides forwarded to each data loader.
-        flux_args (dict, optional): Flux configuration forwarded to load_GATES_data_v2 for
-            each region. Defaults to None (no flux loading).
+        train_flux (bool): If True, also load flux for the train data. Set it to
+            gates_training.loss_uses_flux(parameters). Defaults to False.
         verbose (bool): Print per-region progress messages. Defaults to True.
         load_into_memory (bool): If True, call .compute() on each region's inputs before moving
             to the next region. Defaults to True to avoid cross-region Dask task graphs.
@@ -174,12 +208,17 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, flux_a
         test_params = copy.deepcopy(region_config["train_load_data"])
         test_params.update(region_config["test_load_data"])
         region_name = region_config.get("name", train_params.get("region", f"region_{len(test_regions)}"))
+        region_flux = region_config.get("flux")
+        if train_flux and not (region_flux and region_flux.get("get_flux", True)):
+            # fail before loading: the train concat and the loss both need flux in every region
+            raise ValueError(f"The loss is flux-weighted (weight_label='flux'), but flux is off for "
+                             f"region '{region_name}'. Enable \"get_flux\" for every region.")
 
         if verbose:
             print(f"\n--- Loading train data for region: {region_name} ---")
         data_r, train_inputs_r = gates_training.load_GATES_data_v2(
             train_params, input_variables=input_variables,
-            datapath_args=datapath_args, flux_args=flux_args, verbose=verbose,
+            datapath_args=datapath_args, flux_args=region_flux if train_flux else None, verbose=verbose,
             load_into_memory=load_into_memory,
             use_wandb=use_wandb, wandb_state=wandb_loading_state)
         train_fp_r = data_r
@@ -189,7 +228,7 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, flux_a
             print("------------------------------------------")
         test_data_r, test_inputs_r = gates_training.load_GATES_data_v2(
             test_params, input_variables=input_variables,
-            datapath_args=datapath_args, flux_args=flux_args, verbose=verbose,
+            datapath_args=datapath_args, flux_args=region_flux, verbose=verbose,
             load_into_memory=load_into_memory,
             use_wandb=use_wandb, wandb_state=wandb_loading_state)
         test_fp_r = test_data_r
@@ -262,7 +301,34 @@ def load_multiregion_data(region_configs, input_variables, datapath_args, flux_a
     return all_train_inputs, all_train_fps, test_regions
 
 
-def transform_test_region(test_inputs, test_fps, scalers, add_nan_mask, batch_size):
+def summarise_region_flux(test_regions, resolved_region_flux):
+    """
+    One summary line per region saying whether its test set has any non-NaN flux,
+    i.e. whether the region will get flux metrics.
+
+    Args:
+        test_regions (list of dict): From load_multiregion_data; each has 'name' and 'fp_xr'.
+        resolved_region_flux (dict): Region name -> resolved flux settings (or None),
+            from build_region_configs.
+
+    Returns:
+        list of str: e.g. "  0-SAHARA: test flux yes (flux_time=2016)".
+    """
+    lines = []
+    for region in test_regions:
+        name, test_fps = region["name"], region["fp_xr"]
+        flux_cfg = resolved_region_flux.get(name) or {}
+        if not flux_cfg or not flux_cfg.get("get_flux", True):
+            lines.append(f"  {name}: test flux off")
+            continue
+        has_flux = (isinstance(test_fps, xr.Dataset) and "flux" in test_fps
+                    and bool(test_fps["flux"].notnull().any()))
+        lines.append(f"  {name}: test flux {'yes' if has_flux else 'NO (all NaN)'} "
+                     f"(flux_time={flux_cfg.get('flux_time')})")
+    return lines
+
+
+def transform_test_region(test_inputs, test_fps, scalers, add_nan_mask, batch_size, fp_labels=None):
     """
     Transform a single test region's inputs and footprints using already-fitted scalers
     (no re-fitting), and return a DataLoader and the footprint xarray Dataset.
@@ -271,16 +337,29 @@ def transform_test_region(test_inputs, test_fps, scalers, add_nan_mask, batch_si
     it contains 'fp_transformed', 'fp_original', and optionally 'fp_nan_mask' variables,
     and is used directly by calculate_losses and save_training_plots.
 
+    If test_fps has a 'flux' variable, it is added to the returned Dataset (trimmed to
+    the same timestamps) so calculate_losses can compute flux metrics. It is only fed
+    to the DataLoader if 'flux' is in fp_labels (a flux-weighted loss); otherwise it
+    is attached after the loader is built, so the loader yields the same labels as
+    training.
+
     Args:
         test_inputs (xr.DataArray): Stacked input DataArray (fp_time, lat, lon, variable_name).
         test_fps: Footprint DataArray or Dataset with a 'time' dimension.
         scalers (dict): Must contain 'inputs_scaler' and 'fp_scaler' (already fitted).
         add_nan_mask (bool): Whether to add fp_nan_mask and fill NaNs with zero.
         batch_size (int): Batch size for the test DataLoader.
+        fp_labels (list, optional): Labels of the training DataLoader. If given, the
+            test DataLoader labels must match them. Defaults to None (no check, and
+            flux is never fed to the loader).
 
     Returns:
         test_loader: PyTorch DataLoader (num_workers=0, no shuffle).
         test_fp_ds (xr.Dataset): Footprint Dataset ready for metric calculation and plotting.
+
+    Raises:
+        ValueError: If 'flux' is in fp_labels but test_fps has no 'flux', or if the
+            test DataLoader labels differ from fp_labels.
     """
     # Transform inputs using fitted scaler
     test_scaled_inputs = scalers["inputs_scaler"].transform(test_inputs.astype("float32"))
@@ -300,6 +379,16 @@ def transform_test_region(test_inputs, test_fps, scalers, add_nan_mask, batch_si
     if add_nan_mask:
         test_fp_ds = gates_datasets.add_fp_nan_mask(
             test_fp_ds, fill_nans=True, fp_var_name="fp_original")
+
+    test_flux = test_fps["flux"] if isinstance(test_fps, xr.Dataset) and "flux" in test_fps else None
+    flux_in_loader = fp_labels is not None and "flux" in fp_labels
+    if flux_in_loader:
+        if test_flux is None:
+            raise ValueError("The training labels include 'flux' (flux-weighted loss), but this test "
+                             "region has no 'flux' variable.")
+        # added after the NaN mask, as FootprintDataset.transform does for training
+        test_fp_ds["flux"] = test_flux
+
     test_fp_ds = test_fp_ds.chunk({"time": 1})
     test_fp_ds = test_fp_ds.assign_coords(idx=("time", list(range(len(test_fp_ds.time)))))
 
@@ -307,12 +396,23 @@ def transform_test_region(test_inputs, test_fps, scalers, add_nan_mask, batch_si
         test_scaled_inputs, test_fp_ds, batch_size)
 
     # num_workers=0 avoids forkserver deadlock — same as single-region test loader
-    test_loader, _ = gates_datasets.make_dataloader(
+    test_loader, test_labels = gates_datasets.make_dataloader(
         test_scaled_inputs, test_fp_ds, batch_size,
         randomize=False,
         dataloader_params={"num_workers": 0, "persistent_workers": False, "prefetch_factor": None},
         flatten=True,
     )
+    if fp_labels is not None and list(test_labels) != list(fp_labels):
+        raise ValueError(f"Test loader labels {list(test_labels)} differ from training loader labels "
+                         f"{list(fp_labels)}.")
+
+    if test_flux is not None and not flux_in_loader:
+        # For metrics only: the loader has already stacked its variables, so adding
+        # flux now doesn't change what it yields. Trim to the same timestamps (trimming is positional).
+        test_flux = test_flux.isel(time=slice(0, test_fp_ds.sizes["time"]))
+        if not np.array_equal(test_flux.time.values, test_fp_ds.time.values):
+            raise ValueError("Test flux and footprint timestamps don't match.")
+        test_fp_ds["flux"] = test_flux.chunk({"time": 1})
     return test_loader, test_fp_ds
 
 
@@ -374,11 +474,16 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
                 "eval": computed_metrics_r["eval_metrics"],
                 "trans_eval": computed_metrics_r["transformed_eval_metrics"],
                 "static_mf_eval": computed_metrics_r["static_mf_eval_metrics"],
+                # None if the region has no valid flux
+                "flux_eval": computed_metrics_r.get("flux_eval_metrics"),
             }
             all_test_fp_datasets.append(fp_ds_r)
 
         # --- Aggregate metrics ---
-        fp_ds_all = xr.concat(all_test_fp_datasets, dim="time")
+        # flux metrics are per region only: drop flux so the aggregate never computes them
+        # (this also lets regions with and without flux be concatenated)
+        fp_ds_all = xr.concat(
+            [ds.drop_vars("flux", errors="ignore") for ds in all_test_fp_datasets], dim="time")
         avg_test_loss_agg = float(np.mean([v["test_loss"] for v in region_log.values()]))
 
         losses["train"].append(avg_train_loss)
@@ -423,6 +528,11 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
                     logging_dict.update({
                         f"metrics_fluxes_static/{region_name}/{flux_mode}/{k}": v
                         for k, v in metrics.items()})
+                # metrics against the region's loaded flux, e.g. "metrics_fluxes/1-BRAZIL/mae"
+                if rd["flux_eval"] is not None:
+                    logging_dict.update({
+                        f"metrics_fluxes/{region_name}/{k}": v
+                        for k, v in rd["flux_eval"].items()})
                 logging_dict[f"test_loss/{region_name}"] = rd["test_loss"]
 
             wandb.log(logging_dict, step=epoch)
@@ -436,9 +546,10 @@ def run_full_training_multiregion(model, model_ctx, training_ctx, paths_ctx,
                     f"Aggregate Test Loss: {avg_test_loss_agg:.4f}")
         write_to_file(log_text, paths_ctx.updates_path)
         for region_name, rd in region_log.items():
+            flux_text = f", metrics_fluxes={rd['flux_eval']}" if rd["flux_eval"] is not None else ""
             write_to_file(
                 f"  {region_name}: test_loss={rd['test_loss']:.4f}, "
-                f"metrics_original={rd['eval']}", paths_ctx.updates_path)
+                f"metrics_original={rd['eval']}{flux_text}", paths_ctx.updates_path)
 
         # Periodic plotting — from the first test region
         if epoch % model_ctx.epochs_visualise == 0:
@@ -550,10 +661,16 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
         paths_ctx.updates_path)
 
     shared_load_params = parameters.get("shared_load_parameters", {})
-    region_configs = build_region_configs(parameters["regions"], shared_load_params)
+    region_configs = build_region_configs(parameters["regions"], shared_load_params,
+                                          global_flux_args=parameters.get("flux"))
+    # record each region's effective flux settings (global block + region override)
+    parameters["resolved_region_flux"] = {cfg["name"]: cfg["flux"] for cfg in region_configs}
+    if use_wandb:
+        wandb.config.update({"resolved_region_flux": parameters["resolved_region_flux"]})
     input_variables = parameters["variables"]
     datapath_args = paths_ctx.resolve_datapath_args(parameters)
-    flux_args = parameters.get("flux", None)
+    # flux is loaded for test data only, unless the loss needs it for training
+    train_flux = gates_training.loss_uses_flux(parameters)
     # `load_before_training` (formerly the top-level `load_into_memory`) — materialise
     # each region's inputs into RAM before dataloader setup. Defaults to True; the old
     # `load_into_memory` key is still honoured for back-compat.
@@ -564,8 +681,9 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
     write_to_file(f"loading data for {len(region_configs)} region(s)", paths_ctx.updates_path)
 
     all_train_inputs, all_train_fps, test_regions = load_multiregion_data(
-        region_configs, input_variables, datapath_args, flux_args=flux_args,
+        region_configs, input_variables, datapath_args, train_flux=train_flux,
         verbose=verbose, load_into_memory=load_before_training, use_wandb=use_wandb)
+    gates_training.check_train_flux_for_loss(parameters, all_train_fps)
 
     num_train_samples = len(all_train_fps.time)
     num_test_samples_per_region = {r["name"]: r["inputs"].sizes["fp_time"] for r in test_regions}
@@ -578,6 +696,12 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
         f"Total test samples: {num_test_samples_total}",
         paths_ctx.updates_path)
     print(f"Train samples: {num_train_samples}, total test samples: {num_test_samples_total}")
+
+    # which regions will get flux metrics (missing flux files only warn while loading)
+    flux_summary = "Flux per region:\n" + "\n".join(
+        summarise_region_flux(test_regions, parameters["resolved_region_flux"]))
+    write_to_file(flux_summary, paths_ctx.updates_path)
+    print(flux_summary)
 
     if use_wandb:
         wandb.summary.update({
@@ -631,7 +755,8 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
         if verbose:
             print(f"Building test loader for region: {region['name']}")
         test_loader_r, test_fp_ds_r = transform_test_region(
-            region["inputs"], region["fp_xr"], scalers, add_nan_mask, test_batch_size)
+            region["inputs"], region["fp_xr"], scalers, add_nan_mask, test_batch_size,
+            fp_labels=fp_labels)
         test_region_entries.append({
             "name": region["name"],
             "loader": test_loader_r,
@@ -705,6 +830,10 @@ def train_and_save_model_multiregion(parameters, model_save_dir):
                     wandb.define_metric(f"metrics_fluxes_static/aggregate/{flux_mode}/{metric_name}", step_metric="epoch")
                     for region_name in region_names:
                         wandb.define_metric(f"metrics_fluxes_static/{region_name}/{flux_mode}/{metric_name}", step_metric="epoch")
+        # Real-flux metrics: per region only, no aggregate ({region}/{metric})
+        for metric_name in losses["metrics_fluxes"]:
+            for region_name in region_names:
+                wandb.define_metric(f"metrics_fluxes/{region_name}/{metric_name}", step_metric="epoch")
 
     print("Successfully set up model. Starting multiregion training loop.")
 

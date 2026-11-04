@@ -389,6 +389,7 @@ def train_and_save_model(parameters, model_save_dir):
 
     data, train_inputs = gates_training.load_GATES_data_v2(train_load_data_params, input_variables=input_variables, datapath_args=datapath_args, flux_args=flux_args, verbose=verbose, load_into_memory=load_before_training, use_wandb=use_wandb, wandb_state=wandb_loading_state)
     train_fp_data = data
+    gates_training.check_train_flux_for_loss(parameters, train_fp_data)
 
     write_to_file(f"Successfully loaded training met and fp data with {len(train_fp_data.time)} time samples. Loading test data", paths_ctx.updates_path)
     print("Successfully loaded training met and fp data with", len(train_fp_data.time), "time samples")

@@ -6,6 +6,7 @@
 import torch.optim as optim
 import time
 import traceback
+import warnings
 # from datetime import datetime
 # import json
 # import argparse
@@ -373,7 +374,14 @@ def load_GATES_data_v2(data_parameters, input_variables, datapath_args={}, flux_
                 flux_kwargs = dict(flux_args)
                 get_flux = flux_kwargs.pop("get_flux", True)
                 if get_flux:
-                    data.get_flux(**flux_kwargs)
+                    try:
+                        data.get_flux(**flux_kwargs)
+                    except FileNotFoundError as e:
+                        # A missing flux file shouldn't stop training: warn and use NaN flux,
+                        # so every year still has a "flux" variable to concatenate.
+                        warnings.warn(f"No flux for region '{year_params.get('region')}', year {year}: {e}\n"
+                                      f"Continuing with NaN flux.")
+                        data.fp_xr["flux"] = xr.full_like(data.fp_xr["fp"], np.nan, dtype="float32")
 
             inputs, data = get_square_satellite_inputs_v2(data, **input_variables, verbose=verbose)
 
@@ -677,10 +685,12 @@ def calculate_losses(losses, test_outputs_xr):
         tuple:
             - losses (dict): Copy of ``losses`` with the new metrics appended. If a
               "flux" variable is present in ``test_outputs_xr``, flux metrics are also
-              appended under ``metrics_fluxes``.
+              appended under ``metrics_fluxes``, computed only over the timestamps
+              whose flux is not all NaN. If every timestamp's flux is NaN, nothing
+              is appended.
             - computed_metrics (dict): ``{"eval_metrics", "transformed_eval_metrics", "static_mf_eval_metrics"}``
-              for this call only, plus ``"flux_eval_metrics"`` when a "flux" variable
-              is present in ``test_outputs_xr``.
+              for this call only, plus ``"flux_eval_metrics"`` when flux metrics were
+              computed (see above).
     """
 
     losses = losses.copy()  # make a copy of the losses dict to avoid modifying the original
@@ -722,17 +732,28 @@ def calculate_losses(losses, test_outputs_xr):
                 if metric_name in losses["metrics_fluxes_static"][flux_type]:
                     losses["metrics_fluxes_static"][flux_type][metric_name].append(metric_value)
 
+    flux_eval_metrics = None
     if "flux" in test_outputs_xr:
-        flux_eval_metrics = gates_metrics.compute_flux_metrics(test_outputs_xr.fp_original, test_outputs_xr.fp_pred, test_outputs_xr.flux)
-        for metric_name, metric_value in flux_eval_metrics.items():
-            if metric_name in losses["metrics_fluxes"]:
-                losses["metrics_fluxes"][metric_name].append(metric_value)
+        # Flux is NaN for footprints with no flux (missing file or month). calculate_mfs
+        # uses nansum, so NaN flux would silently act as zero flux: only use the
+        # timestamps that have flux, and skip flux metrics if none do.
+        flux = test_outputs_xr.flux
+        has_flux = flux.notnull().any([d for d in flux.dims if d != "time"]).values
+        if has_flux.any():
+            valid_idx = np.flatnonzero(has_flux)
+            flux_eval_metrics = gates_metrics.compute_flux_metrics(
+                test_outputs_xr.fp_original.isel(time=valid_idx),
+                test_outputs_xr.fp_pred.isel(time=valid_idx),
+                flux.isel(time=valid_idx))
+            for metric_name, metric_value in flux_eval_metrics.items():
+                if metric_name in losses["metrics_fluxes"]:
+                    losses["metrics_fluxes"][metric_name].append(metric_value)
 
     computed_metrics["eval_metrics"] = eval_metrics
     computed_metrics["transformed_eval_metrics"] = transformed_eval_metrics
     computed_metrics["static_mf_eval_metrics"] = static_mf_eval_metrics
 
-    if "flux" in test_outputs_xr:
+    if flux_eval_metrics is not None:
         computed_metrics["flux_eval_metrics"] = flux_eval_metrics
 
     return losses, computed_metrics
@@ -745,6 +766,55 @@ def evaluate_outputs(test_outpts, true_fp, fp_mask):
     threshold=1e-4,   # forwarded to iou
     nonzero=False,
 )"""
+
+def loss_uses_flux(parameters):
+    """Check whether the training or test loss is weighted by flux.
+
+    Args:
+        parameters (dict): Training parameters; uses ``loss_functions.criterion_params``
+            and ``loss_functions.criterion_test_params``.
+
+    Returns:
+        bool: True if either has ``weight_label == "flux"``.
+    """
+    loss_cfg = parameters.get("loss_functions", {})
+    return any((loss_cfg.get(k) or {}).get("weight_label") == "flux"
+               for k in ("criterion_params", "criterion_test_params"))
+
+
+def check_train_flux_for_loss(parameters, train_fps):
+    """Raise if the loss is flux-weighted but some training footprints have no flux.
+
+    A missing flux is only a warning for metrics, but a flux-weighted loss needs flux
+    for every training sample. A footprint counts as having no flux when its flux is
+    NaN everywhere (missing file or month, see ``load_GATES_data_v2``); NaNs in only
+    some cells (e.g. out-of-domain padding) are allowed.
+
+    Args:
+        parameters (dict): Training parameters (see ``loss_uses_flux``).
+        train_fps (xr.Dataset): Training footprints, dims (time, lat, lon).
+
+    Raises:
+        ValueError: If ``loss_uses_flux(parameters)`` and ``train_fps`` has no "flux"
+            variable, or some timestamps have all-NaN flux.
+    """
+    if not loss_uses_flux(parameters):
+        return
+    if not isinstance(train_fps, xr.Dataset) or "flux" not in train_fps:
+        raise ValueError("The loss is flux-weighted (weight_label='flux'), but the training data has no "
+                         "'flux' variable. Set \"get_flux\": true in the \"flux\" block (for every region, "
+                         "in multiregion training).")
+    flux = train_fps["flux"]
+    no_flux = flux.isnull().all([d for d in flux.dims if d != "time"])
+    n_missing = int(no_flux.sum())
+    if n_missing > 0:
+        missing_times = train_fps.time.values[no_flux.values]
+        raise ValueError(f"The loss is flux-weighted (weight_label='flux'), but {n_missing} of "
+                         f"{flux.sizes['time']} training footprints have no flux (all NaN), e.g. "
+                         f"{[str(t)[:10] for t in missing_times[:5]]}. Flux-weighted losses need flux "
+                         f"for every training sample: check the flux files for the training years, or "
+                         f"use a fixed \"flux_time\".")
+
 
 def setup_GATES_model(parameters, training_ctx, paths_ctx):
     """Build the GraphSatelliteForecaster model, losses, optimizer, and early stopping for training.
