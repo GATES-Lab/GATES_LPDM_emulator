@@ -995,6 +995,8 @@ def train_and_save_model(parameters, model_save_dir, wandb_name=None, data_bundl
             test_inputs, test_fp_data, norm_test_bgs,
             norm_train_aux_data, norm_test_aux_data,
         )
+        # optional "sample_selection" block: the chosen training samples, next to the settings (no-op otherwise)
+        gates_lean.save_sample_selection(parameters, train_inputs, paths_ctx.training_outputs_path, model_name)
     else:
         train_tensors = None
         train_loader, test_loader, fp_labels, test_scaled_fp, scalers = gates_training_dual.setup_dual_dataloaders(

@@ -57,6 +57,7 @@ from .training_background import (
 )
 from .training_dataclasses import PathContext
 from .training_dual import setup_dual_eval_loader, _dual_dataloader_settings
+from . import sample_selection as gates_selection
 
 GIB = 2 ** 30
 _ALLOWED_KEYS = {"enabled", "dir", "rebuild", "threads", "fit_buffer_gib"}
@@ -174,9 +175,13 @@ def training_sources(train_load_data_params, datapath_args):
 
 
 def require_data_cache_for_sources(parameters):
-    """Fail loudly when ``extra_sources`` or a per-block ``data_dirs`` is used without the month cache."""
+    """Fail loudly when ``extra_sources``, a per-block ``data_dirs`` or a ``sample_selection`` block is
+    used without the month cache."""
     if data_cache_enabled(parameters):
         return
+    if parameters.get("sample_selection"):
+        raise ValueError('sample_selection (which training samples are used, gates/training/sample_selection.py) '
+                         'is applied by the month-cache pipeline only: set "data_cache": {"enabled": true}')
     train, test = parameters.get("train_load_data", {}) or {}, parameters.get("test_load_data", {}) or {}
     if train.get("extra_sources"):
         raise ValueError('train_load_data.extra_sources (several training regions / domains) needs the '
@@ -310,6 +315,9 @@ class LazyMonthInputs:
         position[order] = np.arange(len(all_times))
         # sorted position of each month's samples, in the order they are stored on disk
         self.sorted_positions = np.split(position, np.cumsum([len(t) for t in month_times])[:-1])
+        # rows of each month's stored array that belong to the training set: None = all of them;
+        # set by subset() when a sample_selection block picks a subset of the loaded pool
+        self.selected_rows = None
         self._prepared = None   # tensors of the last setup_lean_dual_data call (reused across arms)
 
     @property
@@ -326,6 +334,29 @@ class LazyMonthInputs:
 
     def __repr__(self):
         return f"LazyMonthInputs(shape={self.shape}, months={len(self.entries)})"
+
+    def subset(self, keep):
+        """The same months restricted to the samples ``keep`` (ascending positions in the time-sorted
+        pool): a view that knows, per month, which stored rows are kept and where they go.
+
+        Returns a new object; ``self`` is unchanged (it stays the pool the trainer holds).
+        """
+        keep = np.asarray(keep, dtype=np.int64)
+        if len(keep) == 0 or keep.min() < 0 or keep.max() >= len(self.fp_time) or len(np.unique(keep)) != len(keep) \
+                or not np.all(np.diff(keep) > 0):
+            raise ValueError("subset: keep must be distinct ascending positions in the pool")
+        rank = np.full(len(self.fp_time), -1, dtype=np.int64)
+        rank[keep] = np.arange(len(keep))
+        view = LazyMonthInputs.__new__(LazyMonthInputs)
+        view.entries, view.header = self.entries, self.header
+        view.fp_time = self.fp_time[keep]
+        view.selected_rows, view.sorted_positions = [], []
+        for positions in self.sorted_positions:
+            rows = np.nonzero(rank[positions] >= 0)[0]          # stored rows of the month that are kept
+            view.selected_rows.append(rows)
+            view.sorted_positions.append(rank[positions[rows]])  # their positions in the subset
+        view._prepared = None
+        return view
 
 
 def load_lean_dual_data(parameters, train_load_data_params, test_load_data_params, input_variables,
@@ -675,6 +706,7 @@ def _prepared_key(parameters, train_bgs, train_aux):
     settings["batch_size"] = _dual_dataloader_settings(parameters)[0]
     settings["nans_to_zeros"] = parameters.get("dataloader", {}).get("nans_to_zeros", True)
     settings["use_auxiliary_bc"] = parameters.get("background_setup", {}).get("use_auxiliary_bc", False)
+    settings["sample_selection"] = parameters.get("sample_selection", None)   # which samples are used
     hasher.update(json.dumps(settings, sort_keys=True, default=str).encode())
     hasher.update(np.ascontiguousarray(train_bgs.values).tobytes())
     if train_aux is not None:
@@ -711,7 +743,11 @@ def setup_lean_dual_data(parameters, train_inputs, train_fps, train_bgs,
     prepared = train_inputs._prepared
     if prepared is not None and prepared["key"] == key:
         print("Month cache: reusing the training tensors of the previous experiment (same data preparation)")
-        batch_order(times, batch_size)   # leaves the NumPy RNG as a fresh preparation would
+        if prepared.get("selection"):
+            parameters["sample_selection_resolved"] = prepared["selection"]["report"]
+            batch_order(prepared["selection"]["times"], batch_size)   # the RNG draws of a fresh preparation
+        else:
+            batch_order(times, batch_size)   # leaves the NumPy RNG as a fresh preparation would
     else:
         train_inputs._prepared = prepared = None
         gc.collect()
@@ -732,6 +768,24 @@ def setup_lean_dual_data(parameters, train_inputs, train_fps, train_bgs,
 def _build_training_tensors(parameters, settings, train_inputs, train_fps, train_bgs, train_aux, batch_size):
     start_all = time.perf_counter()
     threads = settings["threads"]
+    # Optional "sample_selection" block (gates/training/sample_selection.py): the training set is a
+    # chosen subset of the loaded pool. Decided here, on the small data (footprints, times, release
+    # points), before any input array is read: the tensor below is allocated for the subset only.
+    # The scalers of the inputs and footprints are fitted on the subset; the background / auxiliary
+    # normalisation was fitted by the trainer on the whole pool before this call.
+    selected = None
+    selection = gates_selection.selection_config(parameters)
+    if selection is not None:
+        keep, report, labels = gates_selection.select_samples(train_fps, train_inputs.fp_time, selection)
+        print(gates_selection.describe(report))
+        train_inputs = train_inputs.subset(keep)
+        train_fps = train_fps.isel(time=keep)
+        train_bgs = train_bgs.isel(time=keep)
+        if train_aux is not None:
+            train_aux = train_aux.isel(time=keep)
+        parameters["sample_selection_resolved"] = report
+        selected = {"times": train_inputs.fp_time, "pool_index": keep,
+                    "cluster": None if labels is None else labels[keep], "report": report}
     times = train_inputs.fp_time
     header = train_inputs.header
     n_all, n_lat, n_lon, n_var = train_inputs.shape
@@ -750,7 +804,13 @@ def _build_training_tensors(parameters, settings, train_inputs, train_fps, train
 
     def fill(i):
         entry = train_inputs.entries[i]
-        array = entry.cache.read_inputs_array(entry.year, entry.month)
+        rows = None if train_inputs.selected_rows is None else train_inputs.selected_rows[i]
+        if rows is not None and len(rows) == 0:
+            return   # no selected sample in this month
+        if rows is None:
+            array = entry.cache.read_inputs_array(entry.year, entry.month)
+        else:        # the selected rows only, through a memory map of the month's array
+            array = np.ascontiguousarray(entry.cache.read_inputs_array(entry.year, entry.month, mmap_mode="r")[rows])
         if array.dtype != np.float32:
             raise NotImplementedError(f"{entry.region} {entry.year}-{entry.month}: inputs are {array.dtype}; "
                                       "data_cache needs the float32 inputs the loader returns")
@@ -826,4 +886,28 @@ def _build_training_tensors(parameters, settings, train_inputs, train_fps, train
     total = sum(t.numel() * t.element_size() for t in (inputs_t, fps_t, bgs_t)) / GIB
     print(f"Month cache: {n_batches} training batches of {batch_size} in shared memory ({total:.1f} GiB, "
           f"{time.perf_counter() - start_all:.0f} s); {n_all - n_used} trailing sample(s) dropped to fill the batches")
-    return {"tensors": tensors, "input_dataset": input_dataset, "fp_dataset": fp_dataset, "fp_labels": fp_labels}
+    return {"tensors": tensors, "input_dataset": input_dataset, "fp_dataset": fp_dataset, "fp_labels": fp_labels,
+            "selection": selected}
+
+
+def save_sample_selection(parameters, train_inputs, folder, model_name):
+    """Write the training samples chosen by a ``sample_selection`` block to
+    ``<folder>/sample_selection_<model_name>.csv`` (time, position in the time-sorted pool, and
+    ``cluster`` = the group label: the k-means cluster in coverage mode, the calendar month minus
+    one in month mode, the transport-direction index in direction mode) and record the file name in ``parameters["sample_selection_resolved"]``.
+
+    ``train_inputs`` is the pool's :class:`LazyMonthInputs` after :func:`setup_lean_dual_data`.
+    No-op (returns None) when no selection was made.
+    """
+    prepared = getattr(train_inputs, "_prepared", None) or {}
+    selected = prepared.get("selection", None)
+    if selected is None:
+        return None
+    path = Path(folder) / f"sample_selection_{model_name}.csv"
+    frame = pd.DataFrame({"time": pd.DatetimeIndex(selected["times"]), "pool_index": selected["pool_index"]})
+    if selected["cluster"] is not None:
+        frame["cluster"] = selected["cluster"]
+    frame.to_csv(path, index=False)
+    parameters.setdefault("sample_selection_resolved", {})["file"] = path.name
+    print(f"sample_selection: the {len(frame)} selected sample times are in {path}")
+    return path

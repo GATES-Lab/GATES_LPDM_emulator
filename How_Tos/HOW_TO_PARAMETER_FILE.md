@@ -239,6 +239,32 @@ description: [HOW_TO_LARGE_DATASETS.md](HOW_TO_LARGE_DATASETS.md).
 
 ---
 
+## `sample_selection`
+
+Which footprints of the loaded pool the model trains on (dual-head trainers with `data_cache` only; `gates/training/sample_selection.py`, experiment summary section 53). The loader's `freq` thins the soundings regularly along the time axis; this block chooses a subset of a given size from the loaded pool by a rule. It is a TOP-LEVEL key (not inside `train_load_data`), so the month cache of the pool is reused and the arms of one `run_dual_experiments_shared_data.py` job may differ in their selection (the pool is loaded once, the training tensors are rebuilt per arm).
+
+```json
+"sample_selection": {"mode": "coverage", "n_samples": 2048, "seed": 1, "clusters": 64, "temper": 0.5,
+                     "descriptors": ["footprint", "season", "position"], "far_radius": 15}
+"sample_selection": {"mode": "month", "n_samples": 8192}
+"sample_selection": {"mode": "direction", "n_samples": 8192}
+"sample_selection": {"mode": "stride", "n_samples": 8192, "offset": 0.33}
+```
+
+| key | values | meaning |
+|-----|--------|---------|
+| `mode` | `"random"`, `"stride"`, `"coverage"`, `"month"`, `"direction"` | (required) `random`: a seeded uniform draw of the budget. `stride`: evenly spaced samples of the time-sorted pool (the regular thinning at a given budget; position `round(i * (n_pool - 1) / (n_samples - 1))`, so the first and the last sample of the pool are always taken and the months keep the pool's shares). `coverage`: tempered inverse-density coverage ("purposeful" sampling): every sample is described by region-free numbers, the descriptors are standardised and clustered (k-means, `clusters`), the budget is split over the clusters in proportion to `n_cluster ** temper`, and inside a cluster the samples are taken evenly spaced in time, so the near-duplicates of one satellite overpass fill the budget last. `month`: the twelve CALENDAR months equally represented (experiment summary section 54): the budget is split over the calendar months in proportion to `n_month ** temper` (default 0 = the same number from every month) and, inside a month, the samples of all years are taken evenly spaced in time; a month with fewer samples than its share is taken whole and the rest is shared out among the others. `direction`: the same with nine TRANSPORT-DIRECTION groups instead of the months (experiment summary section 56): the compass sector (N, NE, E, SE, S, SW, W, NW; 45 degrees each) in which the mass-weighted centre of the training footprint lies as seen from the release point, i.e. where the air came from, and "near release" for a centre within two cells; the orientation of the window is read from the footprints' `lat_coords` / `lon_coords`. It is the "transport direction" grouping of `scripts/worst_case_error.py`. It needs the footprints of the pool, so it cannot be applied to soundings without an LPDM run. |
+| `offset` | 0 <= x < 1 (default 0) | `stride` / `month` / `direction` / `coverage`: moves every evenly spaced pick by `round(offset * spacing)` positions (a pick moved past the end re-enters at the start). The same rule on other, (almost) disjoint samples: a replicate of a rule that has no seed. Refused for `random` (use another `seed`). |
+| `n_samples` / `fraction` | positive int / 0 < f <= 1 | (exactly one) The budget: a number of samples or a fraction of the pool. Use a multiple of the (effective) batch size: the batches drop the trailing samples. |
+| `seed` | int | Seed of the draw (`random`) or of the k-means initialisation (`coverage`); its own NumPy Generator, the run's global RNG (batch shuffle, scaler-fit subsample) is not touched. Default: the run's `seed`. Two `random` arms with different seeds give the selection spread, the yardstick for the other modes. |
+| `clusters` | int (default 64) | `coverage`: number of k-means clusters (reduced to the pool size if larger). |
+| `temper` | 0..1 (default 0.5; `month` / `direction`: 0) | `coverage` / `month` / `direction`: 1 = the pool's own proportions (like `random` on average), 0 = the same number of samples from every cluster / calendar month / transport direction, 0.5 = the square-root compromise. |
+| `descriptors` | subset of `["footprint", "season", "position"]` (default all) | `coverage`: `footprint` = log10 total mass, far-field mass share (cells beyond `far_radius` from the release point), mass-weighted centroid offset (dx, dy) and extent (rms distance of the mass) of the window footprint; `season` = sin / cos of the day of the year; `position` = release latitude / longitude (skipped with a FLAG if the footprints carry none). |
+| `far_radius` | > 0 (default 15) | `coverage`: the far-field radius in cells (15 = the far ring of the near / mid / far split of `scripts/compare_footprints.py`). |
+| `kmeans_iterations` | int (default 100) | `coverage`: upper bound of Lloyd iterations. |
+
+What it changes and what it does not. The selection runs on the small cached data (footprints, times, release points) before any input array is read, so the training tensor is allocated for the selected samples only; the input and footprint scalers are fitted on the selected samples; the background and auxiliary normalisation (`norm_vals`) is fitted by the trainer on the WHOLE pool before the selection (an affine map, saved with the run). The test set is never touched. The selection is deterministic given the pool and `seed`, recorded in `training_settings_*.json` as `sample_selection_resolved` (mode, counts, fingerprint of the selected times, cluster, month or direction sizes and allocation, the offset if any, month shares of pool and selection) and written to `training_outputs/sample_selection_<model>.csv` (time, position in the time-sorted pool, and `cluster` = the group label: the k-means cluster in `coverage` mode, the calendar month minus one in `month` mode, the index into N, NE, E, SE, S, SW, W, NW, near release in `direction` mode) by `train_dual_headlr_model.py`. `predict_dual_model.py` applies the saved scalers (no rebuild needed). The standard pipeline (no `data_cache`) stops with an error when the block is set. Tests: `tests/test_sample_selection.py`.
+
 ## `exit_target` / `exit_loss` (exit-curtain model)
 
 Read by `train_exit_model.py` only (ignored by the dual trainers). The exit-curtain model predicts
