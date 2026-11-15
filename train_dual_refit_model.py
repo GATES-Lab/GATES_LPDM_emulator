@@ -77,7 +77,7 @@ from gates.training.training_helperfuns import (
     load_parameter_file, save_object, write_to_file, save_training_plots,
     save_bg_timeseries_plots, export_results_to_netcdf, set_reproducibility,
     enable_deterministic_algorithms,
-    HeadCheckpoint, save_wandb_artifact,
+    HeadCheckpoint, save_wandb_artifact, ensure_usable_tmpdir,
 )
 
 # Reused unchanged from the standard dual trainer (kept there so both scripts share one
@@ -710,6 +710,7 @@ if __name__ == "__main__":
     print(parameters)
 
     if parameters.get("use_wandb", False):
+        ensure_usable_tmpdir()  # W&B's GPU-metrics sidecar needs a TMPDIR that exists inside the container
         wandb.login()
 
     if parameters.get("model_save_dir", None) is None:

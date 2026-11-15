@@ -91,7 +91,7 @@ import gates.training.pseudo_footprint as pseudo_fp
 from gates.data.load_data import get_grid
 from gates.training.training_background import format_aux_data, normalize_data
 from gates.training.training_helperfuns import (
-    load_parameter_file, set_reproducibility, enable_deterministic_algorithms,
+    load_parameter_file, set_reproducibility, enable_deterministic_algorithms, ensure_usable_tmpdir,
 )
 from train_dual_model import load_dual_data, resolve_background_params
 from gates.training.training_dataclasses import PathContext
@@ -598,6 +598,7 @@ def main():
             raise FileExistsError(f"{out_root / r['name'] / 'trunk_best.pt'} exists; refusing to overwrite")
 
     if parameters.get("use_wandb", False):
+        ensure_usable_tmpdir()  # W&B's GPU-metrics sidecar needs a TMPDIR that exists inside the container
         wandb.login()
     bundle = load_dual_data(load_params, verbose=parameters.get("verbose", True))
     extra = load_no_cams_years(load_params, no_cams_years) if no_cams_years else None

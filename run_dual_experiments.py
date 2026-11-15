@@ -31,7 +31,7 @@ from pathlib import Path
 import wandb
 
 import gates
-from gates.training.training_helperfuns import load_parameter_file
+from gates.training.training_helperfuns import ensure_usable_tmpdir, load_parameter_file
 from gates.training.experiment_utils import load_experiments, build_experiment_params
 
 
@@ -92,6 +92,7 @@ def main():
         model_saving_dir = Path(base_params["model_save_dir"])
 
     if base_params.get("use_wandb", False):
+        ensure_usable_tmpdir()  # W&B's GPU-metrics sidecar needs a TMPDIR that exists inside the container
         wandb.login()
 
     # Imported here (not at module top) so --list / arg validation work without the heavy

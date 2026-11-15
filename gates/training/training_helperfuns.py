@@ -11,6 +11,7 @@ import torch
 import pickle
 import random
 import os
+import tempfile
 import xarray as xr
 from pathlib import Path
 import wandb
@@ -65,6 +66,30 @@ def load_parameter_file(file_path):
         print(f"An error occurred while loading the file: {str(e)}")
         return None
     
+def ensure_usable_tmpdir(verbose=True):
+    """Make ``TMPDIR`` name a directory that exists and is writable from this process, so that the helper
+    processes W&B starts inherit a usable one. Call before the first ``wandb.init`` of the process (the entry
+    points call it right before ``wandb.login``): wandb-core is started once per process and keeps the
+    environment it was started with.
+
+    Isambard sets ``TMPDIR=/local/user/<uid>``, a node-local directory that Apptainer does not bind into the
+    container. Python's ``tempfile`` silently falls back to ``/tmp``, but W&B's helper processes take ``TMPDIR``
+    literally: wandb-core cannot create the port file of its ``wandb-xpu`` sidecar (the process that reads GPU
+    utilisation, memory, power and temperature through NVML), logs ``monitor: could not create portfile`` and
+    the run records CPU, memory, disk and network metrics but no GPU metrics and no GPU metadata (every run
+    before 2026-11-09). Returns the temporary directory in effect afterwards.
+    """
+    current = os.environ.get("TMPDIR")
+    if current is None or (os.path.isdir(current) and os.access(current, os.W_OK)):
+        return current or tempfile.gettempdir()
+    usable = tempfile.gettempdir()  # the first usable of TMPDIR, TEMP, TMP, /tmp, /var/tmp, ... (TMPDIR is not)
+    os.environ["TMPDIR"] = usable
+    if verbose:
+        print(f"TMPDIR={current!r} does not exist here (not bound into the container?); set TMPDIR={usable} so "
+              f"that W&B's wandb-core / wandb-xpu helper processes can write their files (GPU system metrics).")
+    return usable
+
+
 # W&B refuses artifact names longer than this (wandb.sdk.artifacts._validators.validate_artifact_name)
 WANDB_ARTIFACT_NAME_MAX = 128
 _shortened_artifact_prefixes = set()

@@ -98,7 +98,14 @@ Once a run has started, go to [https://wandb.ai](https://wandb.ai) and navigate 
 - **Charts** — live training and validation loss curves, NMAE, IoU, flux metrics, and more.
 - **Config** — the full `parameters` dict logged at the start of the run.
 - **Artifacts** — versioned checkpoints, NetCDF prediction files, grids, and transform parameters.
-- **System metrics** — GPU utilisation, memory, CPU usage (logged automatically).
+- **System metrics** (the run's **System** tab, sampled every 15 s) — CPU, host and process memory, disk and
+  network, and for runs started after 2026-11-09 every GPU of the node: `gpu.<i>.gpu` (utilisation, %),
+  `gpu.<i>.memory` (memory-controller utilisation, %), `gpu.<i>.memoryAllocated` (%) and
+  `gpu.<i>.memoryAllocatedBytes`, `gpu.<i>.powerWatts`, `gpu.<i>.temp`, `gpu.<i>.smClock`, and on the GH200 the
+  Hopper profiling counters `smActive`, `smOccupancy`, `dramActive`, `pipeTensorActive`, `pipeFp32Active`
+  (24 GPU keys in total, confirmed by the smoke test of 2026-11-09). Earlier runs hold no GPU metrics and no
+  GPU entry in their metadata: the helper process that reads them could not start inside the container — see
+  [section 7](#7-running-on-an-hpc-cluster).
 
 ---
 
@@ -131,6 +138,36 @@ If you are submitting jobs via SLURM or similar, W&B will still work as long as 
   ```bash
   export WANDB_MODE=disabled
   ```
+
+### GPU system metrics inside the Apptainer container
+
+W&B reads GPU utilisation, memory, power and temperature through NVML in a helper process
+(`wandb-xpu`, started by `wandb-core`, the process behind every run). Two things must hold on Isambard
+for the GPU charts to appear in a run's System tab:
+
+1. **The container is started with `--nv`**, so that the driver's `libnvidia-ml.so.1` is bound into it
+   (every training launch script does this).
+2. **`TMPDIR` names a directory that exists inside the container.** Isambard sets
+   `TMPDIR=/local/user/<uid>`, a node-local path that Apptainer does not bind. Python's `tempfile`
+   silently falls back to `/tmp`, but `wandb-core` takes `TMPDIR` literally and cannot create the
+   sidecar's port file: the run's `logs/debug-internal.log` shows
+   `monitor: failed to initialize xpu resource: monitor: could not create portfile`, and the run gets
+   CPU, memory, disk and network metrics only. Every run before 2026-11-09 was affected. Since then
+   every entry point (`run_dual_experiments*.py`, `run_dual_sweep_wandb.py`, the `train_*_model.py`
+   mains) calls `gates.training.training_helperfuns.ensure_usable_tmpdir()` right before
+   `wandb.login()`; it points `TMPDIR` at Python's usable temporary directory when the configured one
+   does not exist. It must run before the first `wandb.init()` of the process, because `wandb-core` is
+   started once per process and keeps the environment it was started with.
+
+A multi-GPU run shows all GPUs of the node as `gpu.0` ... `gpu.3` (the sidecar enumerates every GPU, not
+only rank 0's); `gpu.process.<i>.*` covers only the GPU of the main process. A run with GPU metrics also
+has `gpu`, `gpu_count` and `cuda` entries in `files/wandb-metadata.json` (written when an offline run is
+synced; before that the same information sits in the run file's environment record).
+
+Smoke test (1 GPU, about 5 min): `sbatch smoke_tests_wandb/check_gpu_metrics.sbatch` records one short
+run with and one without the fix, decodes both run files, prints `RESULT fixed: PASS` when GPU metrics
+are present and uploads both runs to `gates-lab/gates-tests` (group `wandb_gpu_check`). Unit test:
+`tests/test_ensure_usable_tmpdir.py`.
 
 ---
 

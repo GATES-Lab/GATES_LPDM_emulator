@@ -65,7 +65,7 @@ import gates
 from gates.data.load_data import get_grid
 from gates.training.training_dataclasses import PathContext, TrainingContext, BoundaryTrainingContext
 
-from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility
+from gates.training.training_helperfuns import load_parameter_file, save_object, write_to_file, save_training_plots, export_results_to_netcdf, save_wandb_artifact, set_reproducibility, ensure_usable_tmpdir
 
 
 # ---------------------------------------------------------------
@@ -539,6 +539,7 @@ if __name__ == "__main__":
     print(parameters)
 
     if parameters.get("use_wandb", False):
+        ensure_usable_tmpdir()  # W&B's GPU-metrics sidecar needs a TMPDIR that exists inside the container
         wandb.login()
 
     if parameters.get("model_save_dir", None) is None:

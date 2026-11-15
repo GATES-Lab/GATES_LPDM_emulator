@@ -34,7 +34,7 @@ import wandb
 import yaml
 
 import gates
-from gates.training.training_helperfuns import load_parameter_file
+from gates.training.training_helperfuns import ensure_usable_tmpdir, load_parameter_file
 from gates.training.experiment_utils import expand_dotted_keys, deep_update
 from run_dual_experiments_shared_data import DATA_LOADING_KEYS
 
@@ -151,6 +151,7 @@ def main():
         print("Error loading base parameter file. Exiting.")
         sys.exit(1)
 
+    ensure_usable_tmpdir()  # W&B's GPU-metrics sidecar needs a TMPDIR that exists inside the container
     wandb.login()
 
     if args.create is not None:
