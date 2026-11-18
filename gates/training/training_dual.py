@@ -380,8 +380,9 @@ def setup_dual_model(parameters, training_ctx, paths_ctx):
         feature_dim=training_ctx.n_variables,
         aux_dim=training_ctx.aux_dim,
         num_classes=num_classes,
-        input_height=training_ctx.size,
-        input_width=training_ctx.size,
+        # a rectangular grid (fixed whole-domain grids) sets input_height / input_width on the context
+        input_height=getattr(training_ctx, "input_height", None) or training_ctx.size,
+        input_width=getattr(training_ctx, "input_width", None) or training_ctx.size,
         decoder_type=decoder,
         **model_parameters,
         **dual_dynamic_edge_kwargs(parameters),

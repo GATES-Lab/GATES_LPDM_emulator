@@ -59,14 +59,23 @@ def main():
     background_params = resolve_background_params(parameters)
     verbose = parameters.get("verbose", True)
 
+    # The splits as the training job resolves them (gates_lean.load_lean_dual_data): the training set
+    # is train_load_data plus its optional extra_sources (other regions / domains, or the same region
+    # with another freq_offset), each with its own cache key; the test set never uses the extra
+    # sources; a block's own data_dirs override the top-level paths for that block.
+    jobs = [("train" if i == 0 else f"train source {i + 1}", "train", params, source_args)
+            for i, (params, source_args) in enumerate(gates_lean.training_sources(train_params, datapath_args))]
+    jobs.append(("test", "test") + gates_lean.datapath_args_for(
+        {k: v for k, v in test_params.items() if k != "extra_sources"}, datapath_args))
+
     print(f"Month cache: {settings['dir']} (split {args.split}, shard {args.shard}, rebuild {args.rebuild})")
     cluster, failed_all = {}, []
-    for name, data_params in (("train", train_params), ("test", test_params)):
-        if args.split not in (name, "both"):
+    for name, split, data_params, split_args in jobs:
+        if args.split not in (split, "both"):
             continue
         start, minutes = time.perf_counter(), {}
         entries, failed = gates_lean.ensure_months_cached(
-            data_params, parameters["variables"], datapath_args, background_params, settings["dir"],
+            data_params, parameters["variables"], split_args, background_params, settings["dir"],
             rebuild=args.rebuild or settings["rebuild"], verbose=verbose, shard=shard,
             loading_times_out=minutes, cluster=cluster)
         failed_all += failed

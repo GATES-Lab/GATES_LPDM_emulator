@@ -107,7 +107,7 @@ def data_cache_enabled(parameters):
 # ---------------------------------------------------------------
 
 # keys an entry of ``train_load_data.extra_sources`` may set; everything else is inherited
-_SOURCE_KEYS = {"region", "years", "year", "months", "month", "freq", "data_dirs"}
+_SOURCE_KEYS = {"region", "years", "year", "months", "month", "freq", "freq_offset", "data_dirs"}
 _DATA_DIR_KEYS = {"fp_datadir", "met_datadir", "topog_datadir", "landcover_datadir"}
 
 
@@ -145,7 +145,7 @@ def training_sources(train_load_data_params, datapath_args):
 
     The first source is ``train_load_data`` itself (without ``extra_sources``). Each entry of the
     optional list ``train_load_data.extra_sources`` adds one: a dict with a ``region`` and,
-    optionally, its own ``years`` / ``months`` / ``freq`` and ``data_dirs`` (see
+    optionally, its own ``years`` / ``months`` / ``freq`` / ``freq_offset`` and ``data_dirs`` (see
     :func:`datapath_args_for`); every other loading key (``size``, ``met_args``, ...) is inherited
     from ``train_load_data``, so a source is cached under the key of a single-region run with that
     configuration and reuses its months. The sources may belong to DIFFERENT domains (e.g. SAHARA
@@ -153,6 +153,13 @@ def training_sources(train_load_data_params, datapath_args):
     (:func:`bundle_from_entries`); the samples are identified by their time, so the sources must
     not share time stamps. The test set never uses the extra sources, and the standard (uncached)
     pipeline does not support them (:func:`require_data_cache_for_sources`).
+
+    A source may also be the SAME region with another ``freq_offset`` (the loader keeps the
+    soundings ``[freq_offset::freq]`` of a month): ``"freq": 2`` plus the extra source
+    ``{"region": <the same>, "freq_offset": 1}`` is every sounding of the region, assembled from
+    two half caches - the existing ``freq`` 2 cache is reused and each month is built with the
+    memory of a ``freq`` 2 month (a pool for the ``sample_selection`` block, experiment summary
+    section 59).
     """
     primary, primary_args = datapath_args_for(
         {k: v for k, v in train_load_data_params.items() if k != "extra_sources"}, datapath_args)

@@ -149,11 +149,14 @@ def lag_margin_hours(input_variables):
 
 def load_GATES_month_with_bg(region, year, month, base_params, input_variables, far_field_cfg=None,
                              datapath_args={}, detrend=True, verbose=True, load_into_memory=True,
-                             use_aux_bc=True, aux_indeces=[4]):
+                             use_aux_bc=True, aux_indeces=[4], inputs_hook=None):
     """Load ONE month of one region: met inputs, footprints, background and auxiliary CAMS data.
 
     The arguments are the outputs of :func:`resolve_month_loading`. Raises :class:`MonthLoadError`
     if the footprint / met loader cannot be built for this month; any later failure propagates.
+    ``inputs_hook`` (optional): a callable ``(inputs, data) -> inputs`` run once the inputs are
+    built, with the month's loader object (the whole-domain grid of ``gates/data/whole_domain.py``
+    derives its channels from it); None = nothing changes.
 
     Returns:
         inputs (xr.DataArray): Met inputs, shape (fp_time, lat, lon, variable_name).
@@ -181,6 +184,8 @@ def load_GATES_month_with_bg(region, year, month, base_params, input_variables, 
         context = far_field_context(data.met_file, inputs.fp_time.values, far_field_cfg,
                                     interp_to=input_variables.get("interp_to"), verbose=verbose)
         inputs = append_far_field_to_inputs(inputs, context)
+    if inputs_hook is not None:
+        inputs = inputs_hook(inputs, data)
 
 
     ### load the boundary condition data for this month

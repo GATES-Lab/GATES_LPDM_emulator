@@ -109,7 +109,14 @@ class TrainingContext:
 
 @dataclass()
 class BoundaryTrainingContext:
-    '''Keep track of training parameters'''
+    '''Keep track of training parameters.
+
+    ``input_height`` / ``input_width`` (optional, 2026-10-30): the lat x lon shape of the model's grid
+    when it is not the ``size`` x ``size`` window (the fixed whole-domain grids of
+    gates/data/fixed_grid.py); None = ``size`` for both, as before. ``extra`` (optional): any object a
+    trainer wants to hand to its multi-GPU worker processes with the context (the fixed-grid trainer
+    passes its shared-memory input table); None otherwise.
+    '''
     parameters: dict
     device: str
     use_wandb: bool
@@ -121,6 +128,9 @@ class BoundaryTrainingContext:
     n_variables: int
     size: int
     aux_dim: int = 0
+    input_height: int = None
+    input_width: int = None
+    extra: object = None
 
 @dataclass()
 class ModelContext:
